@@ -4,11 +4,10 @@ use anyhow::{Context, Result};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 
-#[cfg(not(target_os = "macos"))]
-use std::net::Ipv4Addr;
-
-/// UDP bind addresses for HTTP/3 (QUIC). On macOS, `[::]:port` is dual-stack (IPv4 + IPv6).
-pub fn h3_bind_addrs(listen: &str) -> Vec<String> {
+/// Dual-stack listen address for unspecified binds.
+/// Linux/macOS: `[::]:port` accepts IPv4 + IPv6 (when `net.ipv6.bindv6only=0`).
+/// Do not also bind `0.0.0.0:port` — that conflicts with the dual-stack socket (EADDRINUSE).
+fn dual_stack_bind_addr(listen: &str) -> Vec<String> {
     let Ok(addr) = listen.parse::<SocketAddr>() else {
         return vec![listen.to_string()];
     };
@@ -18,21 +17,17 @@ pub fn h3_bind_addrs(listen: &str) -> Vec<String> {
     }
 
     let port = addr.port();
-    if addr.is_ipv6() {
-        return vec![format!("[{}]:{port}", std::net::Ipv6Addr::UNSPECIFIED)];
-    }
+    vec![format!("[{}]:{port}", std::net::Ipv6Addr::UNSPECIFIED)]
+}
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        return vec![
-            format!("[{}]:{port}", std::net::Ipv6Addr::UNSPECIFIED),
-            format!("{}:{port}", Ipv4Addr::UNSPECIFIED),
-        ];
-    }
-    #[cfg(target_os = "macos")]
-    {
-        vec![format!("[{}]:{port}", std::net::Ipv6Addr::UNSPECIFIED)]
-    }
+/// UDP bind addresses for HTTP/3 (QUIC).
+pub fn h3_bind_addrs(listen: &str) -> Vec<String> {
+    dual_stack_bind_addr(listen)
+}
+
+/// TCP bind addresses for HTTP/1 and HTTP/2.
+pub fn tcp_bind_addrs(listen: &str) -> Vec<String> {
+    dual_stack_bind_addr(listen)
 }
 
 const UDP_BUFFER_BYTES: usize = 7 * 1024 * 1024;
@@ -55,6 +50,11 @@ fn create_bound_socket(addr: SocketAddr) -> Result<Socket> {
 
     let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))
         .with_context(|| format!("failed to create UDP socket for {addr}"))?;
+    #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "fuchsia")))]
+    if addr.is_ipv6() {
+        // Allow native IPv6 and IPv4-mapped clients on one QUIC socket.
+        let _ = socket.set_only_v6(false);
+    }
     tune_udp_socket(&socket)?;
     socket
         .bind(&addr.into())
@@ -85,7 +85,9 @@ mod tests {
 
     #[test]
     fn dual_stack_from_ipv4_unspecified() {
-        let addrs = h3_bind_addrs("0.0.0.0:443");
-        assert!(addrs.iter().any(|a| a.starts_with("[::]")));
+        assert_eq!(tcp_bind_addrs("0.0.0.0:443"), vec!["[::]:443"]);
+        assert_eq!(h3_bind_addrs("0.0.0.0:443"), vec!["[::]:443"]);
+        assert_eq!(tcp_bind_addrs("[::]:80"), vec!["[::]:80"]);
+        assert_eq!(tcp_bind_addrs("127.0.0.1:8080"), vec!["127.0.0.1:8080"]);
     }
 }

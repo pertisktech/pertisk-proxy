@@ -8,6 +8,7 @@ use pingora_proxy::http_proxy_service;
 use tracing::{info, warn};
 
 use crate::config::ServerConfig;
+use crate::h3::tcp_bind_addrs;
 use crate::proxy::Gateway;
 use crate::runtime::RuntimeConfig;
 use crate::tls::{validate_cert_pair, CertStore};
@@ -25,8 +26,11 @@ pub fn run(
 
     info!(
         http = %server_config.http_listen,
+        http_listeners = ?tcp_bind_addrs(&server_config.http_listen),
         https = %server_config.https_listen,
+        https_listeners = ?tcp_bind_addrs(&server_config.https_listen),
         h3_udp = %server_config.h3_udp_listen,
+        h3_listeners = ?crate::h3::h3_bind_addrs(&server_config.h3_udp_listen),
         https_enabled = tls_paths.is_some(),
         h3_enabled = server_config.enable_h3,
         http2_enabled = tls_paths.is_some(),
@@ -64,7 +68,10 @@ pub fn run(
         server_config.h3_port(),
     );
     let mut proxy = http_proxy_service(&server.configuration, gateway);
-    proxy.add_tcp(&server_config.http_listen);
+    for addr in tcp_bind_addrs(&server_config.http_listen) {
+        proxy.add_tcp(&addr);
+        info!(addr = %addr, "HTTP listener started");
+    }
 
     if let Some((cert, key)) = tls_paths.as_ref() {
         validate_cert_pair(std::path::Path::new(cert), std::path::Path::new(key))
@@ -72,11 +79,13 @@ pub fn run(
     }
 
     if let Some((cert, key)) = tls_paths {
-        let mut tls_settings = TlsSettings::intermediate(&cert, &key)
-            .with_context(|| format!("HTTPS listener cannot load cert={cert} key={key}"))?;
-        tls_settings.enable_h2();
-        proxy.add_tls_with_settings(&server_config.https_listen, None, tls_settings);
-        info!(addr = %server_config.https_listen, cert = %cert, "HTTPS (HTTP/1 + HTTP/2) listener started");
+        for addr in tcp_bind_addrs(&server_config.https_listen) {
+            let mut tls_settings = TlsSettings::intermediate(&cert, &key)
+                .with_context(|| format!("HTTPS listener cannot load cert={cert} key={key}"))?;
+            tls_settings.enable_h2();
+            proxy.add_tls_with_settings(&addr, None, tls_settings);
+            info!(addr = %addr, cert = %cert, "HTTPS (HTTP/1 + HTTP/2) listener started");
+        }
     }
 
     server.add_service(proxy);
