@@ -31,8 +31,9 @@ export function Settings() {
       <Card>
         <h2 className="mb-3 text-lg font-semibold">Environment</h2>
         <ul className="space-y-1 text-sm font-mono text-text-secondary">
+          <li>PERTISK_DB_PATH (default ./data/proxy.sqlite)</li>
           <li>PERTISK_MANAGEMENT_ADDR (default 127.0.0.1:9080)</li>
-          <li>ROUTES_CONFIG</li>
+          <li>ROUTES_CONFIG (optional one-time migration from legacy yaml)</li>
           <li>PERTISK_ADMIN_UI_DEV_ORIGIN (Vite dev redirect)</li>
         </ul>
       </Card>

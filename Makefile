@@ -3,11 +3,13 @@
 	package-proxy package-ingress release release-amd release-arm \
 	deploy-package deploy-package-ingress deploy-remote \
 	deploy-deb deploy-deb-ingress deploy-rpm deploy-rpm-ingress apply-ingress-rbac \
-	install-admin admin-dist dev dev-serve dev-admin dev-stop
+	install-admin admin-dist dev dev-vite dev-serve dev-admin dev-stop
 
 CARGO ?= cargo
 INGRESS_FEATURES ?= ingress
-ROUTES_CONFIG ?= ./config/examples/routes.yaml
+PERTISK_DB_PATH ?= ./data/proxy.sqlite
+# Optional one-time migration when DB is empty (legacy routes.yaml)
+ROUTES_CONFIG ?=
 ENABLE_H3 ?= true
 PROXY_MODE ?= performance
 LOG_LEVEL ?= info
@@ -93,21 +95,11 @@ dev-stop:
 	fi
 	@echo "Stopped dev processes (if any were running)."
 
-# Backend + admin Vite dev. Listens 80/443/tcp + 443/udp — use https://admin.amd.thaidevops.co/
+# Backend + admin UI at https://admin.amd.thaidevops.co/ (DNS-ready, 80/443/tcp + 443/udp).
+# Serves built admin/dist via management API :9080; UI auto-rebuilds on change (refresh browser).
 # macOS requires root for 80/443: sudo make dev
-dev: dev-stop
-	ROUTES_CONFIG=$(ROUTES_CONFIG) ENABLE_H3=$(ENABLE_H3) PERTISK_PROXY_MODE=$(PROXY_MODE) \
-		PERTISK_LOG_LEVEL=$(LOG_LEVEL) \
-		LISTEN_HTTP=$(DEV_LISTEN_HTTP) LISTEN_HTTPS=$(DEV_LISTEN_HTTPS) LISTEN_H3_UDP=$(DEV_LISTEN_H3_UDP) \
-		PERTISK_MANAGEMENT_ADDR=$(DEV_MANAGEMENT_ADDR) \
-		PERTISK_ADMIN_UI_DEV_ORIGIN=http://127.0.0.1:5173 \
-		$(CARGO) watch -i admin -x 'run --bin pertisk-proxy --features admin' & \
-	(cd admin && API_PROXY_TARGET=http://$(DEV_MANAGEMENT_ADDR) pnpm dev) & \
-	wait
-
-# Backend + admin auto-rebuild; open http://127.0.0.1:9080
-dev-serve: admin-dist dev-stop
-	ROUTES_CONFIG=$(ROUTES_CONFIG) ENABLE_H3=$(ENABLE_H3) PERTISK_PROXY_MODE=$(PROXY_MODE) \
+dev: admin-dist dev-stop
+	PERTISK_DB_PATH=$(PERTISK_DB_PATH) $(if $(ROUTES_CONFIG),ROUTES_CONFIG=$(ROUTES_CONFIG),) ENABLE_H3=$(ENABLE_H3) PERTISK_PROXY_MODE=$(PROXY_MODE) \
 		PERTISK_LOG_LEVEL=$(LOG_LEVEL) \
 		LISTEN_HTTP=$(DEV_LISTEN_HTTP) LISTEN_HTTPS=$(DEV_LISTEN_HTTPS) LISTEN_H3_UDP=$(DEV_LISTEN_H3_UDP) \
 		PERTISK_MANAGEMENT_ADDR=$(DEV_MANAGEMENT_ADDR) \
@@ -115,12 +107,25 @@ dev-serve: admin-dist dev-stop
 	(cd admin && pnpm run build:watch) & \
 	wait
 
+# Vite hot-reload on http://127.0.0.1:5173 only (local; do not proxy Vite — WebSocket breaks through Pingora).
+dev-vite: dev-stop
+	PERTISK_DB_PATH=$(PERTISK_DB_PATH) $(if $(ROUTES_CONFIG),ROUTES_CONFIG=$(ROUTES_CONFIG),) ENABLE_H3=$(ENABLE_H3) PERTISK_PROXY_MODE=$(PROXY_MODE) \
+		PERTISK_LOG_LEVEL=$(LOG_LEVEL) \
+		LISTEN_HTTP=$(DEV_LISTEN_HTTP) LISTEN_HTTPS=$(DEV_LISTEN_HTTPS) LISTEN_H3_UDP=$(DEV_LISTEN_H3_UDP) \
+		PERTISK_MANAGEMENT_ADDR=$(DEV_MANAGEMENT_ADDR) \
+		$(CARGO) watch -i admin -x 'run --bin pertisk-proxy --features admin' & \
+	(cd admin && API_PROXY_TARGET=http://$(DEV_MANAGEMENT_ADDR) pnpm dev) & \
+	wait
+
+# Alias for `make dev`
+dev-serve: dev
+
 # Proxy mode — standalone reverse proxy
 run:
-	ROUTES_CONFIG=$(ROUTES_CONFIG) ENABLE_H3=$(ENABLE_H3) PERTISK_PROXY_MODE=$(PROXY_MODE) PERTISK_LOG_LEVEL=$(LOG_LEVEL) $(CARGO) run --bin pertisk-proxy
+	PERTISK_DB_PATH=$(PERTISK_DB_PATH) $(if $(ROUTES_CONFIG),ROUTES_CONFIG=$(ROUTES_CONFIG),) ENABLE_H3=$(ENABLE_H3) PERTISK_PROXY_MODE=$(PROXY_MODE) PERTISK_LOG_LEVEL=$(LOG_LEVEL) $(CARGO) run --bin pertisk-proxy --features admin
 
 run-release: admin-dist
-	ROUTES_CONFIG=$(ROUTES_CONFIG) ENABLE_H3=$(ENABLE_H3) PERTISK_PROXY_MODE=$(PROXY_MODE) PERTISK_LOG_LEVEL=$(LOG_LEVEL) $(CARGO) run --release --bin pertisk-proxy
+	PERTISK_DB_PATH=$(PERTISK_DB_PATH) $(if $(ROUTES_CONFIG),ROUTES_CONFIG=$(ROUTES_CONFIG),) ENABLE_H3=$(ENABLE_H3) PERTISK_PROXY_MODE=$(PROXY_MODE) PERTISK_LOG_LEVEL=$(LOG_LEVEL) $(CARGO) run --release --bin pertisk-proxy --features admin
 
 # Ingress mode — Kubernetes Ingress controller (uses current kubeconfig)
 run-ingress:

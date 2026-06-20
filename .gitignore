@@ -13,4 +13,5 @@
 /postinstall.sh
 /preremove.sh
 /admin/node_modules/
+/data/
 /admin/dist/

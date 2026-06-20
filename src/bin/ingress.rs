@@ -76,6 +76,7 @@ fn main() -> Result<()> {
         Arc::new(CertStore::new()),
         false,
         &runtime_cfg,
+        None,
     )
 }
 

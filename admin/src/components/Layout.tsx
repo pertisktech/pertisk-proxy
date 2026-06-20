@@ -1,7 +1,6 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
-  Route,
   Shield,
   Settings,
   Sun,
@@ -9,6 +8,8 @@ import {
   LogOut,
   Menu,
   X,
+  Globe,
+  Server,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/utils';
@@ -16,8 +17,9 @@ import { useTheme } from '@/context/ThemeContext';
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/routes', label: 'Routes', icon: Route },
+  { to: '/sites', label: 'Sites', icon: Globe },
   { to: '/certificates', label: 'Certificates', icon: Shield },
+  { to: '/dns-providers', label: 'DNS Providers', icon: Server },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 

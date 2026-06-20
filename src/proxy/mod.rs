@@ -1,5 +1,6 @@
 pub mod routes;
 pub mod forward;
+pub mod apply;
 
 use std::sync::Arc;
 
@@ -39,6 +40,7 @@ pub struct Gateway {
     https_port: u16,
     enable_h3: bool,
     h3_port: u16,
+    http01_store: Option<Arc<crate::tls::Http01ChallengeStore>>,
 }
 
 impl Gateway {
@@ -49,6 +51,7 @@ impl Gateway {
         https_port: u16,
         enable_h3: bool,
         h3_port: u16,
+        http01_store: Option<Arc<crate::tls::Http01ChallengeStore>>,
     ) -> Self {
         Self {
             router,
@@ -57,6 +60,7 @@ impl Gateway {
             https_port,
             enable_h3,
             h3_port,
+            http01_store,
         }
     }
 }
@@ -98,6 +102,23 @@ impl ProxyHttp for Gateway {
         .await?
         {
             return Ok(true);
+        }
+
+        if let Some(store) = &self.http01_store {
+            if let Some(token) = path.strip_prefix("/.well-known/acme-challenge/") {
+                let token = token.trim_end_matches('/');
+                if !token.is_empty() {
+                    if let Some(body) = store.get(token) {
+                        let mut resp = ResponseHeader::build(http::StatusCode::OK, Some(1))?;
+                        resp.insert_header("Content-Type", "text/plain")?;
+                        session.write_response_header(Box::new(resp), false).await?;
+                        session
+                            .write_response_body(Some(bytes::Bytes::from(body)), true)
+                            .await?;
+                        return Ok(true);
+                    }
+                }
+            }
         }
 
         if self.auto_https && is_plain_http(session) {
@@ -205,6 +226,11 @@ impl ProxyHttp for Gateway {
         let host = request_host(session.req_header());
         if !host.is_empty() {
             upstream_request.insert_header("Host", host.as_str()).ok();
+        }
+
+        if is_downstream_tls(session) {
+            upstream_request.insert_header("X-Forwarded-Proto", "https").ok();
+            upstream_request.insert_header("X-Forwarded-Host", host.as_str()).ok();
         }
 
         if let Some(prefix) = &ctx.strip_prefix {

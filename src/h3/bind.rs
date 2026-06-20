@@ -4,10 +4,37 @@ use anyhow::{Context, Result};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 
-/// Dual-stack listen address for unspecified binds.
-/// Linux/macOS: `[::]:port` accepts IPv4 + IPv6 (when `net.ipv6.bindv6only=0`).
-/// Do not also bind `0.0.0.0:port` — that conflicts with the dual-stack socket (EADDRINUSE).
-fn dual_stack_bind_addr(listen: &str) -> Vec<String> {
+/// Dual-stack TCP listen addresses for unspecified binds.
+/// Linux: `[::]:port` accepts IPv4 + IPv6 (when `net.ipv6.bindv6only=0`).
+/// macOS: bind `0.0.0.0` and `[::]` separately — avoids IPv4-mapped `[::ffff:x]` quirks.
+/// Do not bind both on Linux — that conflicts with the dual-stack socket (EADDRINUSE).
+fn dual_stack_tcp_bind_addrs(listen: &str) -> Vec<String> {
+    let Ok(addr) = listen.parse::<SocketAddr>() else {
+        return vec![listen.to_string()];
+    };
+
+    if !addr.ip().is_unspecified() {
+        return vec![listen.to_string()];
+    }
+
+    let port = addr.port();
+    // Explicit `[::]:port` input — keep single dual-stack socket (used for H3-aligned TCP config).
+    if addr.is_ipv6() {
+        return vec![listen.to_string()];
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        vec![format!("0.0.0.0:{port}"), format!("[::]:{port}")]
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        vec![format!("[{}]:{port}", std::net::Ipv6Addr::UNSPECIFIED)]
+    }
+}
+
+/// UDP (QUIC) bind address. One dual-stack `[::]:port` socket handles both families.
+fn dual_stack_udp_bind_addr(listen: &str) -> Vec<String> {
     let Ok(addr) = listen.parse::<SocketAddr>() else {
         return vec![listen.to_string()];
     };
@@ -22,12 +49,12 @@ fn dual_stack_bind_addr(listen: &str) -> Vec<String> {
 
 /// UDP bind addresses for HTTP/3 (QUIC).
 pub fn h3_bind_addrs(listen: &str) -> Vec<String> {
-    dual_stack_bind_addr(listen)
+    dual_stack_udp_bind_addr(listen)
 }
 
 /// TCP bind addresses for HTTP/1 and HTTP/2.
 pub fn tcp_bind_addrs(listen: &str) -> Vec<String> {
-    dual_stack_bind_addr(listen)
+    dual_stack_tcp_bind_addrs(listen)
 }
 
 const UDP_BUFFER_BYTES: usize = 7 * 1024 * 1024;
@@ -85,6 +112,12 @@ mod tests {
 
     #[test]
     fn dual_stack_from_ipv4_unspecified() {
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            tcp_bind_addrs("0.0.0.0:443"),
+            vec!["0.0.0.0:443", "[::]:443"]
+        );
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(tcp_bind_addrs("0.0.0.0:443"), vec!["[::]:443"]);
         assert_eq!(h3_bind_addrs("0.0.0.0:443"), vec!["[::]:443"]);
         assert_eq!(tcp_bind_addrs("[::]:80"), vec!["[::]:80"]);

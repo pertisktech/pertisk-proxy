@@ -21,6 +21,7 @@ pub fn run(
     cert_store: Arc<CertStore>,
     auto_https: bool,
     runtime_cfg: &RuntimeConfig,
+    http01_store: Option<Arc<crate::tls::Http01ChallengeStore>>,
 ) -> Result<()> {
     let tls_paths = resolve_tls_paths(server_config, &cert_store);
 
@@ -33,7 +34,7 @@ pub fn run(
         h3_listeners = ?crate::h3::h3_bind_addrs(&server_config.h3_udp_listen),
         https_enabled = tls_paths.is_some(),
         h3_enabled = server_config.enable_h3,
-        http2_enabled = tls_paths.is_some(),
+        http2_enabled = tls_paths.is_some() && server_config.enable_h2,
         tls_hosts = cert_store.host_count(),
         auto_https,
         "starting data plane"
@@ -66,6 +67,7 @@ pub fn run(
         server_config.https_port(),
         server_config.enable_h3,
         server_config.h3_port(),
+        http01_store,
     );
     let mut proxy = http_proxy_service(&server.configuration, gateway);
     for addr in tcp_bind_addrs(&server_config.http_listen) {
@@ -78,13 +80,20 @@ pub fn run(
             .with_context(|| format!("HTTPS listener cannot load cert={cert} key={key}"))?;
     }
 
-    if let Some((cert, key)) = tls_paths {
+        if let Some((cert, key)) = tls_paths {
         for addr in tcp_bind_addrs(&server_config.https_listen) {
             let mut tls_settings = TlsSettings::intermediate(&cert, &key)
                 .with_context(|| format!("HTTPS listener cannot load cert={cert} key={key}"))?;
-            tls_settings.enable_h2();
+            if server_config.enable_h2 {
+                tls_settings.enable_h2();
+            }
             proxy.add_tls_with_settings(&addr, None, tls_settings);
-            info!(addr = %addr, cert = %cert, "HTTPS (HTTP/1 + HTTP/2) listener started");
+            info!(
+                addr = %addr,
+                cert = %cert,
+                http2 = server_config.enable_h2,
+                "HTTPS (HTTP/1 + HTTP/2) listener started"
+            );
         }
     }
 

@@ -42,22 +42,25 @@ fn default_prefix() -> String {
     "prefix".into()
 }
 
-/// Load pertisk-native route and TLS definitions from YAML or JSON.
-pub fn load(path: &Path) -> Result<LoadedRoutes> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read routes config {}", path.display()))?;
-
+/// Load from YAML/JSON string (migration helper).
+pub fn load_from_str(content: &str) -> Result<LoadedRoutes> {
     let spec: RoutesFile = if content.trim_start().starts_with('{') {
-        serde_json::from_str(&content).context("invalid routes JSON")?
+        serde_json::from_str(content).context("invalid routes JSON")?
     } else {
-        serde_yaml::from_str(&content).context("invalid routes YAML")?
+        serde_yaml::from_str(content).context("invalid routes YAML")?
     };
-
     Ok(LoadedRoutes {
         table: build_table(spec.routes)?,
         tls: spec.tls,
         http3: spec.http3,
     })
+}
+
+/// Load pertisk-native route and TLS definitions from YAML or JSON.
+pub fn load(path: &Path) -> Result<LoadedRoutes> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read routes config {}", path.display()))?;
+    load_from_str(&content)
 }
 
 /// Parse YAML without writing to disk (admin API validation).

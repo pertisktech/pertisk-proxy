@@ -26,7 +26,7 @@ export function Dashboard() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Version" value={info.version} />
         <Stat label="Uptime" value={formatUptime(info.uptime_secs)} />
-        <Stat label="Routes" value={info.route_count} />
+        <Stat label="Sites" value={info.site_count} />
         <Stat label="TLS hosts" value={info.tls_host_count} />
       </div>
 
@@ -38,7 +38,7 @@ export function Dashboard() {
           <div><dt className="text-sm text-text-secondary">HTTP</dt><dd className="font-mono text-sm">{info.listeners.http}</dd></div>
           <div><dt className="text-sm text-text-secondary">HTTPS</dt><dd className="font-mono text-sm">{info.listeners.https}</dd></div>
           <div><dt className="text-sm text-text-secondary">HTTP/3 UDP</dt><dd className="font-mono text-sm">{info.listeners.h3_udp}</dd></div>
-          <div><dt className="text-sm text-text-secondary">Routes file</dt><dd className="font-mono text-sm">{info.routes_path}</dd></div>
+          <div><dt className="text-sm text-text-secondary">Database</dt><dd className="font-mono text-sm">{info.db_path}</dd></div>
           <div><dt className="text-sm text-text-secondary">HTTP/3</dt><dd>{info.enable_h3 ? 'enabled' : 'disabled'}</dd></div>
           <div><dt className="text-sm text-text-secondary">Auto HTTPS</dt><dd>{info.auto_https ? 'enabled' : 'disabled'}</dd></div>
         </dl>
@@ -47,7 +47,7 @@ export function Dashboard() {
       <Card>
         <h2 className="mb-3 text-lg font-semibold">Quick links</h2>
         <div className="flex flex-wrap gap-3">
-          <Link to="/routes" className="rounded-md border border-border px-3 py-2 text-sm hover:bg-hover">Edit routes</Link>
+          <Link to="/sites" className="rounded-md border border-border px-3 py-2 text-sm hover:bg-hover">Manage sites</Link>
           <Link to="/certificates" className="rounded-md border border-border px-3 py-2 text-sm hover:bg-hover">Certificates</Link>
           <a href="/api/health" target="_blank" rel="noreferrer" className="rounded-md border border-border px-3 py-2 text-sm hover:bg-hover">API health</a>
         </div>

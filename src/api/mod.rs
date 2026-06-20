@@ -1,5 +1,8 @@
 //! Management API + admin UI static file server (Axum on `PERTISK_MANAGEMENT_ADDR`).
 
+#[cfg(feature = "admin")]
+pub mod acme;
+
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -8,11 +11,11 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use axum::{
     body::Body,
-    extract::{Request, State},
+    extract::{Path as AxumPath, Request, State},
     http::{header, HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Redirect, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -22,12 +25,15 @@ use tower_http::cors::CorsLayer;
 use tracing::{info, warn};
 
 use crate::config::ProxyConfig;
-use crate::http3_options::Http3Options;
-use crate::proxy::routes;
-use crate::routes_config;
+use crate::db::{CertificateRow, Database, DnsProviderRow};
+use crate::proxy::apply;
+use crate::proxy_config::Config;
 use crate::runtime::RuntimeConfig;
-use crate::tls::CertStore;
+use crate::tls::{CertStore, Http01ChallengeStore};
 use crate::Router as ProxyRouter;
+
+#[cfg(feature = "acme")]
+use crate::tls::AcmeManager;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -37,12 +43,17 @@ pub struct AdminState {
     pub cert_store: Arc<CertStore>,
     pub proxy_config: ProxyConfig,
     pub runtime_cfg: RuntimeConfig,
-    pub routes_path: PathBuf,
+    pub runtime_config: Arc<RwLock<Config>>,
     pub started_at: Instant,
     pub auth_password: Option<String>,
     pub session_token: Arc<RwLock<Option<String>>>,
     pub admin_dist: PathBuf,
     pub dev_origin: Option<String>,
+    pub db: Option<Arc<Database>>,
+    pub certs_dir: PathBuf,
+    pub http01_store: Arc<Http01ChallengeStore>,
+    #[cfg(feature = "acme")]
+    pub acme_manager: Option<Arc<AcmeManager>>,
 }
 
 pub async fn serve(state: AdminState, addr: SocketAddr) -> Result<()> {
@@ -66,15 +77,28 @@ pub fn router(state: AdminState) -> Router {
         .route("/live", get(|| async { "ok" }))
         .route("/ready", get(|| async { "ok" }))
         .route("/healthz", get(|| async { "ok" }))
-        .route("/readyz", get(|| async { "ok" }));
+        .route("/readyz", get(|| async { "ok" }))
+        .route(
+            "/.well-known/acme-challenge/{token}",
+            get(acme_http01_challenge),
+        );
 
     let protected = Router::new()
         .route("/api/management", get(get_management))
         .route("/api/config", get(get_config).put(put_config))
-        .route("/api/config/yaml", get(get_config_yaml))
         .route("/api/reload", post(reload_config))
         .route("/api/tls", get(get_tls))
         .route("/api/routes", get(get_routes))
+        .route("/api/certificates", get(certificates_list).post(certificates_upload))
+        .route("/api/certificates/{id}", delete(certificates_delete))
+        .route("/api/dns-providers", get(dns_providers_list).post(dns_providers_create))
+        .route("/api/dns-providers/supported", get(dns_providers_supported))
+        .route(
+            "/api/dns-providers/{id}",
+            get(dns_providers_get)
+                .put(dns_providers_put)
+                .delete(dns_providers_delete),
+        )
         .route("/api/auth/check", get(auth_check))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -224,14 +248,15 @@ struct ManagementInfo {
     mode: &'static str,
     version: &'static str,
     uptime_secs: u64,
-    routes_path: String,
+    db_path: String,
     route_count: usize,
+    site_count: usize,
     tls_host_count: usize,
     enable_h3: bool,
     auto_https: bool,
     runtime_mode: String,
     listeners: ListenerInfo,
-    http3: Http3Options,
+    http3: crate::http3_options::Http3Options,
 }
 
 #[derive(Serialize)]
@@ -243,12 +268,14 @@ struct ListenerInfo {
 
 async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo> {
     let server = &state.proxy_config.server;
+    let cfg = state.runtime_config.read().await;
     Json(ManagementInfo {
         mode: "proxy",
         version: VERSION,
         uptime_secs: state.started_at.elapsed().as_secs(),
-        routes_path: state.routes_path.display().to_string(),
+        db_path: state.proxy_config.db_path.display().to_string(),
         route_count: state.router.route_count(),
+        site_count: cfg.sites.len(),
         tls_host_count: state.cert_store.host_count(),
         enable_h3: server.enable_h3,
         auto_https: state.proxy_config.auto_https,
@@ -258,7 +285,7 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
             https: server.https_listen.clone(),
             h3_udp: server.h3_udp_listen.clone(),
         },
-        http3: (*state.router.http3_options()).clone(),
+        http3: cfg.http3.clone(),
     })
 }
 
@@ -297,16 +324,61 @@ async fn get_routes(State(state): State<AdminState>) -> Json<RoutesResponse> {
     Json(RoutesResponse { routes, count })
 }
 
-#[derive(Serialize)]
-struct ConfigYamlResponse {
-    path: String,
-    yaml: String,
+async fn acme_http01_challenge(
+    State(state): State<AdminState>,
+    AxumPath(token): AxumPath<String>,
+) -> Response {
+    if let Some(body) = state.http01_store.get(&token) {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from(body))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    }
+    StatusCode::NOT_FOUND.into_response()
 }
 
-async fn get_config_yaml(
+async fn get_config(State(state): State<AdminState>) -> Result<Json<Config>, (StatusCode, Json<ApiError>)> {
+    let mut cfg = state.runtime_config.read().await.clone();
+    if let Some(db) = &state.db {
+        enrich_tls_expiries(&mut cfg, db).await;
+    }
+    Ok(Json(cfg))
+}
+
+async fn enrich_tls_expiries(cfg: &mut Config, db: &Database) {
+    if let Ok(rows) = db.list_certificates().await {
+        for tls in &mut cfg.tls {
+            let mut hosts_sorted = tls.hosts.clone();
+            hosts_sorted.sort();
+            tls.expires_at = rows
+                .iter()
+                .find(|r| {
+                    let mut have = r.hosts.clone();
+                    have.sort();
+                    have == hosts_sorted
+                })
+                .and_then(|r| r.expires_at.clone());
+        }
+    }
+}
+
+async fn put_config(
     State(state): State<AdminState>,
-) -> Result<Json<ConfigYamlResponse>, (StatusCode, Json<ApiError>)> {
-    let yaml = std::fs::read_to_string(&state.routes_path).map_err(|e| {
+    Json(mut body): Json<Config>,
+) -> Result<Json<ReloadResponse>, (StatusCode, Json<ApiError>)> {
+    for tls in &mut body.tls {
+        tls.expires_at = None;
+    }
+    let Some(db) = &state.db else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "database not configured".into(),
+            }),
+        ));
+    };
+    db.save_proxy_config(&body).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -314,16 +386,60 @@ async fn get_config_yaml(
             }),
         )
     })?;
-    Ok(Json(ConfigYamlResponse {
-        path: state.routes_path.display().to_string(),
-        yaml,
+    apply::apply_config(state.router.as_ref(), &body).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+    state
+        .cert_store
+        .reload_from_configs(&body.tls)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+    *state.runtime_config.write().await = body.clone();
+    #[cfg(feature = "acme")]
+    if let Some(acme) = state.acme_manager.clone() {
+        let cfg = body.clone();
+        let db_c = db.clone();
+        let store_c = state.cert_store.clone();
+        let dir = state.certs_dir.clone();
+        tokio::spawn(async move {
+            acme::spawn_auto_ssl_for_config(&cfg, db_c, acme, store_c, dir).await;
+        });
+    }
+    Ok(Json(ReloadResponse {
+        ok: true,
+        route_count: state.router.route_count(),
     }))
 }
 
-async fn get_config(
-    State(state): State<AdminState>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    let loaded = routes_config::load(&state.routes_path).map_err(|e| {
+async fn reload_config(State(state): State<AdminState>) -> Result<Json<ReloadResponse>, (StatusCode, Json<ApiError>)> {
+    let Some(db) = &state.db else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "database not configured".into(),
+            }),
+        ));
+    };
+    let cfg = db.get_proxy_config().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+    })?.unwrap_or_default();
+    apply::apply_config(state.router.as_ref(), &cfg).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -331,18 +447,12 @@ async fn get_config(
             }),
         )
     })?;
-    let value = serde_json::json!({
-        "routes_path": state.routes_path.display().to_string(),
-        "route_count": loaded.table.route_count(),
-        "tls_entries": loaded.tls.len(),
-        "http3": loaded.http3,
-    });
-    Ok(Json(value))
-}
-
-#[derive(Deserialize)]
-struct PutConfigRequest {
-    yaml: String,
+    state.cert_store.reload_from_configs(&cfg.tls).ok();
+    *state.runtime_config.write().await = cfg;
+    Ok(Json(ReloadResponse {
+        ok: true,
+        route_count: state.router.route_count(),
+    }))
 }
 
 #[derive(Serialize)]
@@ -351,19 +461,13 @@ struct ReloadResponse {
     route_count: usize,
 }
 
-async fn put_config(
+async fn certificates_list(
     State(state): State<AdminState>,
-    Json(body): Json<PutConfigRequest>,
-) -> Result<Json<ReloadResponse>, (StatusCode, Json<ApiError>)> {
-    routes_config::validate_yaml(&body.yaml).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ApiError {
-                error: e.to_string(),
-            }),
-        )
-    })?;
-    std::fs::write(&state.routes_path, &body.yaml).map_err(|e| {
+) -> Result<Json<Vec<CertificateRow>>, (StatusCode, Json<ApiError>)> {
+    let Some(db) = &state.db else {
+        return Ok(Json(Vec::new()));
+    };
+    let rows = db.list_certificates().await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -371,34 +475,85 @@ async fn put_config(
             }),
         )
     })?;
-    routes::reload_from_path(
-        state.router.as_ref(),
-        state.cert_store.as_ref(),
-        &state.routes_path,
-    )
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError {
-                error: e.to_string(),
-            }),
-        )
-    })?;
-    Ok(Json(ReloadResponse {
-        ok: true,
-        route_count: state.router.route_count(),
-    }))
+    Ok(Json(rows))
 }
 
-async fn reload_config(
+#[derive(Deserialize)]
+struct CertificatesUploadBody {
+    hosts: Vec<String>,
+    cert_pem: String,
+    key_pem: String,
+}
+
+async fn certificates_upload(
     State(state): State<AdminState>,
-) -> Result<Json<ReloadResponse>, (StatusCode, Json<ApiError>)> {
-    routes::reload_from_path(
-        state.router.as_ref(),
-        state.cert_store.as_ref(),
-        &state.routes_path,
-    )
-    .map_err(|e| {
+    Json(body): Json<CertificatesUploadBody>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<ApiError>)> {
+    let Some(db) = &state.db else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "database not configured".into(),
+            }),
+        ));
+    };
+    let hosts: Vec<String> = body
+        .hosts
+        .into_iter()
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty())
+        .collect();
+    if hosts.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "hosts required".into(),
+            }),
+        ));
+    }
+    let cert_pem = body.cert_pem.into_bytes();
+    let key_pem = body.key_pem.into_bytes();
+    let id = db
+        .add_certificate(hosts.clone(), cert_pem.clone(), key_pem.clone(), "uploaded")
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+    state
+        .cert_store
+        .insert_pem_for_hosts(&hosts, &cert_pem, &key_pem, &state.certs_dir, &id)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "id": id, "message": "Certificate saved and loaded." })),
+    ))
+}
+
+async fn certificates_delete(
+    State(state): State<AdminState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let Some(db) = &state.db else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "database not configured".into(),
+            }),
+        ));
+    };
+    let rows = db.list_certificates().await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -406,10 +561,288 @@ async fn reload_config(
             }),
         )
     })?;
-    Ok(Json(ReloadResponse {
-        ok: true,
-        route_count: state.router.route_count(),
-    }))
+    let row = rows.iter().find(|r| r.id == id).cloned().ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "not found".into(),
+            }),
+        )
+    })?;
+    let deleted = db.delete_certificate(&id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+    if !deleted {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "not found".into(),
+            }),
+        ));
+    }
+    state.cert_store.remove_for_hosts(&row.hosts);
+    let cert_path = state.certs_dir.join(format!("{id}.pem"));
+    let key_path = state.certs_dir.join(format!("{id}.key"));
+    let _ = std::fs::remove_file(cert_path);
+    let _ = std::fs::remove_file(key_path);
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Serialize)]
+struct SupportedDnsProviderField {
+    key: String,
+    label: String,
+    field_type: String,
+    required: bool,
+}
+
+#[derive(Serialize)]
+struct SupportedDnsProvider {
+    id: String,
+    name: String,
+    fields: Vec<SupportedDnsProviderField>,
+}
+
+fn supported_dns_providers() -> Vec<SupportedDnsProvider> {
+    vec![
+        SupportedDnsProvider {
+            id: "cloudflare".into(),
+            name: "Cloudflare".into(),
+            fields: vec![
+                SupportedDnsProviderField {
+                    key: "api_token".into(),
+                    label: "API Token".into(),
+                    field_type: "password".into(),
+                    required: true,
+                },
+                SupportedDnsProviderField {
+                    key: "zone_id".into(),
+                    label: "Zone ID (optional)".into(),
+                    field_type: "text".into(),
+                    required: false,
+                },
+            ],
+        },
+        SupportedDnsProvider {
+            id: "digitalocean".into(),
+            name: "DigitalOcean".into(),
+            fields: vec![SupportedDnsProviderField {
+                key: "api_token".into(),
+                label: "API Token".into(),
+                field_type: "password".into(),
+                required: true,
+            }],
+        },
+        SupportedDnsProvider {
+            id: "route53".into(),
+            name: "AWS Route 53".into(),
+            fields: vec![
+                SupportedDnsProviderField {
+                    key: "access_key_id".into(),
+                    label: "Access Key ID".into(),
+                    field_type: "text".into(),
+                    required: true,
+                },
+                SupportedDnsProviderField {
+                    key: "secret_access_key".into(),
+                    label: "Secret Access Key".into(),
+                    field_type: "password".into(),
+                    required: true,
+                },
+            ],
+        },
+        SupportedDnsProvider {
+            id: "duckdns".into(),
+            name: "DuckDNS".into(),
+            fields: vec![
+                SupportedDnsProviderField {
+                    key: "domain".into(),
+                    label: "Subdomain".into(),
+                    field_type: "text".into(),
+                    required: true,
+                },
+                SupportedDnsProviderField {
+                    key: "token".into(),
+                    label: "Token".into(),
+                    field_type: "password".into(),
+                    required: true,
+                },
+            ],
+        },
+        SupportedDnsProvider {
+            id: "hetzner".into(),
+            name: "Hetzner DNS".into(),
+            fields: vec![SupportedDnsProviderField {
+                key: "api_token".into(),
+                label: "API Token".into(),
+                field_type: "password".into(),
+                required: true,
+            }],
+        },
+    ]
+}
+
+async fn dns_providers_supported() -> Json<Vec<SupportedDnsProvider>> {
+    Json(supported_dns_providers())
+}
+
+async fn dns_providers_list(
+    State(state): State<AdminState>,
+) -> Result<Json<Vec<DnsProviderRow>>, (StatusCode, Json<ApiError>)> {
+    let Some(db) = &state.db else {
+        return Ok(Json(Vec::new()));
+    };
+    let rows = db.list_dns_providers().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+    Ok(Json(rows))
+}
+
+#[derive(Deserialize)]
+struct CreateDnsProviderBody {
+    name: String,
+    provider_type: String,
+    credentials: Option<std::collections::HashMap<String, String>>,
+}
+
+async fn dns_providers_create(
+    State(state): State<AdminState>,
+    Json(body): Json<CreateDnsProviderBody>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<ApiError>)> {
+    let Some(db) = &state.db else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "database not configured".into(),
+            }),
+        ));
+    };
+    let id = db
+        .create_dns_provider(body.name, body.provider_type, body.credentials)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
+}
+
+async fn dns_providers_get(
+    State(state): State<AdminState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<DnsProviderRow>, (StatusCode, Json<ApiError>)> {
+    let Some(db) = &state.db else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "database not configured".into(),
+            }),
+        ));
+    };
+    match db.get_dns_provider(&id).await {
+        Ok(Some(row)) => Ok(Json(row)),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "not found".into(),
+            }),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )),
+    }
+}
+
+#[derive(Deserialize)]
+struct PutDnsProviderBody {
+    name: String,
+    provider_type: String,
+    credentials: Option<std::collections::HashMap<String, String>>,
+}
+
+async fn dns_providers_put(
+    State(state): State<AdminState>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<PutDnsProviderBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let Some(db) = &state.db else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "database not configured".into(),
+            }),
+        ));
+    };
+    let updated = db
+        .put_dns_provider(&id, body.name, body.provider_type, body.credentials)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+    if updated {
+        Ok(Json(serde_json::json!({ "ok": true })))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "not found".into(),
+            }),
+        ))
+    }
+}
+
+async fn dns_providers_delete(
+    State(state): State<AdminState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let Some(db) = &state.db else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "database not configured".into(),
+            }),
+        ));
+    };
+    let deleted = db.delete_dns_provider(&id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+    if deleted {
+        Ok(Json(serde_json::json!({ "ok": true })))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "not found".into(),
+            }),
+        ))
+    }
 }
 
 #[derive(Serialize)]
@@ -426,22 +859,15 @@ struct TlsResponse {
 }
 
 async fn get_tls(State(state): State<AdminState>) -> Result<Json<TlsResponse>, (StatusCode, Json<ApiError>)> {
-    let loaded = routes_config::load(&state.routes_path).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError {
-                error: e.to_string(),
-            }),
-        )
-    })?;
-    let entries = loaded
+    let cfg = state.runtime_config.read().await;
+    let entries = cfg
         .tls
-        .into_iter()
+        .iter()
         .filter_map(|entry| {
             let cert = entry.source.cert_path()?.display().to_string();
             let key = entry.source.key_path()?.display().to_string();
             Some(TlsEntryView {
-                hosts: entry.hosts,
+                hosts: entry.hosts.clone(),
                 cert,
                 key,
             })
@@ -580,21 +1006,60 @@ pub fn build_state(
     cert_store: Arc<CertStore>,
     proxy_config: ProxyConfig,
     runtime_cfg: RuntimeConfig,
+    db: Option<Arc<Database>>,
+    http01_store: Arc<Http01ChallengeStore>,
+    #[cfg(feature = "acme")] acme_manager: Option<Arc<AcmeManager>>,
+    runtime_config: Config,
 ) -> AdminState {
     let password = admin_password();
     if password.is_none() {
         warn!("PERTISK_ADMIN_PASSWORD is not set; management API allows unauthenticated access");
     }
+    let certs_dir = db
+        .as_ref()
+        .map(|d| certs_dir_for_db(d.path()))
+        .unwrap_or_else(|| PathBuf::from("./data/certs"));
     AdminState {
         router,
         cert_store,
-        routes_path: proxy_config.routes_config.clone(),
         proxy_config,
         runtime_cfg,
+        runtime_config: Arc::new(RwLock::new(runtime_config)),
         started_at: Instant::now(),
         auth_password: password,
         session_token: Arc::new(RwLock::new(Some(session_token()))),
         admin_dist: resolve_admin_dist(),
         dev_origin: admin_dev_origin(),
+        db,
+        certs_dir,
+        http01_store,
+        #[cfg(feature = "acme")]
+        acme_manager,
     }
+}
+
+pub fn resolve_db_path() -> PathBuf {
+    std::env::var("PERTISK_DB_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("./data/proxy.sqlite"))
+}
+
+pub fn certs_dir_for_db(db_path: &Path) -> PathBuf {
+    db_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("certs")
+}
+
+/// Load certificates from SQLite into CertStore (PEM files under `certs_dir`).
+pub async fn load_db_certs_into_store(
+    db: &Database,
+    store: &CertStore,
+    certs_dir: &Path,
+) -> Result<()> {
+    let rows = db.get_all_certificates_for_store().await?;
+    for (id, hosts, cert_pem, key_pem) in rows {
+        store.insert_pem_for_hosts(&hosts, &cert_pem, &key_pem, certs_dir, &id)?;
+    }
+    Ok(())
 }

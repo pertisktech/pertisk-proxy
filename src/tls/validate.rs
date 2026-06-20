@@ -38,6 +38,24 @@ pub fn validate_cert_pair(cert_path: &Path, key_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Validate in-memory PEM certificate and private key material.
+pub fn validate_cert_pair_pem(cert_pem: &[u8], key_pem: &[u8]) -> Result<()> {
+    let mut cert_reader = cert_pem;
+    let certs: Vec<_> = rustls_pemfile::certs(&mut cert_reader)
+        .collect::<Result<Vec<_>, _>>()
+        .context("failed to parse certificate PEM")?;
+    if certs.is_empty() {
+        anyhow::bail!("no certificate found in PEM data");
+    }
+
+    let mut key_reader = key_pem;
+    rustls_pemfile::private_key(&mut key_reader)
+        .context("failed to parse private key PEM")?
+        .context("no private key found in PEM data")?;
+
+    Ok(())
+}
+
 /// Warn when configured TLS hostnames are not covered by the certificate SAN/CN.
 pub fn warn_host_cert_mismatch(cert_path: &Path, configured_hosts: &[String]) -> Result<()> {
     let pem = fs::read(cert_path)

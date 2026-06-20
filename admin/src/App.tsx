@@ -5,8 +5,9 @@ import { ThemeProvider } from '@/context/ThemeContext';
 import { Layout } from '@/components/Layout';
 import { Login } from '@/routes/Login';
 import { Dashboard } from '@/routes/Dashboard';
-import { RoutesPage } from '@/routes/RoutesPage';
 import { Certificates } from '@/routes/Certificates';
+import { Sites } from '@/routes/Sites';
+import { DnsProviders } from '@/routes/DnsProviders';
 import { Settings } from '@/routes/Settings';
 import { api } from '@/api/client';
 import { clearToken, getToken } from '@/auth';
@@ -62,8 +63,9 @@ export default function App() {
             }
           >
             <Route index element={<Dashboard />} />
-            <Route path="routes" element={<RoutesPage />} />
+            <Route path="sites" element={<Sites />} />
             <Route path="certificates" element={<Certificates />} />
+            <Route path="dns-providers" element={<DnsProviders />} />
             <Route path="settings" element={<Settings />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

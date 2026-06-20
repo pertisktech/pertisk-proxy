@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use tracing::{info, warn};
 
 use super::config::{TlsConfig, TlsSource};
-use super::validate::{self, validate_cert_pair as validate_tls_pair};
+use super::validate::{self, validate_cert_pair as validate_tls_pair, validate_cert_pair_pem};
 
 #[derive(Debug, Clone)]
 pub struct CertPaths {
@@ -92,11 +92,8 @@ impl CertStore {
                 }
                 TlsSource::Acme { .. } => {
                     acme_pending += entry.hosts.len();
-                    warn!(
-                        hosts = ?entry.hosts,
-                        "ACME TLS is not implemented yet; use type: file or TLS_CERT_PATH until ACME lands"
-                    );
                 }
+                TlsSource::Kubernetes => {}
             }
         }
 
@@ -126,6 +123,57 @@ impl CertStore {
 
     pub fn has_cert_for_host(&self, host: &str) -> bool {
         self.get(host).is_some()
+    }
+
+    /// Register certificate file paths for the given hostnames.
+    pub fn insert_paths_for_hosts(&self, hosts: &[String], paths: CertPaths) {
+        if let Ok(mut g) = self.inner.write() {
+            if g.default.is_none() {
+                g.default = Some(paths.clone());
+            }
+            for host in hosts {
+                let host = host.trim();
+                if !host.is_empty() {
+                    g.by_host.insert(normalize_host(host), paths.clone());
+                }
+            }
+        }
+    }
+
+    /// Remove host mappings (e.g. after deleting a DB certificate).
+    pub fn remove_for_hosts(&self, hosts: &[String]) {
+        if let Ok(mut g) = self.inner.write() {
+            for host in hosts {
+                g.by_host.remove(&normalize_host(host.trim()));
+            }
+        }
+    }
+
+    /// Write PEM material to disk and map it to hostnames.
+    pub fn insert_pem_for_hosts(
+        &self,
+        hosts: &[String],
+        cert_pem: &[u8],
+        key_pem: &[u8],
+        certs_dir: &std::path::Path,
+        id: &str,
+    ) -> Result<()> {
+        validate_cert_pair_pem(cert_pem, key_pem).context("invalid certificate PEM")?;
+        std::fs::create_dir_all(certs_dir)?;
+        let cert_path = certs_dir.join(format!("{id}.pem"));
+        let key_path = certs_dir.join(format!("{id}.key"));
+        std::fs::write(&cert_path, cert_pem)?;
+        std::fs::write(&key_path, key_pem)?;
+        validate_tls_pair(&cert_path, &key_path)?;
+        validate::warn_host_cert_mismatch(&cert_path, hosts)?;
+        self.insert_paths_for_hosts(
+            hosts,
+            CertPaths {
+                cert: cert_path,
+                key: key_path,
+            },
+        );
+        Ok(())
     }
 
     pub fn get(&self, host: &str) -> Option<CertPaths> {

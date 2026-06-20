@@ -27,8 +27,9 @@ export type ManagementInfo = {
   mode: string;
   version: string;
   uptime_secs: number;
-  routes_path: string;
+  db_path: string;
   route_count: number;
+  site_count: number;
   tls_host_count: number;
   enable_h3: boolean;
   auto_https: boolean;
@@ -45,10 +46,76 @@ export type RouteView = {
   middlewares: number;
 };
 
-export type TlsEntry = {
+export type Upstream = { addr: string; weight?: number };
+
+export type Backend = {
+  name: string;
+  upstreams: Upstream[];
+};
+
+export type PathRewrite = {
+  path: string;
+  path_type?: string;
+  rewrite?: string;
+};
+
+export type Site = {
+  host: string;
+  backend: string;
+  routes: PathRewrite[];
+};
+
+export type TlsSource =
+  | { type: 'file'; cert: string; key: string }
+  | {
+      type: 'acme';
+      email?: string;
+      challenge?: string;
+      dns_provider?: string;
+      dns_provider_type?: string;
+      dns_credentials?: Record<string, string>;
+    };
+
+export type TlsConfig = {
   hosts: string[];
-  cert: string;
+  source: TlsSource;
+  expires_at?: string;
+};
+
+export type ProxyConfig = {
+  sites: Site[];
+  backends: Backend[];
+  tls: TlsConfig[];
+  proxy_log?: boolean;
+};
+
+export type CertificateRow = {
+  id: string;
+  hosts: string[];
+  source_type: string;
+  created_at: string;
+  expires_at?: string;
+};
+
+export type DnsProviderRow = {
+  id: string;
+  name: string;
+  provider_type: string;
+  credentials?: Record<string, string>;
+  created_at: string;
+};
+
+export type SupportedDnsProviderField = {
   key: string;
+  label: string;
+  field_type: string;
+  required: boolean;
+};
+
+export type SupportedDnsProvider = {
+  id: string;
+  name: string;
+  fields: SupportedDnsProviderField[];
 };
 
 export const api = {
@@ -64,12 +131,36 @@ export const api = {
   authCheck: () => request<{ authenticated: boolean }>('/auth/check'),
   management: () => request<ManagementInfo>('/management'),
   routes: () => request<{ routes: RouteView[]; count: number }>('/routes'),
-  configYaml: () => request<{ path: string; yaml: string }>('/config/yaml'),
-  saveConfig: (yaml: string) =>
+  config: () => request<ProxyConfig>('/config'),
+  saveConfig: (config: ProxyConfig) =>
     request<{ ok: boolean; route_count: number }>('/config', {
       method: 'PUT',
-      body: JSON.stringify({ yaml }),
+      body: JSON.stringify(config),
     }),
   reload: () => request<{ ok: boolean }>('/reload', { method: 'POST' }),
-  tls: () => request<{ entries: TlsEntry[]; host_count: number }>('/tls'),
+  tls: () => request<{ entries: { hosts: string[]; cert: string; key: string }[]; host_count: number }>('/tls'),
+  certificates: {
+    list: () => request<CertificateRow[]>('/certificates'),
+    upload: (body: { hosts: string[]; cert_pem: string; key_pem: string }) =>
+      request<{ id: string; message: string }>('/certificates', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    delete: (id: string) =>
+      request<{ ok: boolean }>(`/certificates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
+  dnsProviders: {
+    list: () => request<DnsProviderRow[]>('/dns-providers'),
+    supported: () => request<SupportedDnsProvider[]>('/dns-providers/supported'),
+    get: (id: string) => request<DnsProviderRow>(`/dns-providers/${encodeURIComponent(id)}`),
+    create: (body: { name: string; provider_type: string; credentials?: Record<string, string> }) =>
+      request<{ id: string }>('/dns-providers', { method: 'POST', body: JSON.stringify(body) }),
+    update: (id: string, body: { name: string; provider_type: string; credentials?: Record<string, string> }) =>
+      request<{ ok: boolean }>(`/dns-providers/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+    delete: (id: string) =>
+      request<{ ok: boolean }>(`/dns-providers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
 };

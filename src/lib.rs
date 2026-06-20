@@ -2,8 +2,11 @@ pub mod config;
 pub mod deny;
 pub mod health;
 pub mod http3_options;
+pub mod proxy_config;
 #[cfg(feature = "admin")]
 pub mod api;
+#[cfg(feature = "admin")]
+pub mod db;
 #[cfg(feature = "ingress")]
 pub mod controller;
 pub mod h3;
