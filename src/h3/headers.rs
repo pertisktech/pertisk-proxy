@@ -61,6 +61,20 @@ pub fn error_response(status: StatusCode, message: &str) -> Response<Vec<u8>> {
     Response::builder()
         .status(status)
         .header("content-type", "text/plain")
+        .header("server", "pertisk-proxy/h3")
         .body(message.as_bytes().to_vec())
         .unwrap()
+}
+
+pub fn request_host<B>(req: &Request<B>) -> String {
+    if let Some(host) = req.headers().get(HOST).and_then(|v| v.to_str().ok()) {
+        let host = host.trim();
+        if !host.is_empty() {
+            return host.split(':').next().unwrap_or(host).to_string();
+        }
+    }
+    if let Some(authority) = req.uri().authority() {
+        return authority.host().to_string();
+    }
+    String::new()
 }

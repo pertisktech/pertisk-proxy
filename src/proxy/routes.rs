@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,21 +6,20 @@ use anyhow::{Context, Result};
 use tokio::time;
 use tracing::{info, warn};
 
-use crate::mode::ProxyKind;
 use crate::routes_config;
+use crate::tls::CertStore;
 use crate::Router;
 
 pub async fn run(
     router: Arc<Router>,
-    kind: ProxyKind,
-    config_path: PathBuf,
+    cert_store: Arc<CertStore>,
+    config_path: std::path::PathBuf,
     watch: bool,
 ) -> Result<()> {
-    info!(kind = %kind, description = kind.description(), "starting proxy mode");
-    reload(router.as_ref(), &config_path)?;
+    reload(router.as_ref(), cert_store.as_ref(), &config_path)?;
 
     if !watch {
-        info!(path = %config_path.display(), "routes loaded (static, no watch)");
+        info!(path = %config_path.display(), "routes loaded (static)");
         std::future::pending::<()>().await;
         return Ok(());
     }
@@ -34,8 +33,8 @@ pub async fn run(
         match file_modified(&config_path) {
             Ok(modified) if modified > last_modified => {
                 last_modified = modified;
-                match reload(router.as_ref(), &config_path) {
-                    Ok(()) => info!(kind = %kind, "routes reloaded"),
+                match reload(router.as_ref(), cert_store.as_ref(), &config_path) {
+                    Ok(()) => info!("routes and TLS config reloaded"),
                     Err(err) => warn!(error = %err, "route reload failed"),
                 }
             }
@@ -45,10 +44,16 @@ pub async fn run(
     }
 }
 
-fn reload(router: &Router, path: &Path) -> Result<()> {
-    let table = routes_config::load(path)?;
-    info!(routes = table.route_count(), path = %path.display(), "loaded routes");
-    router.replace(table);
+fn reload(router: &Router, cert_store: &CertStore, path: &Path) -> Result<()> {
+    let loaded = routes_config::load(path)?;
+    info!(
+        routes = loaded.table.route_count(),
+        tls_entries = loaded.tls.len(),
+        path = %path.display(),
+        "loaded routes"
+    );
+    router.replace(loaded.table);
+    cert_store.reload_from_configs(&loaded.tls)?;
     Ok(())
 }
 

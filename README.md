@@ -1,85 +1,72 @@
 # pertisk-proxy
 
-High-performance reverse proxy built on [Pingora](https://github.com/cloudflare/pingora) (HTTP/1.1 + HTTP/2) and [Quiche](https://github.com/cloudflare/quiche) / [tokio-quiche](https://github.com/cloudflare/quiche/tree/master/tokio-quiche) (HTTP/3).
+Reverse proxy and Kubernetes Ingress controller built on [Pingora](https://github.com/cloudflare/pingora) (HTTP/1.1 + HTTP/2) and [Quiche](https://github.com/cloudflare/quiche) / [tokio-quiche](https://github.com/cloudflare/quiche/tree/master/tokio-quiche) (HTTP/3).
 
-Run it in one of four modes — each mode defines **what the app does**, not which config file format you paste in.
+Structured like [pertisk-rproxy](https://github.com/pertisktech/pertisk-rproxy): **two binaries**, separate configs, and packaging via `build/package.sh`.
 
-## Operating modes
+## Binaries
 
-| Mode | `MODE` | What it does |
-|------|--------|--------------|
-| **Ingress** | `ingress` | Kubernetes Ingress controller — watches `Ingress` resources |
-| **Nginx** | `nginx` | Static reverse proxy (nginx-like): manual TLS, no hot reload by default |
-| **Caddy** | `caddy` | Simple reverse proxy (caddy-like): automatic HTTP→HTTPS redirect |
-| **Traefik** | `traefik` | Dynamic reverse proxy (traefik-like): hot reload, middleware, API dashboard |
+| Binary | Mode | Purpose |
+|--------|------|---------|
+| `pertisk-proxy` | **proxy** | Standalone reverse proxy — routes from `ROUTES_CONFIG` |
+| `pertisk-proxy-ingress` | **ingress** | Kubernetes Ingress controller — watches `Ingress` resources |
 
-Proxy modes (`nginx`, `caddy`, `traefik`) load routes from a **pertisk routes file** (YAML/JSON), not from nginx.conf / Caddyfile / traefik.yaml.
-
-```
-                    ┌─────────────────────────────────────┐
-                    │         pertisk-proxy engine        │
-                    │   Pingora (HTTP/1+2) + Quiche (H3)  │
-                    └─────────────────────────────────────┘
-                          ▲              ▲              ▲
-              ingress     │   nginx      │   caddy      │  traefik
-              mode        │   mode       │   mode       │  mode
-                          │              │              │
-                   K8s Ingress      static routes   auto HTTPS    hot reload
-                   watcher          file            redirect      + middleware
-```
+Both share the same Pingora + HTTP/3 data plane.
 
 ## Quick start
 
 ```bash
-cargo build --release
+cargo build --release --bin pertisk-proxy
+cargo build --release --bin pertisk-proxy-ingress --features ingress
 ```
 
-### Ingress mode (Kubernetes)
+### Proxy mode
 
 ```bash
-export MODE=ingress
-export INGRESS_CLASS=pertisk
-kubectl apply -f deploy/kubernetes.yaml
-```
-
-### Nginx mode (static reverse proxy)
-
-```bash
-export MODE=nginx
+make run
+# or
 export ROUTES_CONFIG=./config/examples/routes.yaml
-export TLS_CERT_PATH=./cert.pem
-export TLS_KEY_PATH=./key.pem
 export ENABLE_H3=false
-./target/release/pertisk-proxy
+cargo run --bin pertisk-proxy
 ```
 
-### Caddy mode (automatic HTTPS)
+Config: `/etc/pertisk-proxy/pertisk-proxy.conf` (see `build/pertisk-proxy.conf`)
+
+### Ingress mode
 
 ```bash
-export MODE=caddy
-export ROUTES_CONFIG=./config/examples/routes.yaml
-export TLS_CERT_PATH=./cert.pem
-export TLS_KEY_PATH=./key.pem
-# HTTP :80 redirects to HTTPS :443 automatically (AUTO_HTTPS=true by default)
-./target/release/pertisk-proxy
+make run-ingress
+# or
+export INGRESS_CLASS=pertisk
+cargo run --bin pertisk-proxy-ingress --features ingress
 ```
 
-### Traefik mode (dynamic + middleware)
+Config: `/etc/pertisk-proxy/pertisk-proxy-ingress.conf` (see `build/pertisk-proxy-ingress.conf`)
+
+### Kubernetes
 
 ```bash
-export MODE=traefik
-export ROUTES_CONFIG=./config/examples/routes.yaml
-export ROUTES_WATCH=true          # hot reload (default for traefik)
-export TLS_CERT_PATH=./cert.pem
-export TLS_KEY_PATH=./key.pem
-./target/release/pertisk-proxy
-
-# Dashboard-style API
-curl http://localhost/api/http/routers
-curl http://localhost/api/overview
+docker build -t pertisk-proxy-ingress .
+kubectl apply -f deploy/kubernetes.yaml
+kubectl apply -f deploy/example-ingress.yaml
 ```
 
-## Routes file format
+## Packaging
+
+Like pertisk-rproxy's `build/package.sh`:
+
+```bash
+./build/package.sh amd64              # both binaries
+./build/package.sh amd64 0.1.0 proxy  # proxy only
+./build/package.sh amd64 0.1.0 ingress # ingress only
+make package-amd64
+```
+
+Installs:
+- `/usr/bin/pertisk-proxy` + `pertisk-proxy.service` + `pertisk-proxy.conf`
+- `/usr/bin/pertisk-proxy-ingress` + `pertisk-proxy-ingress.service` + `pertisk-proxy-ingress.conf`
+
+## Routes file (proxy mode)
 
 `config/examples/routes.yaml`:
 
@@ -87,44 +74,59 @@ curl http://localhost/api/overview
 routes:
   - host: app.example.com
     path: /api
-    path_type: prefix        # prefix | exact
+    path_type: prefix
     upstream: http://backend:8080
-    middlewares:             # traefik mode only
-      - type: stripPrefix
-        prefix: /api
-      - type: requestHeaders
-        headers:
-          X-Custom: value
-      - type: responseHeaders
-        headers:
-          X-Frame-Options: DENY
 ```
-
-## Mode comparison
-
-| Feature | Ingress | Nginx | Caddy | Traefik |
-|---------|---------|-------|-------|---------|
-| Route source | K8s Ingress | routes file | routes file | routes file |
-| Hot reload | yes (watch) | no (default) | yes (default) | yes (default) |
-| Auto HTTPS redirect | — | — | yes | — |
-| Middleware | — | — | — | yes |
-| API dashboard | — | — | — | `/api/*` |
-| Default ports | 8080/8443 | 80/443 | 80/443 | 80/443 |
 
 ## Configuration
 
+### Proxy (`pertisk-proxy`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ROUTES_CONFIG` | — | Routes YAML/JSON path (required) |
+| `ROUTES_WATCH` | `true` | Hot reload routes file |
+| `AUTO_HTTPS` | `false` | HTTP→HTTPS redirect |
+| `LISTEN_HTTP` | `0.0.0.0:80` | HTTP listen address |
+| `LISTEN_HTTPS` | `0.0.0.0:443` | HTTPS listen address |
+| `PERTISK_PROXY_MODE` | `auto` | Runtime: `auto`, `standard`, `performance` |
+
+### Ingress (`pertisk-proxy-ingress`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `INGRESS_CLASS` | — | Filter by `ingressClassName` |
+| `WATCH_ALL_NAMESPACES` | `true` | Watch cluster-wide |
+| `LISTEN_HTTP` | `0.0.0.0:8080` | HTTP listen address |
+| `PERTISK_INGRESS_MODE` | `auto` | Runtime tuning |
+
+### Shared
+
 | Variable | Description |
 |----------|-------------|
-| `MODE` | `ingress`, `nginx`, `caddy`, or `traefik` |
-| `ROUTES_CONFIG` | Routes file path (required for proxy modes) |
-| `ROUTES_WATCH` | Reload routes on change (default: off for nginx, on for caddy/traefik) |
-| `AUTO_HTTPS` | HTTP→HTTPS redirect (default: on for caddy only) |
-| `LISTEN_HTTP` / `LISTEN_HTTPS` / `LISTEN_H3_UDP` | Listen addresses |
 | `TLS_CERT_PATH` / `TLS_KEY_PATH` | TLS certificate and key |
 | `ENABLE_H3` | Enable HTTP/3 (default: true) |
-| `INGRESS_CLASS` | Ingress mode: filter by class name |
+| `LISTEN_H3_UDP` | HTTP/3 UDP listen address |
 
 Health: `/healthz`, `/readyz`
+
+## Project layout
+
+```
+src/
+  main.rs                 # pertisk-proxy (proxy mode)
+  bin/ingress.rs          # pertisk-proxy-ingress (ingress mode)
+  config/                 # ProxyConfig / IngressConfig
+  controller.rs           # Ingress watcher
+  proxy/routes.rs         # Routes file loader
+  server.rs               # Shared Pingora startup
+  runtime.rs              # PERTISK_*_MODE tuning
+build/
+  package.sh              # DEB/RPM/tar packaging
+  pertisk-proxy.conf
+  pertisk-proxy-ingress.conf
+deploy/                   # Kubernetes manifests
+```
 
 ## License
 

@@ -1,22 +1,16 @@
 routes:
-  - host: app.example.com
-    path: /api
-    path_type: prefix
-    upstream: http://backend:8080
-
-  - host: app.example.com
+  - host: admin.amd.thaidevops.co
     path: /
     path_type: prefix
-    upstream: http://frontend:3000
+    upstream: http://localhost:8380
 
-  # Traefik-only: middleware chain example
-  - host: admin.example.com
-    path: /dashboard
+  - host: api.amd.thaidevops.co
+    path: /
     path_type: prefix
-    upstream: http://admin:8080
-    middlewares:
-      - type: stripPrefix
-        prefix: /dashboard
-      - type: responseHeaders
-        headers:
-          X-Frame-Options: DENY
+    upstream: http://localhost:8802
+tls:
+  - hosts: [admin.amd.thaidevops.co, api.amd.thaidevops.co]
+    source:
+      type: file
+      cert: /Users/nat/projects/pertisk-tech/pertisk-proxy/certs/amd-thaidevops.pem
+      key: /Users/nat/projects/pertisk-tech/pertisk-proxy/certs/amd-thaidevops.key

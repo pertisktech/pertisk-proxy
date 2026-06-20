@@ -2631,6 +2631,7 @@ dependencies = [
  "pingora-proxy",
  "quiche",
  "reqwest",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "serde_yaml 0.9.34+deprecated",
@@ -2641,6 +2642,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "x509-parser",
 ]
 
 [[package]]

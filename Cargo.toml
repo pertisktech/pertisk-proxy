@@ -2,8 +2,12 @@
 name = "pertisk-proxy"
 version = "0.1.0"
 edition = "2021"
-description = "Kubernetes Ingress reverse proxy with HTTP/1, HTTP/2 (Pingora) and HTTP/3 (Quiche)"
+description = "Reverse proxy and Kubernetes Ingress controller with HTTP/1, HTTP/2 (Pingora) and HTTP/3 (Quiche)"
 license = "Apache-2.0"
+
+[features]
+default = []
+ingress = []
 
 [dependencies]
 anyhow = "1.0.102"
@@ -31,3 +35,14 @@ tokio-quiche = "0.19.0"
 tokio-util = { version = "0.7.16", features = ["codec"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+x509-parser = "0.16.0"
+rustls-pemfile = "2.2.0"
+
+[[bin]]
+name = "pertisk-proxy"
+path = "src/main.rs"
+
+[[bin]]
+name = "pertisk-proxy-ingress"
+path = "src/bin/ingress.rs"
+required-features = ["ingress"]

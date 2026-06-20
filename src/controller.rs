@@ -10,10 +10,10 @@ use kube::runtime::WatchStreamExt;
 use kube::Client;
 use tracing::{info, warn};
 
-use crate::config::Config;
+use crate::config::IngressConfig;
 use crate::router::{build_route_table_from_ingresses, ingress_matches_class, Router};
 
-pub async fn run(router: Arc<Router>, config: Config) -> Result<()> {
+pub async fn run(router: Arc<Router>, config: IngressConfig) -> Result<()> {
     let client = Client::try_default().await?;
     info!("connected to Kubernetes API");
 
@@ -91,7 +91,7 @@ fn rebuild_router(router: &Router, ingresses: &HashMap<String, Ingress>) {
 }
 
 /// Bootstrap routing from a full list when running outside the watch loop (tests/local dev).
-pub async fn bootstrap_from_list(client: Client, config: &Config, router: Arc<Router>) -> Result<()> {
+pub async fn bootstrap_from_list(client: Client, config: &IngressConfig, router: Arc<Router>) -> Result<()> {
     let api: Api<Ingress> = if config.watch_all_namespaces {
         Api::all(client)
     } else {

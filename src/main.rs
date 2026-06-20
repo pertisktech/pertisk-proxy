@@ -1,105 +1,107 @@
+//! pertisk-proxy — standalone reverse proxy (proxy mode).
+//!
+//! Loads routes from `ROUTES_CONFIG` and serves HTTP/1, HTTP/2, and HTTP/3.
+//! Per-site TLS is configured in the routes file (`tls:` section); ACME follows later.
+//! For Kubernetes Ingress control, use the `pertisk-proxy-ingress` binary.
+
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
-use pingora_core::listeners::tls::TlsSettings;
-use pingora_core::server::configuration::Opt;
-use pingora_core::server::Server;
-use pingora_proxy::http_proxy_service;
-use tracing::{info, Level};
-use tracing_subscriber::EnvFilter;
+use anyhow::Result;
+use tracing::info;
 
-use pertisk_proxy::config::Config;
-use pertisk_proxy::controller;
+use pertisk_proxy::config::ProxyConfig;
 use pertisk_proxy::h3;
-use pertisk_proxy::mode::OperatingMode;
-use pertisk_proxy::proxy::Gateway;
-use pertisk_proxy::proxy::kinds;
+use pertisk_proxy::h3::H3Config;
+use pertisk_proxy::logging;
+use pertisk_proxy::proxy::routes;
+use pertisk_proxy::routes_config;
+use pertisk_proxy::runtime;
+use pertisk_proxy::server;
+use pertisk_proxy::tls::CertStore;
 use pertisk_proxy::Router;
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::from_default_env().add_directive(Level::INFO.into()),
-        )
-        .init();
+    logging::init();
+    let runtime_cfg = runtime::runtime_config_from_env(&runtime::proxy_runtime_env())?;
+    let tokio_runtime = runtime::build_runtime(&runtime_cfg, "pertisk-proxy-worker")?;
 
-    let config = Config::from_env()?;
-    let router = Router::new();
-
-    let runtime = tokio::runtime::Runtime::new()?;
-    spawn_route_loader(&runtime, Arc::clone(&router), &config)?;
-
-    if config.enable_h3 {
-        let router_for_h3 = Arc::clone(&router);
-        let h3_config = config.clone();
-        runtime.spawn(async move {
-            if let Err(err) = h3::run(router_for_h3, h3_config).await {
-                tracing::error!(error = %err, "HTTP/3 server stopped");
-            }
-        });
-    }
+    let config = ProxyConfig::from_env()?;
 
     info!(
-        mode = %config.mode,
-        http = %config.http_listen,
-        https = %config.https_listen,
-        h3_udp = %config.h3_udp_listen,
-        h3_enabled = config.enable_h3,
-        auto_https = config.auto_https,
+        binary = "pertisk-proxy",
+        mode = "proxy",
+        requested_runtime = runtime_cfg.requested_mode.as_str(),
+        resolved_runtime = runtime_cfg.resolved_mode.as_str(),
+        worker_threads = runtime_cfg.worker_threads,
+        routes = %config.routes_config.display(),
+        routes_watch = config.routes_watch,
         "starting pertisk-proxy"
     );
 
-    let opt = Opt::parse_args();
-    let mut server = Server::new(Some(opt))?;
-    server.bootstrap();
+    let router = Router::new();
+    let cert_store = Arc::new(CertStore::new());
 
-    let gateway = Gateway::new(
+    if let (Some(cert), Some(key)) = (
+        config.server.tls_cert_path.as_ref(),
+        config.server.tls_key_path.as_ref(),
+    ) {
+        cert_store.set_global_fallback(cert.clone(), key.clone())?;
+    }
+
+    let initial = routes_config::load(&config.routes_config)?;
+    router.replace(initial.table);
+    cert_store.reload_from_configs(&initial.tls)?;
+
+    let routes_path = config.routes_config.clone();
+    let watch = config.routes_watch;
+    tokio_runtime.spawn(routes::run(
         Arc::clone(&router),
-        config.mode.clone(),
+        Arc::clone(&cert_store),
+        routes_path,
+        watch,
+    ));
+
+    if config.server.enable_h3 {
+        let paths = cert_store.default_paths().or_else(|| {
+            config
+                .server
+                .tls_cert_path
+                .as_ref()
+                .zip(config.server.tls_key_path.as_ref())
+                .map(|(cert, key)| pertisk_proxy::tls::CertPaths {
+                    cert: cert.clone(),
+                    key: key.clone(),
+                })
+        });
+
+        if let Some(paths) = paths {
+            for udp_addr in h3::h3_bind_addrs(&config.server.h3_udp_listen) {
+                let h3_config = H3Config::from_tls_paths(
+                    paths.cert.to_string_lossy(),
+                    paths.key.to_string_lossy(),
+                    udp_addr.clone(),
+                );
+                info!(udp = %udp_addr, "starting HTTP/3 listener");
+                let router_for_h3 = Arc::clone(&router);
+                tokio_runtime.spawn(async move {
+                    if let Err(err) = h3::run(router_for_h3, h3_config).await {
+                        tracing::error!(error = %err, udp = %udp_addr, "HTTP/3 listener stopped");
+                    }
+                });
+            }
+        } else {
+            tracing::warn!("ENABLE_H3 is set but no TLS certificates are available; HTTP/3 disabled");
+        }
+    } else {
+        info!("HTTP/3 disabled; serving HTTP/1.1 and HTTP/2 over TLS");
+    }
+
+    // Pingora owns the blocking server loop and creates its own runtime; do not call
+    // `run_forever` from inside `block_on`.
+    server::run(
+        &config.server,
+        router,
+        cert_store,
         config.auto_https,
-        config.https_port(),
-    );
-    let mut proxy = http_proxy_service(&server.configuration, gateway);
-    proxy.add_tcp(&config.http_listen);
-
-    if let (Ok(cert), Ok(key)) = (config.tls_cert_path(), config.tls_key_path()) {
-        let mut tls_settings = TlsSettings::intermediate(cert, key)?;
-        tls_settings.enable_h2();
-        proxy.add_tls_with_settings(&config.https_listen, None, tls_settings);
-        info!(addr = %config.https_listen, "HTTPS (HTTP/1 + HTTP/2) listener started");
-    }
-
-    server.add_service(proxy);
-    server.run_forever();
-}
-
-fn spawn_route_loader(
-    runtime: &tokio::runtime::Runtime,
-    router: Arc<Router>,
-    config: &Config,
-) -> Result<()> {
-    match &config.mode {
-        OperatingMode::Ingress => {
-            let controller_config = config.clone();
-            runtime.spawn(async move {
-                if let Err(err) = controller::run(router, controller_config).await {
-                    tracing::error!(error = %err, "ingress controller stopped");
-                }
-            });
-        }
-        OperatingMode::Proxy(kind) => {
-            let config_path = config
-                .routes_config
-                .clone()
-                .context("routes config path missing")?;
-            let kind = *kind;
-            let watch = config.routes_watch;
-            runtime.spawn(async move {
-                if let Err(err) = kinds::run(router, kind, config_path, watch).await {
-                    tracing::error!(error = %err, "proxy route loader stopped");
-                }
-            });
-        }
-    }
-    Ok(())
+    )
 }

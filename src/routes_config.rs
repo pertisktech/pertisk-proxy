@@ -5,11 +5,20 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use crate::router::{parse_upstream, Middleware, PathMatchType, Route, RouteTable};
+use crate::tls::TlsConfig;
+
+#[derive(Debug)]
+pub struct LoadedRoutes {
+    pub table: RouteTable,
+    pub tls: Vec<TlsConfig>,
+}
 
 #[derive(Debug, Deserialize)]
 struct RoutesFile {
     #[serde(default)]
     routes: Vec<RouteSpec>,
+    #[serde(default)]
+    tls: Vec<TlsConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,8 +39,8 @@ fn default_prefix() -> String {
     "prefix".into()
 }
 
-/// Load pertisk-native route definitions from YAML or JSON.
-pub fn load(path: &Path) -> Result<RouteTable> {
+/// Load pertisk-native route and TLS definitions from YAML or JSON.
+pub fn load(path: &Path) -> Result<LoadedRoutes> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read routes config {}", path.display()))?;
 
@@ -41,7 +50,10 @@ pub fn load(path: &Path) -> Result<RouteTable> {
         serde_yaml::from_str(&content).context("invalid routes YAML")?
     };
 
-    build_table(spec.routes)
+    Ok(LoadedRoutes {
+        table: build_table(spec.routes)?,
+        tls: spec.tls,
+    })
 }
 
 fn build_table(specs: Vec<RouteSpec>) -> Result<RouteTable> {
@@ -93,7 +105,33 @@ routes:
     path_type: prefix
     upstream: http://backend:8080
 "#;
-        let table = build_table(serde_yaml::from_str::<RoutesFile>(yaml).unwrap().routes).unwrap();
-        assert!(table.match_route("app.example.com", "/api/v1").is_some());
+        let spec: RoutesFile = serde_yaml::from_str(yaml).unwrap();
+        let loaded = LoadedRoutes {
+            table: build_table(spec.routes).unwrap(),
+            tls: spec.tls,
+        };
+        assert!(loaded
+            .table
+            .match_route("app.example.com", "/api/v1")
+            .is_some());
+    }
+
+    #[test]
+    fn parses_tls_section() {
+        let yaml = r#"
+routes:
+  - host: app.example.com
+    path: /
+    upstream: http://backend:8080
+tls:
+  - hosts: [app.example.com]
+    source:
+      type: file
+      cert: /tmp/cert.pem
+      key: /tmp/key.pem
+"#;
+        let spec: RoutesFile = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(spec.tls.len(), 1);
+        assert_eq!(spec.tls[0].hosts, vec!["app.example.com"]);
     }
 }

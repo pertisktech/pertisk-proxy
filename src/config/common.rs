@@ -1,0 +1,101 @@
+//! Shared server settings (listen addresses, TLS, HTTP/3).
+
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    pub http_listen: String,
+    pub https_listen: String,
+    pub h3_udp_listen: String,
+    pub enable_h3: bool,
+    pub tls_cert_path: Option<PathBuf>,
+    pub tls_key_path: Option<PathBuf>,
+}
+
+impl ServerConfig {
+    pub fn from_env_proxy_defaults() -> Self {
+        Self {
+            http_listen: env_or("LISTEN_HTTP", "0.0.0.0:80"),
+            https_listen: env_or("LISTEN_HTTPS", "0.0.0.0:443"),
+            h3_udp_listen: env_or("LISTEN_H3_UDP", "[::]:443"),
+            enable_h3: env_bool("ENABLE_H3", false),
+            tls_cert_path: std::env::var("TLS_CERT_PATH").ok().map(PathBuf::from),
+            tls_key_path: std::env::var("TLS_KEY_PATH").ok().map(PathBuf::from),
+        }
+    }
+
+    pub fn from_env_ingress_defaults() -> Self {
+        Self {
+            http_listen: env_or("LISTEN_HTTP", "0.0.0.0:8080"),
+            https_listen: env_or("LISTEN_HTTPS", "0.0.0.0:8443"),
+            h3_udp_listen: env_or("LISTEN_H3_UDP", "[::]:8443"),
+            enable_h3: env_bool("ENABLE_H3", true),
+            tls_cert_path: std::env::var("TLS_CERT_PATH").ok().map(PathBuf::from),
+            tls_key_path: std::env::var("TLS_KEY_PATH").ok().map(PathBuf::from),
+        }
+    }
+
+    pub fn validate_tls(&self) -> Result<()> {
+        if self.enable_h3 {
+            ensure_tls_pair(&self.tls_cert_path, &self.tls_key_path, "ENABLE_H3")?;
+        }
+        Ok(())
+    }
+
+    pub fn https_port(&self) -> u16 {
+        parse_port(&self.https_listen).unwrap_or(443)
+    }
+
+    pub fn h3_port(&self) -> u16 {
+        parse_port(&self.h3_udp_listen).unwrap_or(self.https_port())
+    }
+
+    pub fn tls_cert_path(&self) -> Result<&str> {
+        self.tls_cert_path
+            .as_ref()
+            .context("TLS_CERT_PATH is not configured")?
+            .to_str()
+            .context("TLS_CERT_PATH is not valid UTF-8")
+    }
+
+    pub fn tls_key_path(&self) -> Result<&str> {
+        self.tls_key_path
+            .as_ref()
+            .context("TLS_KEY_PATH is not configured")?
+            .to_str()
+            .context("TLS_KEY_PATH is not valid UTF-8")
+    }
+}
+
+pub fn env_or(key: &str, default: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| default.into())
+}
+
+pub fn env_bool(key: &str, default: bool) -> bool {
+    match std::env::var(key) {
+        Ok(value) => env_bool_parse(&value),
+        Err(_) => default,
+    }
+}
+
+pub fn env_bool_parse(value: &str) -> bool {
+    matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
+}
+
+fn parse_port(listen: &str) -> Option<u16> {
+    listen.rsplit(':').next()?.parse().ok()
+}
+
+fn ensure_tls_pair(
+    cert: &Option<PathBuf>,
+    key: &Option<PathBuf>,
+    reason: &str,
+) -> Result<()> {
+    if cert.is_some() && key.is_some() {
+        Ok(())
+    } else {
+        anyhow::bail!("{reason} requires TLS_CERT_PATH and TLS_KEY_PATH to be set")
+    }
+}

@@ -1,12 +1,15 @@
 pub mod config;
+#[cfg(feature = "ingress")]
 pub mod controller;
 pub mod h3;
-pub mod mode;
+pub mod logging;
 pub mod proxy;
 pub mod router;
 pub mod routes_config;
+pub mod runtime;
+pub mod server;
+pub mod tls;
 
-pub use config::Config;
-pub use mode::{OperatingMode, ProxyKind};
+pub use config::{IngressConfig, ProxyConfig, ServerConfig};
 pub use proxy::Gateway;
 pub use router::Router;

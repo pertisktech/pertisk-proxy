@@ -51,7 +51,8 @@ spec:
       serviceAccountName: pertisk-proxy
       containers:
         - name: pertisk-proxy
-          image: pertisk-proxy:latest
+          image: pertisk-proxy-ingress:latest
+          command: ["/usr/local/bin/pertisk-proxy-ingress"]
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -64,9 +65,9 @@ spec:
               containerPort: 8443
               protocol: UDP
           env:
-            - name: MODE
-              value: ingress
-            - name: RUST_LOG
+            - name: PERTISK_INGRESS_MODE
+              value: auto
+            - name: PERTISK_LOG_LEVEL
               value: info
             - name: LISTEN_HTTP
               value: "0.0.0.0:8080"
