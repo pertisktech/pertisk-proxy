@@ -17,7 +17,7 @@ use pertisk_proxy::logging;
 use pertisk_proxy::proxy::apply;
 use pertisk_proxy::proxy_config::Config;
 use pertisk_proxy::runtime;
-use pertisk_proxy::server;
+use pertisk_proxy::server::{self, PendingH3};
 use pertisk_proxy::tls::{CertStore, Http01ChallengeStore};
 use pertisk_proxy::Router;
 
@@ -65,6 +65,15 @@ fn main() -> Result<()> {
         .await
         {
             tracing::warn!(error = %err, "failed to load certificates from database");
+        }
+        if let Ok(true) = pertisk_proxy::api::reconcile_uploaded_certs_in_config(
+            db.as_ref(),
+            &mut runtime_config,
+            &certs_dir,
+        )
+        .await
+        {
+            cert_store.reload_from_configs(&runtime_config.tls).ok();
         }
     });
 
@@ -133,7 +142,7 @@ fn main() -> Result<()> {
         });
     }
 
-    if proxy_env.server.enable_h3 {
+    let pending_h3 = if proxy_env.server.enable_h3 {
         let paths = cert_store.default_paths().or_else(|| {
             proxy_env
                 .server
@@ -147,26 +156,31 @@ fn main() -> Result<()> {
         });
 
         if let Some(paths) = paths {
-            let runtime_for_h3 = runtime_cfg.clone();
-            for udp_addr in h3::h3_bind_addrs(&proxy_env.server.h3_udp_listen) {
-                let h3_config = H3Config::from_tls_paths(
-                    paths.cert.to_string_lossy(),
-                    paths.key.to_string_lossy(),
-                    udp_addr.clone(),
-                );
-                info!(udp = %udp_addr, "starting HTTP/3 listener");
-                let router_for_h3 = Arc::clone(&router);
-                let runtime_for_h3 = runtime_for_h3.clone();
-                tokio_runtime.spawn(async move {
-                    if let Err(err) = h3::run(router_for_h3, h3_config, &runtime_for_h3).await {
-                        tracing::error!(error = %err, udp = %udp_addr, "HTTP/3 listener stopped");
-                    }
-                });
+            let configs = h3::h3_bind_addrs(&proxy_env.server.h3_udp_listen)
+                .into_iter()
+                .map(|udp_addr| {
+                    info!(udp = %udp_addr, "HTTP/3 listener queued");
+                    H3Config::from_tls_paths(
+                        paths.cert.to_string_lossy(),
+                        paths.key.to_string_lossy(),
+                        udp_addr,
+                    )
+                })
+                .collect();
+            Some(PendingH3 {
+                router: Arc::clone(&router),
+                configs,
+                runtime_cfg: runtime_cfg.clone(),
+            })
+        } else {
+            if !runtime_config.tls.iter().any(|t| t.source.is_acme()) {
+                tracing::warn!("ENABLE_H3 is set but no TLS certificates are available; HTTP/3 disabled");
             }
-        } else if !runtime_config.tls.iter().any(|t| t.source.is_acme()) {
-            tracing::warn!("ENABLE_H3 is set but no TLS certificates are available; HTTP/3 disabled");
+            None
         }
-    }
+    } else {
+        None
+    };
 
     server::run(
         &proxy_env.server,
@@ -175,6 +189,7 @@ fn main() -> Result<()> {
         proxy_env.auto_https,
         &runtime_cfg,
         Some(http01_store),
+        pending_h3,
     )
 }
 

@@ -3,14 +3,21 @@
 	package-proxy package-ingress release release-amd release-arm \
 	deploy-package deploy-package-ingress deploy-remote \
 	deploy-deb deploy-deb-ingress deploy-rpm deploy-rpm-ingress apply-ingress-rbac \
-	install-admin admin-dist dev dev-vite dev-serve dev-admin dev-stop
+	install-admin admin-dist fix-perms dev dev-vite dev-serve dev-admin dev-stop
 
 CARGO ?= cargo
 INGRESS_FEATURES ?= ingress
 PERTISK_DB_PATH ?= ./data/proxy.sqlite
 # Optional one-time migration when DB is empty (legacy routes.yaml)
 ROUTES_CONFIG ?=
+# macOS: build without ACME/OpenSSL so HTTP/3 (Quiche) is stable locally. Linux keeps full features.
+ifeq ($(shell uname -s),Darwin)
 ENABLE_H3 ?= true
+PROXY_CARGO_FEATURES = --no-default-features --features admin
+else
+ENABLE_H3 ?= true
+PROXY_CARGO_FEATURES = --features admin
+endif
 PROXY_MODE ?= performance
 LOG_LEVEL ?= info
 
@@ -19,6 +26,10 @@ DEV_LISTEN_HTTP ?= 0.0.0.0:80
 DEV_LISTEN_HTTPS ?= 0.0.0.0:443
 DEV_LISTEN_H3_UDP ?= [::]:443
 DEV_MANAGEMENT_ADDR ?= 127.0.0.1:9080
+
+# When using `sudo make dev`, run pnpm as the invoking user so node_modules stays writable.
+DEV_USER ?= $(if $(SUDO_USER),$(SUDO_USER),$(USER))
+RUN_AS_USER = $(if $(filter root,$(USER)),sudo -u $(DEV_USER) ,)
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null | sed 's/^v//' || echo "0.1.0")
 PACKAGE_TARGET ?= all
@@ -57,7 +68,15 @@ check:
 
 # Admin UI (React + Vite)
 install-admin:
-	cd admin && pnpm install
+	cd admin && $(RUN_AS_USER)pnpm install
+
+# Fix root-owned files after `sudo make dev` (requires your password once).
+fix-perms:
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "Run: sudo make fix-perms"; exit 1; \
+	fi
+	chown -R $(DEV_USER):staff admin/node_modules admin/dist data 2>/dev/null || true
+	@echo "Fixed ownership for admin/node_modules, admin/dist, and data/"
 
 admin-dist:
 	@echo "Checking admin UI build cache..."
@@ -65,11 +84,11 @@ admin-dist:
 		echo "admin/dist is up to date; skipping build."; \
 	else \
 		echo "Building admin UI..."; \
-		if [ ! -d admin/node_modules ]; then $(MAKE) install-admin; fi && (cd admin && pnpm run build); \
+		if [ ! -d admin/node_modules ]; then $(MAKE) install-admin; fi && (cd admin && $(RUN_AS_USER)pnpm run build); \
 	fi
 
 dev-admin:
-	cd admin && pnpm dev
+	cd admin && $(RUN_AS_USER)pnpm dev
 
 # Stop stale dev processes (cargo-watch, pertisk-proxy, vite)
 dev-stop:
@@ -95,26 +114,30 @@ dev-stop:
 	fi
 	@echo "Stopped dev processes (if any were running)."
 
+DEV_PREFIX = build/dev-prefix-log.sh
+
 # Backend + admin UI at https://admin.amd.thaidevops.co/ (DNS-ready, 80/443/tcp + 443/udp).
 # Serves built admin/dist via management API :9080; UI auto-rebuilds on change (refresh browser).
 # macOS requires root for 80/443: sudo make dev
 dev: admin-dist dev-stop
+	chmod +x $(DEV_PREFIX)
 	PERTISK_DB_PATH=$(PERTISK_DB_PATH) $(if $(ROUTES_CONFIG),ROUTES_CONFIG=$(ROUTES_CONFIG),) ENABLE_H3=$(ENABLE_H3) PERTISK_PROXY_MODE=$(PROXY_MODE) \
 		PERTISK_LOG_LEVEL=$(LOG_LEVEL) \
 		LISTEN_HTTP=$(DEV_LISTEN_HTTP) LISTEN_HTTPS=$(DEV_LISTEN_HTTPS) LISTEN_H3_UDP=$(DEV_LISTEN_H3_UDP) \
 		PERTISK_MANAGEMENT_ADDR=$(DEV_MANAGEMENT_ADDR) \
-		$(CARGO) watch -i admin -x 'run --bin pertisk-proxy --features admin' & \
-	(cd admin && pnpm run build:watch) & \
+		$(CARGO) watch -i admin -x 'run --bin pertisk-proxy $(PROXY_CARGO_FEATURES)' 2>&1 | $(DEV_PREFIX) proxy & \
+	(cd admin && $(RUN_AS_USER)pnpm run build:watch 2>&1 | $(DEV_PREFIX) admin) & \
 	wait
 
 # Vite hot-reload on http://127.0.0.1:5173 only (local; do not proxy Vite — WebSocket breaks through Pingora).
 dev-vite: dev-stop
+	chmod +x $(DEV_PREFIX)
 	PERTISK_DB_PATH=$(PERTISK_DB_PATH) $(if $(ROUTES_CONFIG),ROUTES_CONFIG=$(ROUTES_CONFIG),) ENABLE_H3=$(ENABLE_H3) PERTISK_PROXY_MODE=$(PROXY_MODE) \
 		PERTISK_LOG_LEVEL=$(LOG_LEVEL) \
 		LISTEN_HTTP=$(DEV_LISTEN_HTTP) LISTEN_HTTPS=$(DEV_LISTEN_HTTPS) LISTEN_H3_UDP=$(DEV_LISTEN_H3_UDP) \
 		PERTISK_MANAGEMENT_ADDR=$(DEV_MANAGEMENT_ADDR) \
-		$(CARGO) watch -i admin -x 'run --bin pertisk-proxy --features admin' & \
-	(cd admin && API_PROXY_TARGET=http://$(DEV_MANAGEMENT_ADDR) pnpm dev) & \
+		$(CARGO) watch -i admin -x 'run --bin pertisk-proxy $(PROXY_CARGO_FEATURES)' 2>&1 | $(DEV_PREFIX) proxy & \
+	(cd admin && API_PROXY_TARGET=http://$(DEV_MANAGEMENT_ADDR) $(RUN_AS_USER)pnpm dev 2>&1 | $(DEV_PREFIX) vite) & \
 	wait
 
 # Alias for `make dev`

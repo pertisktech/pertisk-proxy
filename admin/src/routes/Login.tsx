@@ -42,7 +42,7 @@ export function Login() {
           <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-lg bg-primary/20 text-xl font-bold text-primary">
             P
           </div>
-          <h1 className="text-2xl font-semibold">pertisk-proxy</h1>
+          <h1 className="text-2xl font-semibold">Pertisk-Proxy</h1>
           <p className="mt-1 text-sm text-text-secondary">Management console</p>
         </div>
         {authRequired ? (

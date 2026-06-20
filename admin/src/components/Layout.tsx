@@ -40,7 +40,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
         <div className="flex h-16 items-center gap-2 border-b border-border px-4">
           <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/20 text-primary font-bold">P</div>
           <div>
-            <div className="font-semibold">pertisk-proxy</div>
+            <div className="font-semibold">Pertisk-Proxy</div>
             <div className="text-xs text-text-secondary">Management</div>
           </div>
         </div>

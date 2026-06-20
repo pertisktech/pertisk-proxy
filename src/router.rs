@@ -98,7 +98,7 @@ pub fn parse_upstream(raw: &str) -> Option<Backend> {
 
     if trimmed.contains("://") {
         if let Ok(url) = url::Url::parse(trimmed) {
-            let host = url.host_str()?;
+            let host = normalize_upstream_host(url.host_str()?);
             let port = url.port_or_known_default().unwrap_or(80);
             return Some(Backend {
                 address: format!("{host}:{port}"),
@@ -114,16 +114,27 @@ fn parse_host_port(raw: &str) -> Option<Backend> {
     let without_path = raw.split('/').next().unwrap_or(raw);
     if let Some((host, port)) = without_path.rsplit_once(':') {
         let port = port.parse().ok()?;
+        let host = normalize_upstream_host(host);
         return Some(Backend {
             address: format!("{host}:{port}"),
             port,
         });
     }
 
+    let host = normalize_upstream_host(without_path);
     Some(Backend {
-        address: format!("{without_path}:80"),
+        address: format!("{host}:80"),
         port: 80,
     })
+}
+
+/// macOS often resolves `localhost` to `[::1]` while local services bind `127.0.0.1` only.
+fn normalize_upstream_host(host: &str) -> String {
+    if host.eq_ignore_ascii_case("localhost") {
+        "127.0.0.1".to_string()
+    } else {
+        host.to_string()
+    }
 }
 
 fn find_route<'a>(routes: &'a [Route], path: &str) -> Option<&'a Route> {
@@ -333,6 +344,13 @@ pub fn ingress_matches_class(ingress: &Ingress, class: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_upstream_localhost_uses_ipv4() {
+        let backend = parse_upstream("http://localhost:9080").expect("parse");
+        assert_eq!(backend.address, "127.0.0.1:9080");
+        assert_eq!(backend.port, 9080);
+    }
 
     #[test]
     fn prefix_matching() {

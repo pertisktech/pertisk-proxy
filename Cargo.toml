@@ -16,8 +16,6 @@ admin = [
     "dep:chrono",
     "dep:dashmap",
     "dep:once_cell",
-    "acme",
-    "dns-challenge",
 ]
 ingress = ["admin"]
 acme = ["dep:acme-lib", "dep:openssl"]

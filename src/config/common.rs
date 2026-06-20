@@ -21,7 +21,7 @@ impl ServerConfig {
             http_listen: env_or("LISTEN_HTTP", "0.0.0.0:80"),
             https_listen: env_or("LISTEN_HTTPS", "0.0.0.0:443"),
             h3_udp_listen: env_or("LISTEN_H3_UDP", "[::]:443"),
-            enable_h3: env_bool("ENABLE_H3", false),
+            enable_h3: crate::config::common::resolve_enable_h3(env_bool("ENABLE_H3", false)),
             enable_h2: env_bool("PERTISK_ENABLE_H2", true),
             tls_cert_path: std::env::var("TLS_CERT_PATH").ok().map(PathBuf::from),
             tls_key_path: std::env::var("TLS_KEY_PATH").ok().map(PathBuf::from),
@@ -33,7 +33,7 @@ impl ServerConfig {
             http_listen: env_or("LISTEN_HTTP", "0.0.0.0:8080"),
             https_listen: env_or("LISTEN_HTTPS", "0.0.0.0:8443"),
             h3_udp_listen: env_or("LISTEN_H3_UDP", "[::]:8443"),
-            enable_h3: env_bool("ENABLE_H3", true),
+            enable_h3: crate::config::common::resolve_enable_h3(env_bool("ENABLE_H3", true)),
             enable_h2: env_bool("PERTISK_ENABLE_H2", true),
             tls_cert_path: std::env::var("TLS_CERT_PATH").ok().map(PathBuf::from),
             tls_key_path: std::env::var("TLS_KEY_PATH").ok().map(PathBuf::from),
@@ -85,6 +85,22 @@ pub fn env_bool(key: &str, default: bool) -> bool {
 
 pub fn env_bool_parse(value: &str) -> bool {
     matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
+}
+
+/// HTTP/3 (Quiche/BoringSSL) segfaults on macOS when the ACME feature links OpenSSL.
+pub fn resolve_enable_h3(requested: bool) -> bool {
+    if !requested {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    if cfg!(feature = "acme") {
+        tracing::warn!(
+            "ENABLE_H3 is set but HTTP/3 is disabled on macOS when ACME/OpenSSL is enabled; \
+             build with --no-default-features --features admin for local HTTP/3, or deploy on Linux"
+        );
+        return false;
+    }
+    true
 }
 
 fn parse_port(listen: &str) -> Option<u16> {

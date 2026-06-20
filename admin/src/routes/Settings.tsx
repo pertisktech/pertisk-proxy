@@ -15,7 +15,7 @@ export function Settings() {
     <div className="max-w-2xl space-y-4">
       <Card>
         <h2 className="mb-3 text-lg font-semibold">About</h2>
-        <p className="text-text-secondary">pertisk-proxy management UI</p>
+        <p className="text-text-secondary">Pertisk-Proxy management UI</p>
         <p className="mt-2 font-mono text-sm">Version {version || '…'}</p>
       </Card>
       <Card>

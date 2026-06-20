@@ -32,7 +32,11 @@ function isFile(source: TlsSource): source is Extract<TlsSource, { type: 'file' 
   return source.type === 'file';
 }
 
-function issuerLabel(tls: TlsConfig): string {
+function issuerLabel(tls: TlsConfig, certRows: CertificateRow[] = []): string {
+  const certId = certRows.find(
+    (r) => hostsMatch(r.hosts, tls.hosts) || certMatchesTls(r.hosts, tls.hosts),
+  );
+  if (certId?.source_type === 'uploaded') return 'Uploaded';
   if (!tls.source) return '—';
   if (isAcme(tls.source)) return "Let's Encrypt";
   if (isFile(tls.source)) return 'File';
@@ -202,10 +206,31 @@ export function Certificates() {
     }
   }
 
-  const tlsItems = useMemo(
-    () => tlsList.map((tls, originalIndex) => ({ tls, originalIndex, id: tlsItemId(tls, originalIndex) })),
-    [tlsList],
-  );
+  const tlsItems = useMemo(() => {
+    const items = tlsList.map((tls, originalIndex) => ({
+      tls,
+      originalIndex,
+      id: tlsItemId(tls, originalIndex),
+    }));
+    for (const row of certRows) {
+      if (row.source_type === 'acme') continue;
+      const covered = items.some(
+        ({ tls }) => hostsMatch(tls.hosts, row.hosts) || certMatchesTls(row.hosts, tls.hosts),
+      );
+      if (!covered) {
+        items.push({
+          tls: {
+            hosts: row.hosts,
+            source: { type: 'file', cert: '', key: '' },
+            expires_at: row.expires_at,
+          },
+          originalIndex: -1,
+          id: `cert:${row.id}`,
+        });
+      }
+    }
+    return items;
+  }, [tlsList, certRows]);
 
   const sortedTlsItems = useMemo(() => {
     if (!sortKey) return tlsItems;
@@ -214,7 +239,9 @@ export function Certificates() {
       if (sortKey === 'domain') {
         return dir * domainLabelForTls(a.tls).localeCompare(domainLabelForTls(b.tls), undefined, { sensitivity: 'base' });
       }
-      if (sortKey === 'issuer') return dir * issuerLabel(a.tls).localeCompare(issuerLabel(b.tls), undefined, { sensitivity: 'base' });
+      if (sortKey === 'issuer') {
+        return dir * issuerLabel(a.tls, certRows).localeCompare(issuerLabel(b.tls, certRows), undefined, { sensitivity: 'base' });
+      }
       if (sortKey === 'challenge') return dir * challengeLabel(a.tls).localeCompare(challengeLabel(b.tls), undefined, { sensitivity: 'base' });
       if (sortKey === 'expires') {
         const at = new Date(a.tls.expires_at ?? '').getTime();
@@ -223,7 +250,7 @@ export function Certificates() {
       }
       return dir * (getSitesUsingCert(a.tls) - getSitesUsingCert(b.tls));
     });
-  }, [tlsItems, sortKey, sortDir, sites, tlsList]);
+  }, [tlsItems, sortKey, sortDir, sites, tlsList, certRows]);
 
   const totalPages = Math.max(1, Math.ceil(sortedTlsItems.length / pageSize));
   const pagedTlsItems = sortedTlsItems.slice((page - 1) * pageSize, page * pageSize);
@@ -460,7 +487,7 @@ export function Certificates() {
                     {pending ? <span className="text-xs text-yellow-y1">Pending</span> : null}
                   </div>
                   <p className="mt-1 flex items-center gap-1 text-sm text-text-secondary">
-                    <Shield size={14} /> {issuerLabel(tls)}
+                    <Shield size={14} /> {issuerLabel(tls, certRows)}
                   </p>
                   <div className="mt-3 space-y-1 text-sm">
                     <div className="flex justify-between">
@@ -519,7 +546,7 @@ export function Certificates() {
                         {domainLabelForTls(tls)}
                         {pending ? <span className="ml-2 text-xs text-yellow-y1">Pending</span> : null}
                       </td>
-                      <td className="px-4 py-3">{issuerLabel(tls)}</td>
+                      <td className="px-4 py-3">{issuerLabel(tls, certRows)}</td>
                       <td className="px-4 py-3">
                         <span className="rounded-full bg-surface-elevated px-2 py-0.5 text-xs">{challengeLabel(tls)}</span>
                       </td>

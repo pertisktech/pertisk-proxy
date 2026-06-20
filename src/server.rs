@@ -8,13 +8,20 @@ use pingora_proxy::http_proxy_service;
 use tracing::{info, warn};
 
 use crate::config::ServerConfig;
-use crate::h3::tcp_bind_addrs;
+use crate::h3::{tcp_bind_addrs, H3Config};
 use crate::proxy::Gateway;
 use crate::runtime::RuntimeConfig;
 use crate::tls::{validate_cert_pair, CertStore};
 use crate::Router;
 
-/// Start the Pingora reverse proxy. HTTP/3 is started separately on the Tokio runtime.
+/// HTTP/3 listeners to start after Pingora TCP/TLS bind (avoids concurrent TLS stack init crashes).
+pub struct PendingH3 {
+    pub router: Arc<Router>,
+    pub configs: Vec<H3Config>,
+    pub runtime_cfg: RuntimeConfig,
+}
+
+/// Start the Pingora reverse proxy. HTTP/3 is started on the Tokio runtime after TCP/TLS bind.
 pub fn run(
     server_config: &ServerConfig,
     router: Arc<Router>,
@@ -22,6 +29,7 @@ pub fn run(
     auto_https: bool,
     runtime_cfg: &RuntimeConfig,
     http01_store: Option<Arc<crate::tls::Http01ChallengeStore>>,
+    pending_h3: Option<PendingH3>,
 ) -> Result<()> {
     let tls_paths = resolve_tls_paths(server_config, &cert_store);
 
@@ -98,6 +106,42 @@ pub fn run(
     }
 
     server.add_service(proxy);
+
+    if let Some(h3) = pending_h3 {
+        for config in h3.configs {
+            let router = Arc::clone(&h3.router);
+            let runtime_cfg = h3.runtime_cfg.clone();
+            let udp = config.udp_listen.clone();
+            let udp_err = udp.clone();
+            // Dedicated thread + runtime: sharing the main Tokio runtime with Pingora
+            // can segfault when Quiche/BoringSSL initializes alongside rustls on macOS.
+            if let Err(err) = std::thread::Builder::new()
+                .name(format!("pertisk-h3-{udp}"))
+                .spawn(move || {
+                    let rt = match tokio::runtime::Builder::new_multi_thread()
+                        .enable_all()
+                        .worker_threads(2)
+                        .thread_name("h3-worker")
+                        .build()
+                    {
+                        Ok(rt) => rt,
+                        Err(err) => {
+                            tracing::error!(error = %err, udp = %udp, "failed to build HTTP/3 runtime");
+                            return;
+                        }
+                    };
+                    rt.block_on(async move {
+                        if let Err(err) = crate::h3::run(router, config, &runtime_cfg).await {
+                            tracing::error!(error = %err, udp = %udp, "HTTP/3 listener stopped");
+                        }
+                    });
+                })
+            {
+                tracing::error!(error = %err, udp = %udp_err, "failed to spawn HTTP/3 thread");
+            }
+        }
+    }
+
     server.run_forever();
 }
 

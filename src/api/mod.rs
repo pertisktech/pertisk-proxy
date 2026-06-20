@@ -1,8 +1,9 @@
 //! Management API + admin UI static file server (Axum on `PERTISK_MANAGEMENT_ADDR`).
 
-#[cfg(feature = "admin")]
+#[cfg(all(feature = "admin", feature = "acme"))]
 pub mod acme;
 
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,7 +28,7 @@ use tracing::{info, warn};
 use crate::config::ProxyConfig;
 use crate::db::{CertificateRow, Database, DnsProviderRow};
 use crate::proxy::apply;
-use crate::proxy_config::Config;
+use crate::proxy_config::{Config, TlsConfig, TlsSource};
 use crate::runtime::RuntimeConfig;
 use crate::tls::{CertStore, Http01ChallengeStore};
 use crate::Router as ProxyRouter;
@@ -535,6 +536,17 @@ async fn certificates_upload(
                 }),
             )
         })?;
+    let mut cfg = state.runtime_config.read().await.clone();
+    sync_uploaded_cert_tls(&mut cfg, &hosts, &id, &state.certs_dir);
+    db.save_proxy_config(&cfg).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+    *state.runtime_config.write().await = cfg;
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "id": id, "message": "Certificate saved and loaded." })),
@@ -1049,6 +1061,80 @@ pub fn certs_dir_for_db(db_path: &Path) -> PathBuf {
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join("certs")
+}
+
+fn tls_hosts_sorted(hosts: &[String]) -> Vec<String> {
+    let mut h: Vec<String> = hosts
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    h.sort();
+    h
+}
+
+/// Map an uploaded certificate into `config.tls` so the admin UI and reload path stay in sync.
+pub fn sync_uploaded_cert_tls(cfg: &mut Config, hosts: &[String], id: &str, certs_dir: &Path) {
+    let cert_path = certs_dir.join(format!("{id}.pem"));
+    let key_path = certs_dir.join(format!("{id}.key"));
+    let file_source = TlsSource::File {
+        cert: cert_path,
+        key: key_path,
+    };
+
+    let uploaded = tls_hosts_sorted(hosts);
+    if uploaded.is_empty() {
+        return;
+    }
+    let uploaded_set: HashSet<String> = uploaded.iter().cloned().collect();
+
+    if let Some(tls) = cfg
+        .tls
+        .iter_mut()
+        .find(|t| tls_hosts_sorted(&t.hosts) == uploaded)
+    {
+        tls.source = file_source;
+        return;
+    }
+
+    if let Some(tls) = cfg.tls.iter_mut().find(|t| {
+        let tls_set: HashSet<String> = tls_hosts_sorted(&t.hosts).into_iter().collect();
+        uploaded_set.is_subset(&tls_set)
+    }) {
+        tls.source = file_source;
+        return;
+    }
+
+    cfg.tls.push(TlsConfig {
+        hosts: uploaded,
+        source: file_source,
+        expires_at: None,
+    });
+}
+
+/// Ensure uploaded DB certificates have matching `config.tls` entries (e.g. after restart).
+pub async fn reconcile_uploaded_certs_in_config(
+    db: &Database,
+    cfg: &mut Config,
+    certs_dir: &Path,
+) -> Result<bool> {
+    let rows = db.list_certificates().await?;
+    let mut changed = false;
+    for row in rows {
+        if !row.source_type.eq_ignore_ascii_case("uploaded") {
+            continue;
+        }
+        let before = serde_json::to_string(&cfg.tls).unwrap_or_default();
+        sync_uploaded_cert_tls(cfg, &row.hosts, &row.id, certs_dir);
+        let after = serde_json::to_string(&cfg.tls).unwrap_or_default();
+        if before != after {
+            changed = true;
+        }
+    }
+    if changed {
+        db.save_proxy_config(cfg).await?;
+    }
+    Ok(changed)
 }
 
 /// Load certificates from SQLite into CertStore (PEM files under `certs_dir`).
