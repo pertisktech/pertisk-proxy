@@ -25,7 +25,7 @@ LOG_LEVEL ?= info
 DEV_LISTEN_HTTP ?= 0.0.0.0:80
 DEV_LISTEN_HTTPS ?= 0.0.0.0:443
 DEV_LISTEN_H3_UDP ?= [::]:443
-DEV_MANAGEMENT_ADDR ?= 127.0.0.1:9080
+DEV_MANAGEMENT_ADDR ?= 0.0.0.0:9080
 
 # When using `sudo make dev`, run pnpm as the invoking user so node_modules stays writable.
 DEV_USER ?= $(if $(SUDO_USER),$(SUDO_USER),$(USER))
