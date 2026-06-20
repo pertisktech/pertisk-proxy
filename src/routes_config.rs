@@ -11,6 +11,7 @@ use crate::tls::TlsConfig;
 pub struct LoadedRoutes {
     pub table: RouteTable,
     pub tls: Vec<TlsConfig>,
+    pub http3: crate::http3_options::Http3Options,
 }
 
 #[derive(Debug, Deserialize)]
@@ -19,6 +20,8 @@ struct RoutesFile {
     routes: Vec<RouteSpec>,
     #[serde(default)]
     tls: Vec<TlsConfig>,
+    #[serde(default)]
+    http3: crate::http3_options::Http3Options,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +56,7 @@ pub fn load(path: &Path) -> Result<LoadedRoutes> {
     Ok(LoadedRoutes {
         table: build_table(spec.routes)?,
         tls: spec.tls,
+        http3: spec.http3,
     })
 }
 
@@ -109,6 +113,7 @@ routes:
         let loaded = LoadedRoutes {
             table: build_table(spec.routes).unwrap(),
             tls: spec.tls,
+            http3: spec.http3,
         };
         assert!(loaded
             .table
@@ -133,5 +138,23 @@ tls:
         let spec: RoutesFile = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(spec.tls.len(), 1);
         assert_eq!(spec.tls[0].hosts, vec!["app.example.com"]);
+    }
+
+    #[test]
+    fn parses_http3_section() {
+        let yaml = r#"
+routes:
+  - host: app.example.com
+    path: /
+    upstream: http://backend:8080
+http3:
+  max_streams_bidi: 512
+  enable_0rtt: true
+  congestion_control: bbr
+"#;
+        let spec: RoutesFile = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(spec.http3.max_streams_bidi, Some(512));
+        assert_eq!(spec.http3.enable_0rtt, Some(true));
+        assert_eq!(spec.http3.congestion_control.as_deref(), Some("bbr"));
     }
 }

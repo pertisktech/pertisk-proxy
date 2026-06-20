@@ -1,16 +1,18 @@
 pub mod routes;
+pub mod forward;
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use pingora_core::upstreams::peer::HttpPeer;
 use pingora_core::Result;
-use pingora_error::ErrorType::HTTPStatus;
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::{ProxyHttp, Session};
 
-use crate::router::{Middleware, Router};
+use crate::deny;
+use crate::health;
+use crate::proxy::forward::resolve_forward;
+use crate::router::Router;
 use crate::tls::CertStore;
 
 #[derive(Default)]
@@ -18,6 +20,16 @@ pub struct RequestCtx {
     pub strip_prefix: Option<String>,
     pub request_headers: Vec<(String, String)>,
     pub response_headers: Vec<(String, String)>,
+}
+
+impl From<crate::proxy::forward::MiddlewareAction> for RequestCtx {
+    fn from(mw: crate::proxy::forward::MiddlewareAction) -> Self {
+        Self {
+            strip_prefix: mw.strip_prefix,
+            request_headers: mw.request_headers,
+            response_headers: mw.response_headers,
+        }
+    }
 }
 
 pub struct Gateway {
@@ -73,12 +85,18 @@ impl ProxyHttp for Gateway {
     }
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
+        let method = session.req_header().method.clone();
         let path = session.req_header().uri.path().to_string();
+        let protocol = downstream_protocol_label(session);
 
-        if path == "/healthz" || path == "/readyz" {
-            session
-                .respond_error_with_body(200, Bytes::from_static(b"ok"))
-                .await?;
+        if health::try_respond_health(
+            session,
+            &method,
+            &path,
+            &format!("pertisk-proxy/{protocol}"),
+        )
+        .await?
+        {
             return Ok(true);
         }
 
@@ -86,6 +104,20 @@ impl ProxyHttp for Gateway {
             let req = session.req_header();
             let host = request_host(req);
             let host = if host.is_empty() { "localhost" } else { host.as_str() };
+
+            if deny::enabled()
+                && !host.is_empty()
+                && host != "localhost"
+                && !self.router.snapshot().has_host(host)
+            {
+                deny::respond_pingora(
+                    session,
+                    false,
+                    &format!("pertisk-proxy/{protocol}"),
+                )
+                .await?;
+                return Ok(true);
+            }
 
             if !self.cert_store.has_cert_for_host(host) {
                 return Ok(false);
@@ -113,8 +145,25 @@ impl ProxyHttp for Gateway {
 
         let host = request_host(session.req_header());
 
-        if let Some(route) = self.router.snapshot().match_route_entry(&host, &path) {
-            apply_middleware_ctx(ctx, &route.middlewares);
+        if deny::enabled() && !host.is_empty() && !self.router.snapshot().has_host(&host) {
+            deny::respond_pingora(
+                session,
+                is_downstream_tls(session),
+                &format!("pertisk-proxy/{protocol}"),
+            )
+            .await?;
+            return Ok(true);
+        }
+
+        let path_q = session
+            .req_header()
+            .uri
+            .path_and_query()
+            .map(|pq| pq.as_str())
+            .unwrap_or(&path);
+
+        if let Ok(plan) = resolve_forward(self.router.snapshot().as_ref(), &host, path_q) {
+            *ctx = plan.middleware.into();
         }
 
         Ok(false)
@@ -127,22 +176,23 @@ impl ProxyHttp for Gateway {
     ) -> Result<Box<HttpPeer>> {
         let req = session.req_header();
         let host = request_host(req);
-        let path = req.uri.path();
+        let path_q = req
+            .uri
+            .path_and_query()
+            .map(|pq| pq.as_str())
+            .unwrap_or(req.uri.path());
 
-        let table = self.router.snapshot();
-        let route = table.match_route_entry(&host, path).ok_or_else(|| {
-            pingora_error::Error::explain(
-                HTTPStatus(404),
-                format!("no route for host={host} path={path}"),
-            )
-        })?;
+        let plan = resolve_forward(self.router.snapshot().as_ref(), &host, path_q)?;
 
-        if ctx.strip_prefix.is_none() && !route.middlewares.is_empty() {
-            apply_middleware_ctx(ctx, &route.middlewares);
+        if ctx.strip_prefix.is_none() && ctx.request_headers.is_empty() && ctx.response_headers.is_empty() {
+            *ctx = plan.middleware.into();
         }
 
-        let (address, port) = parse_address(&route.backend.address, route.backend.port)?;
-        let peer = Box::new(HttpPeer::new((address.as_str(), port), false, host.clone()));
+        let peer = Box::new(HttpPeer::new(
+            (plan.peer_host.as_str(), plan.peer_port),
+            false,
+            host,
+        ));
         Ok(peer)
     }
 
@@ -237,38 +287,6 @@ fn is_downstream_tls(session: &Session) -> bool {
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
         == Some("https")
-}
-
-fn apply_middleware_ctx(ctx: &mut RequestCtx, middlewares: &[Middleware]) {
-    for mw in middlewares {
-        match mw {
-            Middleware::StripPrefix { prefix } => ctx.strip_prefix = Some(prefix.clone()),
-            Middleware::RequestHeaders { headers } => {
-                for (k, v) in headers {
-                    ctx.request_headers.push((k.clone(), v.clone()));
-                }
-            }
-            Middleware::ResponseHeaders { headers } => {
-                for (k, v) in headers {
-                    ctx.response_headers.push((k.clone(), v.clone()));
-                }
-            }
-        }
-    }
-}
-
-fn parse_address(address: &str, fallback_port: u16) -> Result<(String, u16)> {
-    if let Some((host, port)) = address.rsplit_once(':') {
-        let port = port.parse::<u16>().map_err(|_| {
-            pingora_error::Error::explain(
-                pingora_error::ErrorType::InternalError,
-                format!("invalid port in backend address: {address}"),
-            )
-        })?;
-        return Ok((host.to_string(), port));
-    }
-
-    Ok((address.to_string(), fallback_port))
 }
 
 fn is_plain_http(session: &Session) -> bool {

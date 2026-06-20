@@ -1,10 +1,10 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use reqwest::Client;
-use tokio::net::UdpSocket;
 use tokio_quiche::http3::driver::{
     H3Event, InboundFrame, IncomingH3Headers, OutboundFrame, OutboundFrameSender,
     ServerEventStream, ServerH3Event,
@@ -12,13 +12,19 @@ use tokio_quiche::http3::driver::{
 use tokio_quiche::http3::settings::Http3Settings;
 use tokio_quiche::listen;
 use tokio_quiche::metrics::DefaultMetrics;
-use tokio_quiche::settings::{CertificateKind, ConnectionParams, Hooks, QuicSettings, TlsCertificatePaths};
+use tokio_quiche::settings::{CertificateKind, ConnectionParams, Hooks, TlsCertificatePaths};
 use tokio_quiche::ServerH3Driver;
 use tracing::{error, info, warn};
 
 use crate::config::ServerConfig;
-use crate::h3::headers::{error_response, h3_to_request, request_host, response_to_h3};
+use crate::deny;
+use crate::h3::headers::{error_response, h3_to_request, pseudo_authority, request_host, response_to_h3};
+use crate::h3::health;
+use crate::h3::bind::bind_udp_sockets;
+use crate::h3::settings::{listener_count, quic_settings};
+use crate::proxy::forward::resolve_forward;
 use crate::router::Router;
+use crate::runtime::RuntimeConfig;
 
 #[derive(Clone)]
 pub struct H3Config {
@@ -45,20 +51,34 @@ impl H3Config {
     }
 }
 
-pub async fn run(router: Arc<Router>, config: H3Config) -> Result<()> {
+pub async fn run(router: Arc<Router>, config: H3Config, runtime_cfg: &RuntimeConfig) -> Result<()> {
     let cert = &config.tls_cert_path;
     let key = &config.tls_key_path;
+    let http3_opts = router.http3_options();
+    let quic = quic_settings(runtime_cfg, http3_opts.as_ref());
+    let listeners_n = listener_count(runtime_cfg, http3_opts.as_ref());
 
-    let socket = UdpSocket::bind(&config.udp_listen)
+    info!(
+        addr = %config.udp_listen,
+        listeners = listeners_n,
+        max_streams_bidi = quic.initial_max_streams_bidi,
+        conn_window = quic.initial_max_data,
+        stream_window = quic.initial_max_stream_data_bidi_remote,
+        cc_algorithm = %quic.cc_algorithm,
+        enable_0rtt = quic.enable_early_data,
+        enable_pacing = quic.enable_pacing,
+        idle_timeout_secs = quic.max_idle_timeout.map(|d| d.as_secs()),
+        "HTTP/3 listener started"
+    );
+
+    let sockets = bind_udp_sockets(&config.udp_listen, listeners_n)
         .await
         .with_context(|| format!("failed to bind UDP {}", config.udp_listen))?;
 
-    info!(addr = %config.udp_listen, "HTTP/3 listener started");
-
-    let mut listeners = listen(
-        [socket],
+    let listeners = listen(
+        sockets,
         ConnectionParams::new_server(
-            QuicSettings::default(),
+            quic,
             TlsCertificatePaths {
                 cert,
                 private_key: key,
@@ -70,29 +90,45 @@ pub async fn run(router: Arc<Router>, config: H3Config) -> Result<()> {
     )
     .context("failed to create QUIC listener")?;
 
-    let client = Client::builder().build()?;
-    let accept_stream = &mut listeners[0];
+    let client = Client::builder()
+        .pool_max_idle_per_host(64)
+        .pool_idle_timeout(Duration::from_secs(90))
+        .tcp_keepalive(Duration::from_secs(60))
+        .build()?;
 
-    while let Some(conn_res) = accept_stream.next().await {
-        match conn_res {
-            Ok(conn) => {
-                let (driver, mut controller) = ServerH3Driver::new(Http3Settings::default());
-                conn.start(driver);
+    for mut accept_stream in listeners {
+        let router = Arc::clone(&router);
+        let client = client.clone();
+        tokio::spawn(async move {
+            while let Some(conn_res) = accept_stream.next().await {
+                match conn_res {
+                    Ok(conn) => {
+                        let (driver, mut controller) =
+                            ServerH3Driver::new(Http3Settings::default());
+                        conn.start(driver);
 
-                let router = Arc::clone(&router);
-                let client = client.clone();
-                tokio::spawn(async move {
-                    if let Err(err) =
-                        serve_connection(router, client, controller.event_receiver_mut()).await
-                    {
-                        warn!(error = %err, "HTTP/3 connection closed with error");
+                        let router = Arc::clone(&router);
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            if let Err(err) = serve_connection(
+                                router,
+                                client,
+                                controller.event_receiver_mut(),
+                            )
+                            .await
+                            {
+                                warn!(error = %err, "HTTP/3 connection closed with error");
+                            }
+                        });
                     }
-                });
+                    Err(err) => error!(error = %err, "failed to accept QUIC connection"),
+                }
             }
-            Err(err) => error!(error = %err, "failed to accept QUIC connection"),
-        }
+        });
     }
 
+    // Keep the H3 task alive until the process exits.
+    std::future::pending::<()>().await;
     Ok(())
 }
 
@@ -111,23 +147,51 @@ async fn serve_connection(
                 incoming_headers,
                 ..
             } => {
+                if health::matches_request(&incoming_headers.headers) {
+                    health::try_serve(incoming_headers).await;
+                    continue;
+                }
+
+                if deny::enabled() {
+                    if let Some(host) = pseudo_authority(&incoming_headers.headers) {
+                        if let Ok(host) = std::str::from_utf8(host) {
+                            if !host.is_empty() && !router.snapshot().has_host(host) {
+                                deny_h3(incoming_headers).await;
+                                continue;
+                            }
+                        }
+                    }
+                }
+
                 let router = Arc::clone(&router);
                 let client = client.clone();
                 tokio::spawn(async move {
-                    if let Err(err) = handle_request(router, client, incoming_headers).await {
-                        warn!(error = %err, "HTTP/3 request failed");
+                    if let Err(err) = handle_proxied_request(router, client, incoming_headers).await {
+                        warn!(error = %err, "HTTP/3 proxied request failed");
                     }
                 });
             }
-            ServerH3Event::Core(other) => {
-                info!(event = ?other, "unhandled HTTP/3 event");
-            }
+            ServerH3Event::Core(_) => {}
         }
     }
     Ok(())
 }
 
-async fn handle_request(
+async fn deny_h3(headers: IncomingH3Headers) {
+    let IncomingH3Headers { mut send, mut recv, .. } = headers;
+    drain_request_body(&mut recv).await;
+    send_error(&mut send, deny::h3_response(true)).await;
+}
+
+async fn drain_request_body(recv: &mut tokio_quiche::http3::driver::InboundFrameStream) {
+    while let Some(frame) = recv.recv().await {
+        if matches!(frame, InboundFrame::Body(_, true)) {
+            break;
+        }
+    }
+}
+
+async fn handle_proxied_request(
     router: Arc<Router>,
     client: Client,
     headers: IncomingH3Headers,
@@ -150,20 +214,15 @@ async fn handle_request(
 
     let path = req.uri().path();
     let host = request_host(&req);
+    let path_q = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or(path);
 
-    if path == "/healthz" || path == "/readyz" {
-        send_error(
-            &mut send,
-            error_response(http::StatusCode::OK, "ok"),
-        )
-        .await;
-        return Ok(());
-    }
-
-    let table = router.snapshot();
-    let backend = match table.match_route(&host, path) {
-        Some(backend) => backend.clone(),
-        None => {
+    let plan = match resolve_forward(router.snapshot().as_ref(), &host, path_q) {
+        Ok(plan) => plan,
+        Err(_) => {
             send_error(
                 &mut send,
                 error_response(http::StatusCode::NOT_FOUND, "no route"),
@@ -173,17 +232,24 @@ async fn handle_request(
         }
     };
 
-    info!(host = %host, path = %path, upstream = %backend.address, "HTTP/3 request");
+    tracing::trace!(
+        host = %host,
+        path = %path_q,
+        upstream = %plan.upstream_url,
+        "HTTP/3 proxied request"
+    );
 
     let body = read_request_body(&mut recv).await?;
-    let upstream = build_upstream_url(&backend.address, req.uri())?;
 
-    let mut upstream_req = client.request(req.method().clone(), upstream);
+    let mut upstream_req = client.request(req.method().clone(), plan.upstream_url);
     for (name, value) in req.headers().iter() {
         if name == http::header::HOST {
             continue;
         }
         upstream_req = upstream_req.header(name, value);
+    }
+    for (name, value) in &plan.middleware.request_headers {
+        upstream_req = upstream_req.header(name.as_str(), value.as_str());
     }
     upstream_req = upstream_req.header(HOST, host);
     upstream_req = upstream_req.body(body);
@@ -211,6 +277,9 @@ async fn handle_request(
             continue;
         }
         response = response.header(name, value);
+    }
+    for (name, value) in &plan.middleware.response_headers {
+        response = response.header(name.as_str(), value.as_str());
     }
     let response = response.body(response_body.to_vec()).unwrap();
 
@@ -240,19 +309,6 @@ async fn read_request_body(recv: &mut tokio_quiche::http3::driver::InboundFrameS
         }
     }
     Ok(body)
-}
-
-fn build_upstream_url(backend_address: &str, uri: &http::Uri) -> Result<String> {
-    let path_and_query = uri
-        .path_and_query()
-        .map(|pq| pq.as_str())
-        .unwrap_or("/");
-
-    if backend_address.contains("://") {
-        Ok(format!("{backend_address}{path_and_query}"))
-    } else {
-        Ok(format!("http://{backend_address}{path_and_query}"))
-    }
 }
 
 async fn send_error(send: &mut OutboundFrameSender, response: http::Response<Vec<u8>>) {

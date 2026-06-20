@@ -33,6 +33,9 @@ fn main() -> Result<()> {
         requested_runtime = runtime_cfg.requested_mode.as_str(),
         resolved_runtime = runtime_cfg.resolved_mode.as_str(),
         worker_threads = runtime_cfg.worker_threads,
+        max_blocking_threads = runtime_cfg.max_blocking_threads,
+        pingora_threads = runtime::pingora_service_threads(&runtime_cfg),
+        tcp_listen_backlog = runtime::tcp_listen_backlog(&runtime_cfg),
         routes = %config.routes_config.display(),
         routes_watch = config.routes_watch,
         "starting pertisk-proxy"
@@ -49,7 +52,7 @@ fn main() -> Result<()> {
     }
 
     let initial = routes_config::load(&config.routes_config)?;
-    router.replace(initial.table);
+    router.replace_all(initial.table, initial.http3);
     cert_store.reload_from_configs(&initial.tls)?;
 
     let routes_path = config.routes_config.clone();
@@ -75,6 +78,7 @@ fn main() -> Result<()> {
         });
 
         if let Some(paths) = paths {
+            let runtime_for_h3 = runtime_cfg.clone();
             for udp_addr in h3::h3_bind_addrs(&config.server.h3_udp_listen) {
                 let h3_config = H3Config::from_tls_paths(
                     paths.cert.to_string_lossy(),
@@ -83,8 +87,9 @@ fn main() -> Result<()> {
                 );
                 info!(udp = %udp_addr, "starting HTTP/3 listener");
                 let router_for_h3 = Arc::clone(&router);
+                let runtime_for_h3 = runtime_for_h3.clone();
                 tokio_runtime.spawn(async move {
-                    if let Err(err) = h3::run(router_for_h3, h3_config).await {
+                    if let Err(err) = h3::run(router_for_h3, h3_config, &runtime_for_h3).await {
                         tracing::error!(error = %err, udp = %udp_addr, "HTTP/3 listener stopped");
                     }
                 });
@@ -103,5 +108,6 @@ fn main() -> Result<()> {
         router,
         cert_store,
         config.auto_https,
+        &runtime_cfg,
     )
 }

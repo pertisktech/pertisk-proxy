@@ -65,6 +65,12 @@ impl RouteTable {
         None
     }
 
+    /// True when the host has at least one route or a `*` catch-all is configured.
+    pub fn has_host(&self, host: &str) -> bool {
+        let host = normalize_host(host);
+        !host.is_empty() && (self.routes.contains_key(&host) || self.routes.contains_key("*"))
+    }
+
     pub fn all_routes(&self) -> impl Iterator<Item = (&String, &Route)> {
         self.routes
             .iter()
@@ -152,14 +158,18 @@ fn service_dns(name: &str, namespace: &str, port: u16) -> String {
     format!("{name}.{namespace}.svc.cluster.local:{port}")
 }
 
+use crate::http3_options::Http3Options;
+
 pub struct Router {
     table: ArcSwap<RouteTable>,
+    http3: ArcSwap<Http3Options>,
 }
 
 impl Router {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             table: ArcSwap::from_pointee(RouteTable::default()),
+            http3: ArcSwap::from_pointee(Http3Options::default()),
         })
     }
 
@@ -167,9 +177,27 @@ impl Router {
         self.table.load_full()
     }
 
+    pub fn http3_options(&self) -> Arc<Http3Options> {
+        self.http3.load_full()
+    }
+
     pub fn replace(&self, table: RouteTable) {
         debug!(routes = table.route_count(), "updated routing table");
         self.table.store(Arc::new(table));
+    }
+
+    pub fn replace_http3(&self, http3: Http3Options) {
+        debug!(
+            max_streams_bidi = ?http3.max_streams_bidi,
+            enable_0rtt = ?http3.enable_0rtt,
+            "updated HTTP/3 options"
+        );
+        self.http3.store(Arc::new(http3));
+    }
+
+    pub fn replace_all(&self, table: RouteTable, http3: Http3Options) {
+        self.replace(table);
+        self.replace_http3(http3);
     }
 }
 
@@ -177,6 +205,7 @@ impl Default for Router {
     fn default() -> Self {
         Self {
             table: ArcSwap::from_pointee(RouteTable::default()),
+            http3: ArcSwap::from_pointee(Http3Options::default()),
         }
     }
 }
@@ -320,5 +349,42 @@ mod tests {
 
         assert!(table.match_route("app.example.com", "/api/v1").is_some());
         assert!(table.match_route("app.example.com", "/health").is_none());
+    }
+
+    #[test]
+    fn has_host_matches_configured_and_wildcard() {
+        let table = RouteTable {
+            routes: HashMap::from([
+                (
+                    "app.example.com".into(),
+                    vec![Route {
+                        path: "/".into(),
+                        path_type: PathMatchType::Prefix,
+                        backend: Backend {
+                            address: "upstream:8080".into(),
+                            port: 8080,
+                        },
+                        middlewares: vec![],
+                    }],
+                ),
+                (
+                    "*".into(),
+                    vec![Route {
+                        path: "/".into(),
+                        path_type: PathMatchType::Prefix,
+                        backend: Backend {
+                            address: "catchall:8080".into(),
+                            port: 8080,
+                        },
+                        middlewares: vec![],
+                    }],
+                ),
+            ]),
+        };
+
+        assert!(table.has_host("app.example.com"));
+        assert!(table.has_host("APP.EXAMPLE.COM:443"));
+        assert!(table.has_host("other.example.com"));
+        assert!(!table.has_host(""));
     }
 }

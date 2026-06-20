@@ -1,4 +1,7 @@
 pub mod config;
+pub mod deny;
+pub mod health;
+pub mod http3_options;
 #[cfg(feature = "ingress")]
 pub mod controller;
 pub mod h3;

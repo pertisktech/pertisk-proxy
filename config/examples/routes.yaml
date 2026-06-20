@@ -8,6 +8,18 @@ routes:
     path: /
     path_type: prefix
     upstream: http://localhost:8802
+
+# HTTP/3 / QUIC tuning (prox-style http3_config)
+http3:
+  max_data: 67108864          # 64 MiB connection window
+  max_stream_data: 8388608    # 8 MiB per stream
+  max_streams_bidi: 1024
+  max_idle_timeout_ms: 300000
+  congestion_control: bbr
+  enable_0rtt: true
+  enable_pacing: true
+  # listeners: 8              # SO_REUSEPORT sockets (default: CPU count in performance mode)
+
 tls:
   - hosts: [admin.amd.thaidevops.co, api.amd.thaidevops.co]
     source:

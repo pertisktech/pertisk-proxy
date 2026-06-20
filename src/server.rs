@@ -9,6 +9,7 @@ use tracing::{info, warn};
 
 use crate::config::ServerConfig;
 use crate::proxy::Gateway;
+use crate::runtime::RuntimeConfig;
 use crate::tls::CertStore;
 use crate::Router;
 
@@ -18,6 +19,7 @@ pub fn run(
     router: Arc<Router>,
     cert_store: Arc<CertStore>,
     auto_https: bool,
+    runtime_cfg: &RuntimeConfig,
 ) -> Result<()> {
     let tls_paths = resolve_tls_paths(server_config, &cert_store);
 
@@ -39,8 +41,18 @@ pub fn run(
         );
     }
 
+    let pingora_conf = crate::runtime::pingora_server_conf(runtime_cfg);
+    info!(
+        pingora_threads = pingora_conf.threads,
+        pingora_listener_tasks = pingora_conf.listener_tasks_per_fd,
+        pingora_upstream_keepalive = pingora_conf.upstream_keepalive_pool_size,
+        tcp_listen_backlog = crate::runtime::tcp_listen_backlog(runtime_cfg),
+        runtime_mode = runtime_cfg.resolved_mode.as_str(),
+        "pingora runtime tuning"
+    );
+
     let opt = Opt::parse_args();
-    let mut server = Server::new(Some(opt))?;
+    let mut server = Server::new_with_opt_and_conf(Some(opt), pingora_conf);
     server.bootstrap();
 
     let gateway = Gateway::new(

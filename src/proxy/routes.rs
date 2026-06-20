@@ -52,7 +52,7 @@ fn reload(router: &Router, cert_store: &CertStore, path: &Path) -> Result<()> {
         path = %path.display(),
         "loaded routes"
     );
-    router.replace(loaded.table);
+    router.replace_all(loaded.table, loaded.http3);
     cert_store.reload_from_configs(&loaded.tls)?;
     Ok(())
 }

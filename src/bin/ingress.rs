@@ -61,7 +61,12 @@ fn main() -> Result<()> {
     };
 
     if let Some(h3_config) = h3_config {
-        tokio_runtime.spawn(h3::run(Arc::clone(&router), h3_config));
+        let runtime_for_h3 = runtime_cfg.clone();
+        tokio_runtime.spawn(async move {
+            if let Err(err) = h3::run(Arc::clone(&router), h3_config, &runtime_for_h3).await {
+                tracing::error!(error = %err, "HTTP/3 listener stopped");
+            }
+        });
     }
 
     server::run(
@@ -69,6 +74,7 @@ fn main() -> Result<()> {
         router,
         Arc::new(CertStore::new()),
         false,
+        &runtime_cfg,
     )
 }
 

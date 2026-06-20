@@ -4,6 +4,38 @@ use http::{Request, Response, StatusCode};
 use quiche::h3::{Header, NameValue};
 use quiche::h3::Header as H3Header;
 
+/// Extract `:authority` host (without port).
+pub fn pseudo_authority(headers: &[Header]) -> Option<&[u8]> {
+    headers
+        .iter()
+        .find(|h| h.name() == b":authority")
+        .map(|h| authority_host_only(h.value()))
+}
+
+fn authority_host_only(value: &[u8]) -> &[u8] {
+    value.split(|&b| b == b':').next().unwrap_or(value)
+}
+
+/// Extract `:method` and `:path` without building a full HTTP request.
+pub fn pseudo_method_path(headers: &[Header]) -> Option<(&[u8], &[u8])> {
+    let mut method = None;
+    let mut path = None;
+
+    for header in headers {
+        match header.name() {
+            b":method" => method = Some(header.value()),
+            b":path" => path = Some(path_only(header.value())),
+            _ => {}
+        }
+    }
+
+    Some((method?, path?))
+}
+
+fn path_only(value: &[u8]) -> &[u8] {
+    value.split(|&b| b == b'?').next().unwrap_or(value)
+}
+
 pub fn h3_to_request(headers: Vec<Header>) -> anyhow::Result<Request<()>> {
     let mut method = http::Method::GET;
     let mut uri_builder = Uri::builder();
@@ -77,4 +109,27 @@ pub fn request_host<B>(req: &Request<B>) -> String {
         return authority.host().to_string();
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quiche::h3::Header as H3Header;
+
+    #[test]
+    fn pseudo_authority_strips_port() {
+        let headers = vec![H3Header::new(b":authority", b"api.example.com:443")];
+        assert_eq!(pseudo_authority(&headers), Some(&b"api.example.com"[..]));
+    }
+
+    #[test]
+    fn pseudo_method_path_extracts_path_without_query() {
+        let headers = vec![
+            H3Header::new(b":method", b"GET"),
+            H3Header::new(b":path", b"/api/health?verbose=1"),
+        ];
+        let (method, path) = pseudo_method_path(&headers).unwrap();
+        assert_eq!(method, b"GET");
+        assert_eq!(path, b"/api/health");
+    }
 }

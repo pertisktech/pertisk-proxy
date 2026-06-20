@@ -149,3 +149,76 @@ pub fn ingress_runtime_env() -> RuntimeEnv {
         use_cpu_limit: true,
     }
 }
+
+pub fn is_performance_mode(cfg: &RuntimeConfig) -> bool {
+    cfg.resolved_mode == RuntimeMode::Performance
+}
+
+/// TCP listen backlog for inbound listeners (`SOMAXCONN`-capped by the kernel).
+pub fn tcp_listen_backlog(cfg: &RuntimeConfig) -> i32 {
+    const DEFAULT_STANDARD: i32 = 1024;
+    const DEFAULT_PERFORMANCE: i32 = 8192;
+
+    if let Ok(raw) = std::env::var("PERTISK_TCP_LISTEN_BACKLOG") {
+        if let Ok(value) = raw.trim().parse::<i32>() {
+            if value > 0 {
+                return value;
+            }
+        }
+    }
+
+    if is_performance_mode(cfg) {
+        DEFAULT_PERFORMANCE
+    } else {
+        DEFAULT_STANDARD
+    }
+}
+
+/// Pingora worker threads per service (default in Pingora is 1).
+pub fn pingora_service_threads(cfg: &RuntimeConfig) -> usize {
+    if let Ok(raw) = std::env::var("PERTISK_PINGORA_THREADS") {
+        if let Ok(value) = raw.trim().parse::<usize>() {
+            if value > 0 {
+                return value;
+            }
+        }
+    }
+
+    let cpus = available_cpus();
+    match cfg.resolved_mode {
+        RuntimeMode::Performance => cpus,
+        RuntimeMode::Standard => std::cmp::max(2, cpus / 2),
+        RuntimeMode::Auto => cpus,
+    }
+}
+
+/// Parallel accept tasks per listener fd.
+pub fn pingora_listener_tasks_per_fd(cfg: &RuntimeConfig) -> usize {
+    if let Ok(raw) = std::env::var("PERTISK_PINGORA_LISTENER_TASKS") {
+        if let Ok(value) = raw.trim().parse::<usize>() {
+            if value > 0 {
+                return value;
+            }
+        }
+    }
+
+    match cfg.resolved_mode {
+        RuntimeMode::Performance => 4,
+        _ => 1,
+    }
+}
+
+/// Build Pingora `ServerConf` tuned from runtime mode.
+pub fn pingora_server_conf(cfg: &RuntimeConfig) -> pingora_core::server::configuration::ServerConf {
+    let mut conf = pingora_core::server::configuration::ServerConf::new()
+        .expect("default pingora ServerConf");
+
+    conf.threads = pingora_service_threads(cfg);
+    conf.listener_tasks_per_fd = pingora_listener_tasks_per_fd(cfg);
+
+    if is_performance_mode(cfg) {
+        conf.upstream_keepalive_pool_size = 512;
+    }
+
+    conf
+}
