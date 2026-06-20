@@ -2633,12 +2633,14 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "serde_yaml 0.9.34+deprecated",
  "thiserror 2.0.18",
  "tokio",
  "tokio-quiche",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

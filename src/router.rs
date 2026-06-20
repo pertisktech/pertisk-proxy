@@ -5,6 +5,7 @@ use arc_swap::ArcSwap;
 use k8s_openapi::api::networking::v1::{
     HTTPIngressRuleValue, Ingress, IngressBackend, IngressServiceBackend,
 };
+use serde::Deserialize;
 use tracing::debug;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,11 +21,21 @@ pub struct Backend {
     pub port: u16,
 }
 
+/// Traefik-style middleware applied to a route (ignored in ingress/nginx/caddy modes except traefik).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum Middleware {
+    StripPrefix { prefix: String },
+    RequestHeaders { headers: HashMap<String, String> },
+    ResponseHeaders { headers: HashMap<String, String> },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Route {
     pub path: String,
     pub path_type: PathMatchType,
     pub backend: Backend,
+    pub middlewares: Vec<Middleware>,
 }
 
 #[derive(Debug, Default)]
@@ -35,30 +46,84 @@ pub struct RouteTable {
 
 impl RouteTable {
     pub fn match_route(&self, host: &str, path: &str) -> Option<&Backend> {
+        self.match_route_entry(host, path).map(|r| &r.backend)
+    }
+
+    pub fn match_route_entry(&self, host: &str, path: &str) -> Option<&Route> {
         let host = normalize_host(host);
 
         if let Some(routes) = self.routes.get(&host) {
-            if let Some(backend) = match_routes(routes, path) {
-                return Some(backend);
+            if let Some(route) = find_route(routes, path) {
+                return Some(route);
             }
         }
 
         if let Some(routes) = self.routes.get("*") {
-            return match_routes(routes, path);
+            return find_route(routes, path);
         }
 
         None
     }
 
+    pub fn all_routes(&self) -> impl Iterator<Item = (&String, &Route)> {
+        self.routes
+            .iter()
+            .flat_map(|(host, routes)| routes.iter().map(move |r| (host, r)))
+    }
+
     pub fn route_count(&self) -> usize {
         self.routes.values().map(|routes| routes.len()).sum()
     }
+
+    pub fn from_routes(mut by_host: HashMap<String, Vec<Route>>) -> Self {
+        for routes in by_host.values_mut() {
+            routes.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
+        }
+        Self { routes: by_host }
+    }
 }
 
-fn match_routes<'a>(routes: &'a [Route], path: &str) -> Option<&'a Backend> {
+/// Parse an upstream URL or host:port into a backend address.
+pub fn parse_upstream(raw: &str) -> Option<Backend> {
+    let trimmed = raw.trim().trim_end_matches(';').trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed.contains("://") {
+        if let Ok(url) = url::Url::parse(trimmed) {
+            let host = url.host_str()?;
+            let port = url.port_or_known_default().unwrap_or(80);
+            return Some(Backend {
+                address: format!("{host}:{port}"),
+                port,
+            });
+        }
+    }
+
+    parse_host_port(trimmed)
+}
+
+fn parse_host_port(raw: &str) -> Option<Backend> {
+    let without_path = raw.split('/').next().unwrap_or(raw);
+    if let Some((host, port)) = without_path.rsplit_once(':') {
+        let port = port.parse().ok()?;
+        return Some(Backend {
+            address: format!("{host}:{port}"),
+            port,
+        });
+    }
+
+    Some(Backend {
+        address: format!("{without_path}:80"),
+        port: 80,
+    })
+}
+
+fn find_route<'a>(routes: &'a [Route], path: &str) -> Option<&'a Route> {
     for route in routes {
         if path_matches(&route.path_type, &route.path, path) {
-            return Some(&route.backend);
+            return Some(route);
         }
     }
     None
@@ -149,6 +214,7 @@ fn add_ingress_to_table(by_host: &mut HashMap<String, Vec<Route>>, ingress: &Ing
                 path: "/".into(),
                 path_type: PathMatchType::Prefix,
                 backend,
+                middlewares: vec![],
             });
         }
     }
@@ -198,6 +264,7 @@ fn collect_http_paths(
             path: path_value,
             path_type,
             backend,
+            middlewares: vec![],
         });
     }
 }
@@ -246,6 +313,7 @@ mod tests {
                         address: "api.default.svc.cluster.local:8080".into(),
                         port: 8080,
                     },
+                    middlewares: vec![],
                 }],
             )]),
         };

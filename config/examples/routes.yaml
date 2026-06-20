@@ -1,0 +1,22 @@
+routes:
+  - host: app.example.com
+    path: /api
+    path_type: prefix
+    upstream: http://backend:8080
+
+  - host: app.example.com
+    path: /
+    path_type: prefix
+    upstream: http://frontend:3000
+
+  # Traefik-only: middleware chain example
+  - host: admin.example.com
+    path: /dashboard
+    path_type: prefix
+    upstream: http://admin:8080
+    middlewares:
+      - type: stripPrefix
+        prefix: /dashboard
+      - type: responseHeaders
+        headers:
+          X-Frame-Options: DENY

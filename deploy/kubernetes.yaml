@@ -64,6 +64,8 @@ spec:
               containerPort: 8443
               protocol: UDP
           env:
+            - name: MODE
+              value: ingress
             - name: RUST_LOG
               value: info
             - name: LISTEN_HTTP

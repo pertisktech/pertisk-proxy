@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::server::configuration::Opt;
 use pingora_core::server::Server;
-use pingora_core::listeners::tls::TlsSettings;
 use pingora_proxy::http_proxy_service;
 use tracing::{info, Level};
 use tracing_subscriber::EnvFilter;
@@ -11,7 +11,9 @@ use tracing_subscriber::EnvFilter;
 use pertisk_proxy::config::Config;
 use pertisk_proxy::controller;
 use pertisk_proxy::h3;
-use pertisk_proxy::proxy::K8sGateway;
+use pertisk_proxy::mode::OperatingMode;
+use pertisk_proxy::proxy::Gateway;
+use pertisk_proxy::proxy::kinds;
 use pertisk_proxy::Router;
 
 fn main() -> Result<()> {
@@ -25,14 +27,7 @@ fn main() -> Result<()> {
     let router = Router::new();
 
     let runtime = tokio::runtime::Runtime::new()?;
-    let router_for_controller = Arc::clone(&router);
-    let controller_config = config.clone();
-
-    runtime.spawn(async move {
-        if let Err(err) = controller::run(router_for_controller, controller_config).await {
-            tracing::error!(error = %err, "ingress controller stopped");
-        }
-    });
+    spawn_route_loader(&runtime, Arc::clone(&router), &config)?;
 
     if config.enable_h3 {
         let router_for_h3 = Arc::clone(&router);
@@ -45,10 +40,12 @@ fn main() -> Result<()> {
     }
 
     info!(
+        mode = %config.mode,
         http = %config.http_listen,
         https = %config.https_listen,
         h3_udp = %config.h3_udp_listen,
         h3_enabled = config.enable_h3,
+        auto_https = config.auto_https,
         "starting pertisk-proxy"
     );
 
@@ -56,7 +53,12 @@ fn main() -> Result<()> {
     let mut server = Server::new(Some(opt))?;
     server.bootstrap();
 
-    let gateway = K8sGateway::new(Arc::clone(&router));
+    let gateway = Gateway::new(
+        Arc::clone(&router),
+        config.mode.clone(),
+        config.auto_https,
+        config.https_port(),
+    );
     let mut proxy = http_proxy_service(&server.configuration, gateway);
     proxy.add_tcp(&config.http_listen);
 
@@ -69,4 +71,35 @@ fn main() -> Result<()> {
 
     server.add_service(proxy);
     server.run_forever();
+}
+
+fn spawn_route_loader(
+    runtime: &tokio::runtime::Runtime,
+    router: Arc<Router>,
+    config: &Config,
+) -> Result<()> {
+    match &config.mode {
+        OperatingMode::Ingress => {
+            let controller_config = config.clone();
+            runtime.spawn(async move {
+                if let Err(err) = controller::run(router, controller_config).await {
+                    tracing::error!(error = %err, "ingress controller stopped");
+                }
+            });
+        }
+        OperatingMode::Proxy(kind) => {
+            let config_path = config
+                .routes_config
+                .clone()
+                .context("routes config path missing")?;
+            let kind = *kind;
+            let watch = config.routes_watch;
+            runtime.spawn(async move {
+                if let Err(err) = kinds::run(router, kind, config_path, watch).await {
+                    tracing::error!(error = %err, "proxy route loader stopped");
+                }
+            });
+        }
+    }
+    Ok(())
 }
