@@ -2,12 +2,11 @@ routes:
   - host: admin.amd.thaidevops.co
     path: /
     path_type: prefix
-    upstream: http://localhost:8380
-
+    upstream: http://127.0.0.1:5173
   - host: api.amd.thaidevops.co
     path: /
     path_type: prefix
-    upstream: http://localhost:8802
+    upstream: http://127.0.0.1:8802
 
 # HTTP/3 / QUIC tuning (prox-style http3_config)
 http3:
@@ -24,5 +23,5 @@ tls:
   - hosts: [admin.amd.thaidevops.co, api.amd.thaidevops.co]
     source:
       type: file
-      cert: /etc/pertisk-proxy/tls.crt
-      key: /etc/pertisk-proxy/tls.key
+      cert: /Users/nat/projects/pertisk-tech/pertisk-proxy/certs/amd-thaidevops.pem
+      key: /Users/nat/projects/pertisk-tech/pertisk-proxy/certs/amd-thaidevops.key

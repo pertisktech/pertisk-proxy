@@ -60,6 +60,13 @@ pub fn load(path: &Path) -> Result<LoadedRoutes> {
     })
 }
 
+/// Parse YAML without writing to disk (admin API validation).
+pub fn validate_yaml(content: &str) -> Result<()> {
+    let spec: RoutesFile = serde_yaml::from_str(content).context("invalid routes YAML")?;
+    build_table(spec.routes)?;
+    Ok(())
+}
+
 fn build_table(specs: Vec<RouteSpec>) -> Result<RouteTable> {
     let mut by_host: HashMap<String, Vec<Route>> = HashMap::new();
 

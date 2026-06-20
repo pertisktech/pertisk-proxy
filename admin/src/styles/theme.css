@@ -1,0 +1,14 @@
+.status-green { color: var(--color-green-g1); background: color-mix(in srgb, var(--color-green-g1) 14%, transparent); }
+.status-yellow { color: var(--color-yellow-y1); background: color-mix(in srgb, var(--color-yellow-y1) 14%, transparent); }
+.status-red { color: var(--color-red-r1); background: color-mix(in srgb, var(--color-red-r1) 14%, transparent); }
+.status-gray { color: var(--color-muted); background: color-mix(in srgb, var(--color-muted) 14%, transparent); }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-weight: 600;
+}

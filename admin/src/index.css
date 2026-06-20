@@ -1,0 +1,77 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-naturals-n0: #0c0d18;
+  --color-naturals-n1: #10111e;
+  --color-naturals-n4: #1d1f32;
+  --color-naturals-n5: #23253c;
+  --color-naturals-n9: #7778a0;
+  --color-naturals-n11: #a8aac6;
+  --color-naturals-n13: #e6e7f0;
+  --color-primary-p3: #9a7bf7;
+  --color-primary-p4: #7c59f0;
+  --color-green-g1: #4ade9b;
+  --color-red-r1: #ff5c56;
+  --color-yellow-y1: #fbbf24;
+  --color-blue-b1: #60a5fa;
+  --color-bg: var(--color-naturals-n0);
+  --color-surface: var(--color-naturals-n1);
+  --color-surface-elevated: #131421;
+  --color-hover: var(--color-naturals-n4);
+  --color-border: var(--color-naturals-n5);
+  --color-text: var(--color-naturals-n13);
+  --color-text-secondary: var(--color-naturals-n11);
+  --color-muted: var(--color-naturals-n9);
+  --color-sidebar: #090a14;
+  --color-primary: var(--color-primary-p3);
+  --color-bg-gradient-start: var(--color-naturals-n0);
+  --color-bg-gradient-end: var(--color-naturals-n1);
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+html.light {
+  --color-bg: #f4f4fb;
+  --color-surface: #ffffff;
+  --color-surface-elevated: #f8f8ff;
+  --color-hover: #ececf8;
+  --color-border: #d8d8ea;
+  --color-text: #1a1a2e;
+  --color-text-secondary: #5c5c7a;
+  --color-muted: #7a7a9a;
+  --color-sidebar: #ebebf5;
+  --color-primary: #6d3ef5;
+}
+
+* { box-sizing: border-box; }
+
+html { font-size: 15px; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: linear-gradient(180deg, var(--color-bg-gradient-start), var(--color-bg-gradient-end));
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+#root { min-height: 100vh; }
+
+input, textarea, select, button {
+  font: inherit;
+}
+
+code, pre, textarea.mono {
+  font-family: var(--font-mono);
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 4px; }

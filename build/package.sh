@@ -30,6 +30,15 @@ case "$TARGET" in
   all|*) PACKAGE_BINARIES=(pertisk-proxy pertisk-proxy-ingress) ;;
 esac
 
+needs_admin=0
+for bin in "${PACKAGE_BINARIES[@]}"; do
+  [ "$bin" = "pertisk-proxy" ] && needs_admin=1
+done
+if [ "$needs_admin" -eq 1 ] && [ ! -f admin/dist/index.html ]; then
+  echo "Error: admin/dist not found. Run: make install-admin && make admin-dist" >&2
+  exit 1
+fi
+
 HOST_ARCH="$(uname -m)"
 case "$HOST_ARCH" in
   x86_64) HOST_ARCH=amd64 ;;
@@ -242,6 +251,8 @@ ENABLE_H3=true
 # TLS_KEY_PATH=/etc/pertisk-proxy/tls.key
 PERTISK_PROXY_MODE=performance
 PERTISK_LOG_LEVEL=info
+PERTISK_MANAGEMENT_ADDR=127.0.0.1:9080
+# PERTISK_ADMIN_PASSWORD=change-me
 CONF
 
 cat > build/pertisk-proxy-ingress.conf << 'CONF'
@@ -279,6 +290,11 @@ make_pkg_layout() {
 
   if [ "$bin" = "pertisk-proxy" ] && [ -f config/examples/routes.yaml ]; then
     cp config/examples/routes.yaml "pkg-${bin}/etc/pertisk-proxy/routes.yaml"
+  fi
+
+  if [ "$bin" = "pertisk-proxy" ] && [ -d admin/dist ]; then
+    mkdir -p "pkg-${bin}/usr/share/pertisk-proxy/admin"
+    cp -r admin/dist "pkg-${bin}/usr/share/pertisk-proxy/admin/"
   fi
 
   if [ "$bin" = "pertisk-proxy-ingress" ]; then

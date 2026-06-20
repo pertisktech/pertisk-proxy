@@ -73,6 +73,22 @@ fn main() -> Result<()> {
         watch,
     ));
 
+    #[cfg(feature = "admin")]
+    {
+        let admin_state = pertisk_proxy::api::build_state(
+            Arc::clone(&router),
+            Arc::clone(&cert_store),
+            config.clone(),
+            runtime_cfg.clone(),
+        );
+        let admin_addr = pertisk_proxy::api::management_addr();
+        tokio_runtime.spawn(async move {
+            if let Err(err) = pertisk_proxy::api::serve(admin_state, admin_addr).await {
+                tracing::error!(error = %err, "management API stopped");
+            }
+        });
+    }
+
     if config.server.enable_h3 {
         let paths = cert_store.default_paths().or_else(|| {
             config

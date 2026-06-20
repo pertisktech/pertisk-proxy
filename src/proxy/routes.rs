@@ -44,6 +44,10 @@ pub async fn run(
     }
 }
 
+pub fn reload_from_path(router: &Router, cert_store: &CertStore, path: &Path) -> Result<()> {
+    reload(router, cert_store, path)
+}
+
 fn reload(router: &Router, cert_store: &CertStore, path: &Path) -> Result<()> {
     let loaded = routes_config::load(path)?;
     info!(

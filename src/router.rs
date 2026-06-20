@@ -199,6 +199,10 @@ impl Router {
         self.replace(table);
         self.replace_http3(http3);
     }
+
+    pub fn route_count(&self) -> usize {
+        self.snapshot().route_count()
+    }
 }
 
 impl Default for Router {

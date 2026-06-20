@@ -41,4 +41,18 @@ impl TlsSource {
     pub fn is_acme(&self) -> bool {
         matches!(self, Self::Acme { .. })
     }
+
+    pub fn cert_path(&self) -> Option<&PathBuf> {
+        match self {
+            Self::File { cert, .. } => Some(cert),
+            Self::Acme { .. } => None,
+        }
+    }
+
+    pub fn key_path(&self) -> Option<&PathBuf> {
+        match self {
+            Self::File { key, .. } => Some(key),
+            Self::Acme { .. } => None,
+        }
+    }
 }
