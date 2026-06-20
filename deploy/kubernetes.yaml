@@ -1,3 +1,7 @@
+# Optional reference for in-cluster Docker deployment (not used by DEB/RPM workflow).
+# Primary ingress path: package-ingress + deploy-deb-ingress / deploy-rpm-ingress.
+# One-time RBAC: deploy/kubernetes-rbac.yaml (also installed under /etc/pertisk-proxy/kubernetes/).
+---
 apiVersion: v1
 kind: Namespace
 metadata:

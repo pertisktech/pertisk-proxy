@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::RwLock;
 
 use anyhow::{Context, Result};
 use tracing::{info, warn};
 
 use super::config::{TlsConfig, TlsSource};
-use super::validate;
+use super::validate::{self, validate_cert_pair as validate_tls_pair};
 
 #[derive(Debug, Clone)]
 pub struct CertPaths {
@@ -47,7 +47,7 @@ impl CertStore {
 
     /// Load a global fallback certificate from environment variables.
     pub fn set_global_fallback(&self, cert: PathBuf, key: PathBuf) -> Result<()> {
-        validate_cert_pair(&cert, &key).context("invalid global TLS_CERT_PATH/TLS_KEY_PATH")?;
+        validate_tls_pair(&cert, &key).context("invalid global TLS_CERT_PATH/TLS_KEY_PATH")?;
         let paths = CertPaths { cert, key };
         if let Ok(mut g) = self.inner.write() {
             if g.default.is_none() {
@@ -71,7 +71,7 @@ impl CertStore {
 
             match &entry.source {
                 TlsSource::File { cert, key } => {
-                    validate_cert_pair(cert, key)
+                    validate_tls_pair(cert, key)
                         .with_context(|| format!("invalid TLS file config for {:?}", entry.hosts))?;
                     validate::warn_host_cert_mismatch(cert, &entry.hosts)?;
                     let paths = CertPaths {
@@ -153,16 +153,6 @@ impl CertStore {
 
         g.default.clone()
     }
-}
-
-fn validate_cert_pair(cert: &Path, key: &Path) -> Result<()> {
-    if !cert.is_file() {
-        anyhow::bail!("certificate file not found: {}", cert.display());
-    }
-    if !key.is_file() {
-        anyhow::bail!("private key file not found: {}", key.display());
-    }
-    Ok(())
 }
 
 fn normalize_host(host: &str) -> String {

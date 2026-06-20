@@ -1,0 +1,118 @@
+# syntax=docker/dockerfile:1.7
+# Cross-compile pertisk-proxy binaries for Linux (amd64 or arm64 via buildx).
+# Usage: docker buildx build --platform linux/amd64 -f docker/Dockerfile.release .
+
+ARG TARGETPLATFORM=linux/amd64
+ARG BUILDPLATFORM=linux/amd64
+ARG TARGETARCH=amd64
+ARG BUILDARCH=amd64
+
+FROM --platform=$BUILDPLATFORM rust:1-bookworm
+
+ARG TARGETARCH
+ARG BUILDARCH
+ARG TARGETPLATFORM
+ARG PACKAGE_TARGET=all
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    perl \
+    cmake \
+    clang \
+    libclang-dev \
+    golang-go \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -eu; \
+    if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
+      apt-get update; \
+      case "${TARGETARCH}" in \
+        amd64) \
+          apt-get install -y --no-install-recommends \
+            gcc-x86-64-linux-gnu \
+            libc6-dev-amd64-cross \
+            linux-libc-dev-amd64-cross ;; \
+        arm64) \
+          apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            libc6-dev-arm64-cross \
+            linux-libc-dev-arm64-cross ;; \
+        *) echo "unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
+      esac; \
+      rm -rf /var/lib/apt/lists/*; \
+      case "${TARGETARCH}" in \
+        amd64) rustup target add x86_64-unknown-linux-gnu ;; \
+        arm64) rustup target add aarch64-unknown-linux-gnu ;; \
+      esac; \
+    fi
+
+WORKDIR /app
+
+COPY Cargo.toml Cargo.lock* ./
+RUN test -f Cargo.lock || cargo generate-lockfile
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-proxy-registry-${TARGETPLATFORM} \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-proxy-git-${TARGETPLATFORM} \
+    cargo fetch --locked
+
+COPY src ./src
+COPY config ./config
+
+ARG CARGO_BUILD_JOBS=1
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
+ENV RUST_MIN_STACK=16777216
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-proxy-registry-${TARGETPLATFORM} \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-proxy-git-${TARGETPLATFORM} \
+    --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-proxy-target-${TARGETPLATFORM} \
+    set -eu; \
+    case "${TARGETARCH}" in \
+      amd64) RUST_TARGET=x86_64-unknown-linux-gnu ;; \
+      arm64) RUST_TARGET=aarch64-unknown-linux-gnu ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
+    esac; \
+    mkdir -p /app/out; \
+    if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
+      export PKG_CONFIG_ALLOW_CROSS=1; \
+      case "${TARGETARCH}" in \
+        amd64) \
+          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc; \
+          export CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc; \
+          export CXX_x86_64_unknown_linux_gnu=x86_64-linux-gnu-g++; \
+          export AR_x86_64_unknown_linux_gnu=x86_64-linux-gnu-ar; \
+          export CFLAGS_x86_64_unknown_linux_gnu="-I/usr/x86_64-linux-gnu/include"; \
+          export CXXFLAGS_x86_64_unknown_linux_gnu="-I/usr/x86_64-linux-gnu/include"; \
+          ;; \
+        arm64) \
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc; \
+          export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc; \
+          export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++; \
+          export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar; \
+          export CFLAGS_aarch64_unknown_linux_gnu="-I/usr/aarch64-linux-gnu/include"; \
+          export CXXFLAGS_aarch64_unknown_linux_gnu="-I/usr/aarch64-linux-gnu/include"; \
+          ;; \
+      esac; \
+      BUILD_FLAGS="--release --locked --target ${RUST_TARGET}"; \
+      TARGET_DIR="/app/target/${RUST_TARGET}/release"; \
+    else \
+      BUILD_FLAGS="--release --locked"; \
+      TARGET_DIR="/app/target/release"; \
+    fi; \
+    case "${PACKAGE_TARGET}" in \
+      proxy) \
+        cargo build ${BUILD_FLAGS} --bin pertisk-proxy; \
+        cp "${TARGET_DIR}/pertisk-proxy" /app/out/pertisk-proxy; \
+        ;; \
+      ingress) \
+        cargo build ${BUILD_FLAGS} --bin pertisk-proxy-ingress --features ingress; \
+        cp "${TARGET_DIR}/pertisk-proxy-ingress" /app/out/pertisk-proxy-ingress; \
+        ;; \
+      *) \
+        cargo build ${BUILD_FLAGS} --bin pertisk-proxy; \
+        cargo build ${BUILD_FLAGS} --bin pertisk-proxy-ingress --features ingress; \
+        cp "${TARGET_DIR}/pertisk-proxy" /app/out/pertisk-proxy; \
+        cp "${TARGET_DIR}/pertisk-proxy-ingress" /app/out/pertisk-proxy-ingress; \
+        ;; \
+    esac

@@ -4,3 +4,4 @@ mod validate;
 
 pub use config::{TlsConfig, TlsSource};
 pub use store::{CertPaths, CertStore};
+pub use validate::validate_cert_pair;

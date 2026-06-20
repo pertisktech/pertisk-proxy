@@ -24,5 +24,5 @@ tls:
   - hosts: [admin.amd.thaidevops.co, api.amd.thaidevops.co]
     source:
       type: file
-      cert: /Users/nat/projects/pertisk-tech/pertisk-proxy/certs/amd-thaidevops.pem
-      key: /Users/nat/projects/pertisk-tech/pertisk-proxy/certs/amd-thaidevops.key
+      cert: /etc/pertisk-proxy/tls.crt
+      key: /etc/pertisk-proxy/tls.key

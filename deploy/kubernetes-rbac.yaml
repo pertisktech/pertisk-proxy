@@ -1,0 +1,43 @@
+# One-time cluster setup for pertisk-proxy-ingress running as a systemd service
+# (DEB/RPM on a host outside the cluster). Apply from any machine with cluster admin:
+#
+#   kubectl apply -f /etc/pertisk-proxy/kubernetes/rbac.yaml
+#
+# Then create a kubeconfig for the ServiceAccount and place it on the ingress host:
+#   /etc/pertisk-proxy/kubeconfig
+# and set KUBECONFIG in /etc/pertisk-proxy/pertisk-proxy-ingress.conf
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: pertisk
+spec:
+  controller: pertisk.tech/ingress-controller
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pertisk-proxy-ingress
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pertisk-proxy-ingress
+rules:
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pertisk-proxy-ingress
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pertisk-proxy-ingress
+subjects:
+  - kind: ServiceAccount
+    name: pertisk-proxy-ingress
+    namespace: kube-system

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::server::configuration::Opt;
 use pingora_core::server::Server;
@@ -10,7 +10,7 @@ use tracing::{info, warn};
 use crate::config::ServerConfig;
 use crate::proxy::Gateway;
 use crate::runtime::RuntimeConfig;
-use crate::tls::CertStore;
+use crate::tls::{validate_cert_pair, CertStore};
 use crate::Router;
 
 /// Start the Pingora reverse proxy. HTTP/3 is started separately on the Tokio runtime.
@@ -66,8 +66,14 @@ pub fn run(
     let mut proxy = http_proxy_service(&server.configuration, gateway);
     proxy.add_tcp(&server_config.http_listen);
 
+    if let Some((cert, key)) = tls_paths.as_ref() {
+        validate_cert_pair(std::path::Path::new(cert), std::path::Path::new(key))
+            .with_context(|| format!("HTTPS listener cannot load cert={cert} key={key}"))?;
+    }
+
     if let Some((cert, key)) = tls_paths {
-        let mut tls_settings = TlsSettings::intermediate(&cert, &key)?;
+        let mut tls_settings = TlsSettings::intermediate(&cert, &key)
+            .with_context(|| format!("HTTPS listener cannot load cert={cert} key={key}"))?;
         tls_settings.enable_h2();
         proxy.add_tls_with_settings(&server_config.https_listen, None, tls_settings);
         info!(addr = %server_config.https_listen, cert = %cert, "HTTPS (HTTP/1 + HTTP/2) listener started");

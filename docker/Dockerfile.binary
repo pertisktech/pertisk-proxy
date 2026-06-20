@@ -1,0 +1,25 @@
+# Runtime image from a prebuilt Linux binary (see make package / docker-build-*).
+# docker build -f docker/Dockerfile.binary --build-arg BINARY_FILE=pertisk-proxy-linux-amd64 -t pertisk-proxy:amd64 .
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates libssl3 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG BINARY_FILE=pertisk-proxy-linux-amd64
+ARG BINARY_NAME=pertisk-proxy
+
+COPY ${BINARY_FILE} /usr/bin/${BINARY_NAME}
+COPY config/examples/routes.yaml /etc/pertisk-proxy/routes.yaml.example
+
+ENV ROUTES_CONFIG=/etc/pertisk-proxy/routes.yaml
+ENV PERTISK_PROXY_MODE=performance
+ENV PERTISK_LOG_LEVEL=info
+
+EXPOSE 80 443 443/udp
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -fk https://127.0.0.1/healthz || curl -f http://127.0.0.1/healthz || exit 1
+
+ENTRYPOINT ["/usr/bin/pertisk-proxy"]

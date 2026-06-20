@@ -5,6 +5,39 @@ use anyhow::{Context, Result};
 use tracing::warn;
 use x509_parser::prelude::{FromDer, GeneralName, X509Certificate};
 
+/// Ensure certificate and key files exist and contain parseable PEM material.
+pub fn validate_cert_pair(cert_path: &Path, key_path: &Path) -> Result<()> {
+    if !cert_path.is_file() {
+        anyhow::bail!("certificate file not found: {}", cert_path.display());
+    }
+    if !key_path.is_file() {
+        anyhow::bail!("private key file not found: {}", key_path.display());
+    }
+
+    let cert_pem = fs::read(cert_path)
+        .with_context(|| format!("failed to read certificate {}", cert_path.display()))?;
+    let key_pem = fs::read(key_path)
+        .with_context(|| format!("failed to read private key {}", key_path.display()))?;
+
+    let mut cert_reader = cert_pem.as_slice();
+    let certs: Vec<_> = rustls_pemfile::certs(&mut cert_reader)
+        .collect::<Result<Vec<_>, _>>()
+        .context("failed to parse certificate PEM")?;
+    if certs.is_empty() {
+        anyhow::bail!("no certificate found in {}", cert_path.display());
+    }
+
+    let mut key_reader = key_pem.as_slice();
+    rustls_pemfile::private_key(&mut key_reader)
+        .context("failed to parse private key PEM")?
+        .context(format!(
+            "no private key found in {}",
+            key_path.display()
+        ))?;
+
+    Ok(())
+}
+
 /// Warn when configured TLS hostnames are not covered by the certificate SAN/CN.
 pub fn warn_host_cert_mismatch(cert_path: &Path, configured_hosts: &[String]) -> Result<()> {
     let pem = fs::read(cert_path)

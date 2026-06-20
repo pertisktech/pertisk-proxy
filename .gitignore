@@ -4,3 +4,11 @@
 *.pem
 *.crt
 *.key
+/release/
+/pertisk-proxy-linux-*
+/pertisk-proxy-ingress-linux-*
+/.buildx-cache/
+/pkg-*
+/preinstall.sh
+/postinstall.sh
+/preremove.sh

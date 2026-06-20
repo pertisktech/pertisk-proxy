@@ -44,16 +44,25 @@ fn main() -> Result<()> {
     let router = Router::new();
     let cert_store = Arc::new(CertStore::new());
 
-    if let (Some(cert), Some(key)) = (
-        config.server.tls_cert_path.as_ref(),
-        config.server.tls_key_path.as_ref(),
-    ) {
-        cert_store.set_global_fallback(cert.clone(), key.clone())?;
-    }
-
     let initial = routes_config::load(&config.routes_config)?;
     router.replace_all(initial.table, initial.http3);
     cert_store.reload_from_configs(&initial.tls)?;
+
+    if cert_store.default_paths().is_none() {
+        if let (Some(cert), Some(key)) = (
+            config.server.tls_cert_path.as_ref(),
+            config.server.tls_key_path.as_ref(),
+        ) {
+            cert_store.set_global_fallback(cert.clone(), key.clone())?;
+        }
+    }
+
+    if cert_store.default_paths().is_none() {
+        anyhow::bail!(
+            "no TLS configured: add a tls: section to {} or set TLS_CERT_PATH and TLS_KEY_PATH",
+            config.routes_config.display()
+        );
+    }
 
     let routes_path = config.routes_config.clone();
     let watch = config.routes_watch;
