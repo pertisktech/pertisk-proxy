@@ -9,7 +9,7 @@ export type ModalProps = {
   title: string;
   children: ReactNode;
   wide?: boolean;
-  /** When true, backdrop click and Escape do not close (use Cancel / X to dismiss). */
+  /** When true, Escape does not close (e.g. while saving). Backdrop never closes. */
   protect?: boolean;
 };
 
@@ -30,19 +30,9 @@ export function Modal({ open, onClose, title, children, wide, protect = false }:
 
   if (!open) return null;
 
-  function handleBackdropClick() {
-    if (!protect) onClose();
-  }
-
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
-      <button
-        type="button"
-        className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm"
-        aria-label="Close dialog"
-        tabIndex={-1}
-        onClick={handleBackdropClick}
-      />
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" aria-hidden />
       <div
         role="dialog"
         aria-modal="true"
