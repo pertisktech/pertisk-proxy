@@ -100,7 +100,7 @@ impl CertStore {
         if acme_pending > 0 {
             info!(
                 hosts = acme_pending,
-                "ACME certificates pending — automatic issuance will be added in a future release"
+                "ACME TLS configured; automatic issuance runs in background"
             );
         }
 

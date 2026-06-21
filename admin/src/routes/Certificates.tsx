@@ -18,7 +18,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Pagination } from '@/components/Pagination';
 import { usePageSize } from '@/utils/usePageSize';
 import { formatDate, formatDateOnly } from '@/utils/dateFormat';
-import { resolveTlsForHost } from '@/utils/tlsHostMatch';
+import { resolveTlsForHost, certRowMatchesTlsConfig } from '@/utils/tlsHostMatch';
 import { cn } from '@/utils';
 
 type ViewMode = 'card' | 'list';
@@ -182,8 +182,8 @@ export function Certificates() {
     const want = tls.hosts ?? [];
     const exact = rows.find((r) => hostsMatch(r.hosts, want));
     if (exact) return exact.id;
-    const subset = rows.find((r) => certMatchesTls(r.hosts, want));
-    return subset?.id ?? null;
+    const matched = rows.find((r) => certRowMatchesTlsConfig(r.hosts, want));
+    return matched?.id ?? null;
   }
 
   function getSitesUsingCert(tls: TlsConfig): number {

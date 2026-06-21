@@ -75,6 +75,7 @@ pub fn router(state: AdminState) -> Router {
         .route("/api/version", get(api_version))
         .route("/api/auth/config", get(auth_config))
         .route("/api/auth/login", post(auth_login))
+        .route("/api/auth/check", get(auth_check))
         .route("/live", get(|| async { "ok" }))
         .route("/ready", get(|| async { "ok" }))
         .route("/healthz", get(|| async { "ok" }))
@@ -100,7 +101,6 @@ pub fn router(state: AdminState) -> Router {
                 .put(dns_providers_put)
                 .delete(dns_providers_delete),
         )
-        .route("/api/auth/check", get(auth_check))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_auth_middleware,
@@ -350,15 +350,9 @@ async fn get_config(State(state): State<AdminState>) -> Result<Json<Config>, (St
 async fn enrich_tls_expiries(cfg: &mut Config, db: &Database) {
     if let Ok(rows) = db.list_certificates().await {
         for tls in &mut cfg.tls {
-            let mut hosts_sorted = tls.hosts.clone();
-            hosts_sorted.sort();
             tls.expires_at = rows
                 .iter()
-                .find(|r| {
-                    let mut have = r.hosts.clone();
-                    have.sort();
-                    have == hosts_sorted
-                })
+                .find(|r| acme::cert_row_matches_tls_config(r, &tls.hosts))
                 .and_then(|r| r.expires_at.clone());
         }
     }
@@ -449,7 +443,20 @@ async fn reload_config(State(state): State<AdminState>) -> Result<Json<ReloadRes
         )
     })?;
     state.cert_store.reload_from_configs(&cfg.tls).ok();
-    *state.runtime_config.write().await = cfg;
+    if let Err(err) = load_db_certs_into_store(db.as_ref(), state.cert_store.as_ref(), &state.certs_dir).await
+    {
+        tracing::warn!(error = %err, "reload: failed to load certificates from database");
+    }
+    *state.runtime_config.write().await = cfg.clone();
+    #[cfg(feature = "acme")]
+    if let Some(acme) = state.acme_manager.clone() {
+        let db_c = db.clone();
+        let store_c = state.cert_store.clone();
+        let dir = state.certs_dir.clone();
+        tokio::spawn(async move {
+            acme::spawn_auto_ssl_for_config(&cfg, db_c, acme, store_c, dir).await;
+        });
+    }
     Ok(Json(ReloadResponse {
         ok: true,
         route_count: state.router.route_count(),

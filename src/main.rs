@@ -123,8 +123,22 @@ fn main() -> Result<()> {
         let dir = certs_dir.clone();
         tokio_runtime.spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            tracing::info!("Auto-SSL startup pass #1");
             pertisk_proxy::api::acme::spawn_auto_ssl_for_config(
-                &cfg, db_c, acme_c, store_c, dir,
+                &cfg, db_c.clone(), acme_c.clone(), store_c.clone(), dir.clone(),
+            )
+            .await;
+        });
+        let cfg_retry = runtime_config.clone();
+        let db_retry = Arc::clone(&db);
+        let acme_retry = Arc::clone(&acme_manager);
+        let store_retry = Arc::clone(&cert_store);
+        let dir_retry = certs_dir.clone();
+        tokio_runtime.spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+            tracing::info!("Auto-SSL startup pass #2 (retry)");
+            pertisk_proxy::api::acme::spawn_auto_ssl_for_config(
+                &cfg_retry, db_retry, acme_retry, store_retry, dir_retry,
             )
             .await;
         });

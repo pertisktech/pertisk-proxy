@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/api/client';
-import { setToken } from '@/auth';
+import { setToken, getToken } from '@/auth';
 
 export function Login() {
   const navigate = useNavigate();
@@ -15,9 +15,11 @@ export function Login() {
       setAuthRequired(c.auth_required);
       if (!c.auth_required) navigate('/');
     });
-    api.authCheck().then((c) => {
-      if (c.authenticated) navigate('/');
-    });
+    if (getToken()) {
+      api.authCheck().then((c) => {
+        if (c.authenticated) navigate('/');
+      });
+    }
   }, [navigate]);
 
   async function onSubmit(e: FormEvent) {

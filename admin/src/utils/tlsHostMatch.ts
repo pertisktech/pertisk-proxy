@@ -124,3 +124,31 @@ export function sslLabelForCard(hosts: string[] | undefined): string {
 }
 
 export { sslLabelForDropdown };
+
+function hostsSet(arr: string[] | undefined): Set<string> {
+  return new Set((arr ?? []).map((h) => h.trim()).filter(Boolean));
+}
+
+/** Match backend `cert_row_covers_tls_hosts`. */
+export function certRowCoversTls(certHosts: string[] | undefined, tlsHosts: string[] | undefined): boolean {
+  const want = hostsSet(tlsHosts);
+  if (want.size === 0) return false;
+  const have = hostsSet(certHosts);
+  if (have.size === want.size && [...have].every((h) => want.has(h))) return true;
+  const wildcardOnly = [...want].filter((h) => h.startsWith('*'));
+  if (wildcardOnly.length === 0) return false;
+  const wildSet = new Set(wildcardOnly);
+  return have.size === wildSet.size && [...have].every((h) => wildSet.has(h));
+}
+
+/** Match backend `cert_row_matches_tls_config`. */
+export function certRowMatchesTlsConfig(certHosts: string[] | undefined, tlsHosts: string[] | undefined): boolean {
+  if (!certRowCoversTls(certHosts, tlsHosts)) return false;
+  const have = hostsSet(certHosts);
+  for (const h of tlsHosts ?? []) {
+    const t = h.trim();
+    if (!t || t.startsWith('*')) continue;
+    if (!have.has(t)) return false;
+  }
+  return true;
+}
