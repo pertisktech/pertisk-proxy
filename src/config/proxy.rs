@@ -18,9 +18,7 @@ impl ProxyConfig {
     pub fn from_env() -> Result<Self> {
         let server = ServerConfig::from_env_proxy_defaults();
 
-        let db_path = std::env::var("PERTISK_DB_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("./data/proxy.sqlite"));
+        let db_path = super::common::resolve_db_path();
 
         let migrate_routes_path = std::env::var("ROUTES_CONFIG")
             .or_else(|_| std::env::var("PERTISK_ROUTES_CONFIG"))

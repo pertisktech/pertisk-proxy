@@ -5,19 +5,23 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libssl3 curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/pertisk-proxy/certs /etc/pertisk-proxy
 
 ARG BINARY_FILE=pertisk-proxy-linux-amd64
 ARG BINARY_NAME=pertisk-proxy
 
 COPY ${BINARY_FILE} /usr/bin/${BINARY_NAME}
-COPY config/examples/routes.yaml /etc/pertisk-proxy/routes.yaml.example
+COPY build/pertisk-proxy.conf /etc/pertisk-proxy/pertisk-proxy.conf
 
-ENV ROUTES_CONFIG=/etc/pertisk-proxy/routes.yaml
+ENV PERTISK_DB_PATH=/var/lib/pertisk-proxy/proxy.sqlite
+ENV PERTISK_MANAGEMENT_ADDR=0.0.0.0:9080
 ENV PERTISK_PROXY_MODE=performance
 ENV PERTISK_LOG_LEVEL=info
 
-EXPOSE 80 443 443/udp
+VOLUME /var/lib/pertisk-proxy
+
+EXPOSE 80 443 443/udp 9080
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -fk https://127.0.0.1/healthz || curl -f http://127.0.0.1/healthz || exit 1

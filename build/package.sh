@@ -194,6 +194,7 @@ After=network.target
 Type=simple
 User=pertisk-proxy
 Group=pertisk-proxy
+WorkingDirectory=/var/lib/pertisk-proxy
 EnvironmentFile=-/etc/pertisk-proxy/pertisk-proxy.conf
 ExecStart=/usr/bin/pertisk-proxy
 Restart=always
@@ -220,6 +221,7 @@ After=network.target
 Type=simple
 User=pertisk-proxy
 Group=pertisk-proxy
+WorkingDirectory=/var/lib/pertisk-proxy
 EnvironmentFile=-/etc/pertisk-proxy/pertisk-proxy-ingress.conf
 ExecStart=/usr/bin/pertisk-proxy-ingress
 Restart=always
@@ -239,20 +241,32 @@ SVC
 
 cat > build/pertisk-proxy.conf << 'CONF'
 # pertisk-proxy (proxy mode)
-ROUTES_CONFIG=/etc/pertisk-proxy/routes.yaml
-ROUTES_WATCH=true
+# Sites, backends, TLS, and DNS providers are stored in SQLite.
+# Manage via the admin UI or PUT /api/config on the management API.
+
+PERTISK_DB_PATH=/var/lib/pertisk-proxy/proxy.sqlite
+
 LISTEN_HTTP=0.0.0.0:80
 LISTEN_HTTPS=0.0.0.0:443
 LISTEN_H3_UDP=0.0.0.0:443
 ENABLE_H3=true
-# Per-site TLS is configured in routes.yaml (tls: section).
-# Optional global fallback when routes.yaml has no tls: block:
-# TLS_CERT_PATH=/etc/pertisk-proxy/tls.crt
-# TLS_KEY_PATH=/etc/pertisk-proxy/tls.key
-PERTISK_PROXY_MODE=performance
-PERTISK_LOG_LEVEL=info
+
+# Admin UI + management API (bind locally; put a reverse proxy in front in production)
 PERTISK_MANAGEMENT_ADDR=127.0.0.1:9080
 # PERTISK_ADMIN_PASSWORD=change-me
+
+# Optional one-time import when the database is empty (legacy routes.yaml)
+# ROUTES_CONFIG=/etc/pertisk-proxy/routes.yaml
+
+# Optional global fallback TLS when no per-site certs exist in the database:
+# TLS_CERT_PATH=/etc/pertisk-proxy/tls.crt
+# TLS_KEY_PATH=/etc/pertisk-proxy/tls.key
+
+PERTISK_PROXY_MODE=performance
+PERTISK_LOG_LEVEL=info
+
+# ACME (Let's Encrypt)
+# PERTISK_ACME_STAGING=true
 CONF
 
 cat > build/pertisk-proxy-ingress.conf << 'CONF'
@@ -288,10 +302,6 @@ make_pkg_layout() {
   cp "$conf" "pkg-${bin}/etc/pertisk-proxy/${bin}.conf"
   cp "$unit" "pkg-${bin}/lib/systemd/system/${bin}.service"
 
-  if [ "$bin" = "pertisk-proxy" ] && [ -f config/examples/routes.yaml ]; then
-    cp config/examples/routes.yaml "pkg-${bin}/etc/pertisk-proxy/routes.yaml"
-  fi
-
   if [ "$bin" = "pertisk-proxy" ] && [ -d admin/dist ]; then
     mkdir -p "pkg-${bin}/usr/share/pertisk-proxy/admin"
     cp -r admin/dist "pkg-${bin}/usr/share/pertisk-proxy/admin/"
@@ -321,12 +331,19 @@ PRE
 cat > postinstall.sh << 'POST'
 #!/bin/sh
 set -e
+mkdir -p /var/lib/pertisk-proxy/certs
 chown -R pertisk-proxy:pertisk-proxy /var/lib/pertisk-proxy /var/log/pertisk-proxy
 chmod 750 /var/lib/pertisk-proxy /var/log/pertisk-proxy
+chmod 660 /var/lib/pertisk-proxy/*.sqlite 2>/dev/null || true
+for conf in /etc/pertisk-proxy/pertisk-proxy.conf; do
+  if [ -f "$conf" ] && ! grep -q '^PERTISK_DB_PATH=' "$conf"; then
+    printf '\n# Added by package postinstall\nPERTISK_DB_PATH=/var/lib/pertisk-proxy/proxy.sqlite\n' >> "$conf"
+  fi
+done
 if [ -d /etc/pertisk-proxy ]; then
   chown -R root:pertisk-proxy /etc/pertisk-proxy
   chmod 750 /etc/pertisk-proxy
-  chmod 644 /etc/pertisk-proxy/*.crt /etc/pertisk-proxy/*.pem /etc/pertisk-proxy/*.yaml 2>/dev/null || true
+  chmod 644 /etc/pertisk-proxy/*.crt /etc/pertisk-proxy/*.pem 2>/dev/null || true
   chmod 640 /etc/pertisk-proxy/*.key 2>/dev/null || true
 fi
 for bin in pertisk-proxy pertisk-proxy-ingress; do

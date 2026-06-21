@@ -82,7 +82,16 @@ fn main() -> Result<()> {
             proxy_env.server.tls_cert_path.as_ref(),
             proxy_env.server.tls_key_path.as_ref(),
         ) {
-            cert_store.set_global_fallback(cert.clone(), key.clone())?;
+            if cert.is_file() && key.is_file() {
+                cert_store.set_global_fallback(cert.clone(), key.clone())?;
+            } else {
+                tracing::warn!(
+                    cert = %cert.display(),
+                    key = %key.display(),
+                    "TLS_CERT_PATH/TLS_KEY_PATH set but certificate files are missing; \
+                     skipping global fallback (configure TLS via admin UI or per-site certs)"
+                );
+            }
         }
     }
 

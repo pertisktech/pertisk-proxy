@@ -16,7 +16,6 @@ use tokio_quiche::settings::{CertificateKind, ConnectionParams, Hooks, TlsCertif
 use tokio_quiche::ServerH3Driver;
 use tracing::{error, info, warn};
 
-use crate::config::ServerConfig;
 use crate::deny;
 use crate::h3::headers::{error_response, h3_to_request, pseudo_authority, request_host, response_to_h3};
 use crate::h3::health;
@@ -25,31 +24,6 @@ use crate::h3::settings::{listener_count, quic_settings};
 use crate::proxy::forward::resolve_forward;
 use crate::router::Router;
 use crate::runtime::RuntimeConfig;
-
-#[derive(Clone)]
-pub struct H3Config {
-    pub udp_listen: String,
-    pub tls_cert_path: String,
-    pub tls_key_path: String,
-}
-
-impl H3Config {
-    pub fn from_tls_paths(cert: impl Into<String>, key: impl Into<String>, udp_listen: String) -> Self {
-        Self {
-            udp_listen,
-            tls_cert_path: cert.into(),
-            tls_key_path: key.into(),
-        }
-    }
-
-    pub fn from_server(server: &ServerConfig) -> anyhow::Result<Self> {
-        Ok(Self {
-            udp_listen: server.h3_udp_listen.clone(),
-            tls_cert_path: server.tls_cert_path()?.to_string(),
-            tls_key_path: server.tls_key_path()?.to_string(),
-        })
-    }
-}
 
 pub async fn run(router: Arc<Router>, config: H3Config, runtime_cfg: &RuntimeConfig) -> Result<()> {
     let cert = &config.tls_cert_path;

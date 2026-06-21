@@ -1051,9 +1051,7 @@ pub fn build_state(
 }
 
 pub fn resolve_db_path() -> PathBuf {
-    std::env::var("PERTISK_DB_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("./data/proxy.sqlite"))
+    crate::config::resolve_db_path()
 }
 
 pub fn certs_dir_for_db(db_path: &Path) -> PathBuf {

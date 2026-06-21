@@ -1,0 +1,34 @@
+# Rust build artifacts (often root-owned after `sudo make dev`)
+/target
+**/*.rs.bk
+
+# Package outputs
+/release
+/pertisk-proxy-linux-*
+/pertisk-proxy-ingress-linux-*
+/pkg-*
+/.buildx-cache
+/preinstall.sh
+/postinstall.sh
+/preremove.sh
+
+# Admin UI (built inside package.sh or copied explicitly when needed)
+/admin/node_modules
+/admin/dist
+
+# Local runtime data
+/data
+.env
+*.pem
+*.crt
+*.key
+
+# Git / IDE
+.git
+.gitignore
+.cursor
+**/.DS_Store
+
+# Docs and dev-only (not needed in release Docker builds)
+*.md
+Makefile

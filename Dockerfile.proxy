@@ -4,16 +4,18 @@ FROM rust:1-bookworm AS builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-COPY config ./config
-RUN cargo build --release --bin pertisk-proxy
+RUN cargo build --release --bin pertisk-proxy --features admin,acme,dns-challenge,h3-quinn
 
 FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/pertisk-proxy/certs
 COPY --from=builder /app/target/release/pertisk-proxy /usr/local/bin/pertisk-proxy
-COPY config/examples/routes.yaml /etc/pertisk-proxy/routes.yaml
+COPY build/pertisk-proxy.conf /etc/pertisk-proxy/pertisk-proxy.conf
 USER 65532:65532
-EXPOSE 80 443 443/udp
-ENV ROUTES_CONFIG=/etc/pertisk-proxy/routes.yaml
+VOLUME /var/lib/pertisk-proxy
+EXPOSE 80 443 443/udp 9080
+ENV PERTISK_DB_PATH=/var/lib/pertisk-proxy/proxy.sqlite
+ENV PERTISK_MANAGEMENT_ADDR=0.0.0.0:9080
 ENTRYPOINT ["/usr/local/bin/pertisk-proxy"]

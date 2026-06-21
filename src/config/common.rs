@@ -87,17 +87,41 @@ pub fn env_bool_parse(value: &str) -> bool {
     matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
 }
 
-/// HTTP/3 (Quiche/BoringSSL) segfaults on macOS when the ACME feature links OpenSSL.
+/// Default SQLite path when `PERTISK_DB_PATH` is unset.
+pub fn default_db_path() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        PathBuf::from("/var/lib/pertisk-proxy/proxy.sqlite")
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        PathBuf::from("./data/proxy.sqlite")
+    }
+}
+
+pub fn resolve_db_path() -> PathBuf {
+    std::env::var("PERTISK_DB_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| default_db_path())
+}
+
+/// HTTP/3 (Quiche/BoringSSL) conflicts with ACME (OpenSSL) when both are linked.
 pub fn resolve_enable_h3(requested: bool) -> bool {
     if !requested {
         return false;
     }
-    #[cfg(target_os = "macos")]
-    if cfg!(feature = "acme") {
+    #[cfg(all(feature = "acme", feature = "h3-quiche"))]
+    {
         tracing::warn!(
-            "ENABLE_H3 is set but HTTP/3 is disabled on macOS when ACME/OpenSSL is enabled; \
-             build with --no-default-features --features admin for local HTTP/3, or deploy on Linux"
+            "ENABLE_H3 is set but HTTP/3 (Quiche) is disabled when ACME is enabled; \
+             rebuild with --no-default-features --features admin,h3-quiche for Quiche-only HTTP/3, \
+             or use the default h3-quinn backend on Linux"
         );
+        return false;
+    }
+    #[cfg(all(target_os = "macos", not(feature = "h3-quinn"), not(feature = "h3-quiche")))]
+    {
+        tracing::warn!("ENABLE_H3 is set but HTTP/3 was not compiled in");
         return false;
     }
     true

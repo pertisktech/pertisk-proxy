@@ -10,14 +10,7 @@ INGRESS_FEATURES ?= ingress
 PERTISK_DB_PATH ?= ./data/proxy.sqlite
 # Optional one-time migration when DB is empty (legacy routes.yaml)
 ROUTES_CONFIG ?=
-# macOS: build without ACME/OpenSSL so HTTP/3 (Quiche) is stable locally. Linux keeps full features.
-ifeq ($(shell uname -s),Darwin)
-ENABLE_H3 ?= true
-PROXY_CARGO_FEATURES = --no-default-features --features admin
-else
-ENABLE_H3 ?= true
 PROXY_CARGO_FEATURES = --features admin
-endif
 PROXY_MODE ?= performance
 LOG_LEVEL ?= info
 
@@ -75,16 +68,24 @@ fix-perms:
 	@if [ "$$(id -u)" -ne 0 ]; then \
 		echo "Run: sudo make fix-perms"; exit 1; \
 	fi
-	chown -R $(DEV_USER):staff admin/node_modules admin/dist data 2>/dev/null || true
-	@echo "Fixed ownership for admin/node_modules, admin/dist, and data/"
+	chown -R $(DEV_USER):staff admin/node_modules admin/dist data target 2>/dev/null || true
+	@echo "Fixed ownership for admin/node_modules, admin/dist, data/, and target/"
 
 admin-dist:
+	@if [ -d admin/dist/assets ] && [ ! -w admin/dist/assets ]; then \
+		echo "admin/dist is not writable (usually from 'sudo make dev'). Run: sudo make fix-perms"; exit 1; \
+	fi
 	@echo "Checking admin UI build cache..."
 	@if [ -d admin/dist ] && [ -z "$$(find admin/src admin/public admin/index.html admin/package.json admin/pnpm-lock.yaml -type f -newer admin/dist 2>/dev/null | head -n 1)" ]; then \
 		echo "admin/dist is up to date; skipping build."; \
 	else \
 		echo "Building admin UI..."; \
-		if [ ! -d admin/node_modules ]; then $(MAKE) install-admin; fi && (cd admin && $(RUN_AS_USER)pnpm run build); \
+		if [ ! -d admin/node_modules ]; then $(MAKE) install-admin; fi; \
+		rm -rf admin/dist 2>/dev/null || { \
+			echo "Cannot clean admin/dist (files may be owned by root after 'sudo make dev')."; \
+			echo "Run: sudo make fix-perms"; exit 1; \
+		}; \
+		cd admin && $(RUN_AS_USER)pnpm run build; \
 	fi
 
 dev-admin:
