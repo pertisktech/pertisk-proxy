@@ -333,7 +333,7 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
         </>
       )}
 
-      <Modal open={modal} onClose={() => setModal(false)} title={editRef ? 'Edit site' : 'Add site'}>
+      <Modal open={modal} onClose={() => setModal(false)} title={editRef ? 'Edit site' : 'Add site'} wide protect={saving}>
         <form onSubmit={onSubmit} className="space-y-3">
           <label className="block text-sm">
             Host

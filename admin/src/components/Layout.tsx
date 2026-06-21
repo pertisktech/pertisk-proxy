@@ -112,7 +112,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
         )}
       </aside>
 
-      <div className="flex min-h-screen flex-1 flex-col">
+      <div className="flex min-h-screen flex-1 flex-col bg-bg">
         <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-surface px-4">
           <div className="flex items-center gap-3">
             <button type="button" className="lg:hidden" onClick={() => setOpen((v) => !v)}>
@@ -142,7 +142,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
             </button>
           </div>
         </header>
-        <main className="flex-1 overflow-auto p-4">
+        <main className="flex-1 overflow-auto bg-bg p-4">
           <Outlet />
         </main>
       </div>

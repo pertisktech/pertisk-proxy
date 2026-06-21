@@ -163,7 +163,7 @@ export function Gateways() {
         </>
       )}
 
-      <Modal open={modal} onClose={() => setModal(false)} title={editRef ? 'Edit gateway' : 'Add gateway'}>
+      <Modal open={modal} onClose={() => setModal(false)} title={editRef ? 'Edit gateway' : 'Add gateway'} wide protect={saving}>
         <form onSubmit={onSubmit} className="space-y-3">
           <label className="block text-sm">
             Hostname

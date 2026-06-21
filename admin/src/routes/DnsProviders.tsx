@@ -280,7 +280,7 @@ export function DnsProviders() {
 
       <Pagination totalItems={list.length} pageSize={pageSize} page={page} onPageChange={setPage} />
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editingId ? 'Edit DNS provider' : 'Add DNS provider'} wide>
+      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editingId ? 'Edit DNS provider' : 'Add DNS provider'} wide protect={saving}>
         <form onSubmit={handleSubmit} className="space-y-4" autoComplete="off">
           <label className={labelCls}>
             Name

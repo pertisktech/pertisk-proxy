@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { api, type ManagementInfo, type ProxyConfig } from '@/api/client';
+import { useEffect, useMemo, useState } from 'react';
+import { api, type K8sPodRow, type ManagementInfo, type ProxyConfig } from '@/api/client';
 import { Card, Stat } from '@/components/Card';
 
 function formatUptime(secs: number) {
@@ -19,6 +19,38 @@ function formatBytes(bytes: number) {
 function clampPercent(value: number) {
   if (!Number.isFinite(value)) return 0;
   return Math.min(100, Math.max(0, value));
+}
+
+function formatMillicores(millicores: number): string {
+  return `${millicores}m`;
+}
+
+function formatPodMemory(bytes: number): string {
+  if (bytes <= 0) return '0Mi';
+  const mib = bytes / (1024 * 1024);
+  if (mib < 1) return `${Math.max(1, Math.round(bytes / 1024))}Ki`;
+  if (mib < 1024) return `${Math.round(mib)}Mi`;
+  return `${(mib / 1024).toFixed(1)}Gi`;
+}
+
+function deploymentPrefixFromHostname(hostname: string | null | undefined): string | null {
+  const host = hostname?.trim();
+  if (!host) return null;
+  const parts = host.split('-');
+  if (parts.length >= 4) {
+    return parts.slice(0, -2).join('-');
+  }
+  return host;
+}
+
+function filterIngressPods(pods: K8sPodRow[], info: ManagementInfo): K8sPodRow[] {
+  const prefix = deploymentPrefixFromHostname(info.hostname) ?? 'pertisk-proxy-ingress';
+  const namespace = info.leader_election?.namespace?.trim();
+  return pods.filter((pod) => {
+    if (!pod.name.startsWith(`${prefix}-`)) return false;
+    if (namespace && pod.namespace !== namespace) return false;
+    return true;
+  });
 }
 
 function InfoRow({ label, value }: { label: string; value: string }) {
@@ -49,6 +81,8 @@ function UsageBar({ percent, tone }: { percent: number; tone: 'cpu' | 'memory' }
 export function Dashboard() {
   const [info, setInfo] = useState<ManagementInfo | null>(null);
   const [config, setConfig] = useState<ProxyConfig | null>(null);
+  const [k8sPods, setK8sPods] = useState<K8sPodRow[]>([]);
+  const [k8sLoading, setK8sLoading] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -75,9 +109,42 @@ export function Dashboard() {
     };
   }, []);
 
+  useEffect(() => {
+    if (info?.mode !== 'ingress') {
+      setK8sPods([]);
+      return;
+    }
+    let cancelled = false;
+
+    async function loadPods() {
+      setK8sLoading(true);
+      try {
+        const pods = await api.kubernetes.pods();
+        if (!cancelled) setK8sPods(pods);
+      } catch {
+        if (!cancelled) setK8sPods([]);
+      } finally {
+        if (!cancelled) setK8sLoading(false);
+      }
+    }
+
+    loadPods();
+    const timer = setInterval(loadPods, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [info?.mode]);
+
+  const ingressPods = useMemo(
+    () => (info ? filterIngressPods(k8sPods, info) : []),
+    [k8sPods, info],
+  );
+
   if (error) return <p className="text-red-r1">{error}</p>;
   if (!info) return <p className="text-text-secondary">Loading…</p>;
 
+  const isIngress = info.mode === 'ingress';
   const systemMemoryPercent =
     info.memory_used_bytes != null && info.memory_total_bytes
       ? clampPercent((info.memory_used_bytes / info.memory_total_bytes) * 100)
@@ -97,77 +164,79 @@ export function Dashboard() {
         <Stat label="Routes" value={info.route_count} />
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Card>
-          <h2 className="mb-1 text-lg font-semibold">Hardware</h2>
-          <p className="mb-4 text-sm text-text-secondary">Host system information</p>
-          <dl className="space-y-3">
-            <InfoRow label="Hostname" value={info.hostname ?? '—'} />
-            <InfoRow label="OS" value={info.os ?? '—'} />
-            <InfoRow
-              label="CPU"
-              value={
-                info.cpu_count != null
-                  ? `${info.cpu_count} cores${
-                      info.cpu_usage_percent != null ? ` · ${info.cpu_usage_percent.toFixed(1)}% system` : ''
-                    }`
-                  : '—'
-              }
-            />
-            {info.cpu_usage_percent != null ? (
-              <UsageBar percent={info.cpu_usage_percent} tone="cpu" />
-            ) : null}
-            <div>
+      {!isIngress ? (
+        <div className="grid gap-6 xl:grid-cols-2">
+          <Card>
+            <h2 className="mb-1 text-lg font-semibold">Hardware</h2>
+            <p className="mb-4 text-sm text-text-secondary">Host system information</p>
+            <dl className="space-y-3">
+              <InfoRow label="Hostname" value={info.hostname ?? '—'} />
+              <InfoRow label="OS" value={info.os ?? '—'} />
               <InfoRow
-                label="Memory"
+                label="CPU"
                 value={
-                  info.memory_used_bytes != null && info.memory_total_bytes
-                    ? `${formatBytes(info.memory_used_bytes)} / ${formatBytes(info.memory_total_bytes)}${
-                        systemMemoryPercent != null ? ` (${systemMemoryPercent.toFixed(1)}%)` : ''
+                  info.cpu_count != null
+                    ? `${info.cpu_count} cores${
+                        info.cpu_usage_percent != null ? ` · ${info.cpu_usage_percent.toFixed(1)}% system` : ''
                       }`
                     : '—'
                 }
               />
-              {systemMemoryPercent != null ? (
-                <UsageBar percent={systemMemoryPercent} tone="memory" />
+              {info.cpu_usage_percent != null ? (
+                <UsageBar percent={info.cpu_usage_percent} tone="cpu" />
               ) : null}
-            </div>
-            <InfoRow label="IPv4" value={info.ipv4_addrs?.length ? info.ipv4_addrs.join(', ') : '—'} />
-            <InfoRow label="IPv6" value={info.ipv6_addrs?.length ? info.ipv6_addrs.join(', ') : '—'} />
-          </dl>
-        </Card>
+              <div>
+                <InfoRow
+                  label="Memory"
+                  value={
+                    info.memory_used_bytes != null && info.memory_total_bytes
+                      ? `${formatBytes(info.memory_used_bytes)} / ${formatBytes(info.memory_total_bytes)}${
+                          systemMemoryPercent != null ? ` (${systemMemoryPercent.toFixed(1)}%)` : ''
+                        }`
+                      : '—'
+                  }
+                />
+                {systemMemoryPercent != null ? (
+                  <UsageBar percent={systemMemoryPercent} tone="memory" />
+                ) : null}
+              </div>
+              <InfoRow label="IPv4" value={info.ipv4_addrs?.length ? info.ipv4_addrs.join(', ') : '—'} />
+              <InfoRow label="IPv6" value={info.ipv6_addrs?.length ? info.ipv6_addrs.join(', ') : '—'} />
+            </dl>
+          </Card>
 
-        <Card>
-          <h2 className="mb-1 text-lg font-semibold">App usage</h2>
-          <p className="mb-4 text-sm text-text-secondary">pertisk-proxy process CPU and memory</p>
-          <div className="space-y-5">
-            <div>
-              <div className="flex items-baseline justify-between gap-3">
-                <span className="text-sm text-text-secondary">CPU</span>
-                <span className="font-mono text-sm">
-                  {processCpu != null ? `${processCpu.toFixed(1)}%` : '—'}
-                </span>
+          <Card>
+            <h2 className="mb-1 text-lg font-semibold">App usage</h2>
+            <p className="mb-4 text-sm text-text-secondary">pertisk-proxy process CPU and memory</p>
+            <div className="space-y-5">
+              <div>
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-sm text-text-secondary">CPU</span>
+                  <span className="font-mono text-sm">
+                    {processCpu != null ? `${processCpu.toFixed(1)}%` : '—'}
+                  </span>
+                </div>
+                {processCpu != null ? <UsageBar percent={processCpu} tone="cpu" /> : null}
               </div>
-              {processCpu != null ? <UsageBar percent={processCpu} tone="cpu" /> : null}
-            </div>
-            <div>
-              <div className="flex items-baseline justify-between gap-3">
-                <span className="text-sm text-text-secondary">Memory</span>
-                <span className="font-mono text-sm">
-                  {info.process_memory_bytes != null
-                    ? `${formatBytes(info.process_memory_bytes)}${
-                        processMemoryPercent != null ? ` · ${processMemoryPercent.toFixed(1)}% of host` : ''
-                      }`
-                    : '—'}
-                </span>
+              <div>
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-sm text-text-secondary">Memory</span>
+                  <span className="font-mono text-sm">
+                    {info.process_memory_bytes != null
+                      ? `${formatBytes(info.process_memory_bytes)}${
+                          processMemoryPercent != null ? ` · ${processMemoryPercent.toFixed(1)}% of host` : ''
+                        }`
+                      : '—'}
+                  </span>
+                </div>
+                {processMemoryPercent != null ? (
+                  <UsageBar percent={processMemoryPercent} tone="memory" />
+                ) : null}
               </div>
-              {processMemoryPercent != null ? (
-                <UsageBar percent={processMemoryPercent} tone="memory" />
-              ) : null}
             </div>
-          </div>
-        </Card>
-      </div>
+          </Card>
+        </div>
+      ) : null}
 
       <Card>
         <h2 className="mb-1 text-lg font-semibold">Configuration</h2>
@@ -193,6 +262,74 @@ export function Dashboard() {
           </dl>
         </div>
       </Card>
+
+      {isIngress ? (
+        <Card>
+          <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+            <div>
+              <h2 className="text-lg font-semibold">Ingress pods</h2>
+              <p className="text-sm text-text-secondary">
+                Pods for this controller deployment only (refreshes every 10s)
+              </p>
+            </div>
+            <span className="text-sm text-text-secondary">
+              {k8sLoading ? 'Loading…' : `${ingressPods.length} pod${ingressPods.length === 1 ? '' : 's'}`}
+            </span>
+          </div>
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <table className="min-w-full text-left text-sm">
+              <thead className="border-b border-border bg-surface-elevated text-text-secondary">
+                <tr>
+                  <th className="px-4 py-3 font-medium">Name</th>
+                  <th className="px-4 py-3 font-medium">Namespace</th>
+                  <th className="px-4 py-3 font-medium">Phase</th>
+                  <th className="px-4 py-3 font-medium">Ready</th>
+                  <th className="px-4 py-3 font-medium">Restarts</th>
+                  <th className="px-4 py-3 font-medium">CPU</th>
+                  <th className="px-4 py-3 font-medium">Memory</th>
+                  <th className="px-4 py-3 font-medium">Pod IP</th>
+                  <th className="px-4 py-3 font-medium">Node</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ingressPods.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-8 text-center text-text-secondary">
+                      {k8sLoading ? 'Loading pods…' : 'No ingress controller pods found'}
+                    </td>
+                  </tr>
+                ) : (
+                  ingressPods.map((pod) => (
+                    <tr key={`${pod.namespace}/${pod.name}`} className="border-t border-border hover:bg-hover/50">
+                      <td className="max-w-[220px] truncate px-4 py-3 font-medium" title={pod.name}>
+                        {pod.name}
+                      </td>
+                      <td className="px-4 py-3">{pod.namespace}</td>
+                      <td className="px-4 py-3">{pod.phase}</td>
+                      <td className="px-4 py-3">{pod.ready}</td>
+                      <td className="px-4 py-3">{pod.restarts ?? 0}</td>
+                      <td className="px-4 py-3">
+                        {pod.cpu_usage_millicores != null ? formatMillicores(pod.cpu_usage_millicores) : 'n/a'}
+                      </td>
+                      <td className="px-4 py-3">
+                        {pod.memory_usage_bytes != null ? formatPodMemory(pod.memory_usage_bytes) : 'n/a'}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs">{pod.pod_ip ?? 'n/a'}</td>
+                      <td className="px-4 py-3">{pod.node_name ?? pod.node ?? 'n/a'}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          {info.leader_election?.enabled ? (
+            <p className="mt-3 text-xs text-text-secondary">
+              Leader election: {info.leader_election.is_leader ? 'this pod is leader' : 'standby'} ·{' '}
+              {info.leader_election.namespace}/{info.leader_election.lease_name}
+            </p>
+          ) : null}
+        </Card>
+      ) : null}
     </div>
   );
 }

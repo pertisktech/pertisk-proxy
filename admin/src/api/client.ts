@@ -74,6 +74,18 @@ export type Site = {
 };
 
 export type K8sNamespaceRow = { name: string; created_at?: string | null };
+export type K8sPodRow = {
+  name: string;
+  namespace: string;
+  phase: string;
+  node?: string | null;
+  node_name?: string | null;
+  pod_ip?: string | null;
+  ready: string;
+  restarts?: number;
+  cpu_usage_millicores?: number | null;
+  memory_usage_bytes?: number | null;
+};
 export type K8sTlsSecretRow = { namespace: string; name: string; expires_at?: string | null };
 export type K8sServicePortDetail = {
   port: number;
@@ -287,6 +299,12 @@ export const api = {
   },
   kubernetes: {
     namespaces: () => request<K8sNamespaceRow[]>('/kubernetes/namespaces'),
+    pods: (params?: { namespace?: string }) => {
+      const search = new URLSearchParams();
+      if (params?.namespace?.trim()) search.set('namespace', params.namespace.trim());
+      const q = search.toString();
+      return request<K8sPodRow[]>(q ? `/kubernetes/pods?${q}` : '/kubernetes/pods');
+    },
     tlsSecrets: () => request<K8sTlsSecretRow[]>('/kubernetes/tls-secrets'),
     services: (params?: { namespace?: string }) => {
       const search = new URLSearchParams();

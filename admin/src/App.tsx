@@ -49,7 +49,13 @@ function Protected({
     if (ok) onAuthed?.();
   }, [ok, onAuthed]);
 
-  if (ok === null) return <div className="flex min-h-screen items-center justify-center text-text-secondary">Loading…</div>;
+  if (ok === null) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg text-text-secondary">
+        Loading…
+      </div>
+    );
+  }
   if (!ok) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }

@@ -1,10 +1,13 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Moon, Sun } from 'lucide-react';
 import { api } from '@/api/client';
 import { setToken, getToken, clearToken } from '@/auth';
+import { useTheme } from '@/context/ThemeContext';
 
 export function Login() {
   const navigate = useNavigate();
+  const { toggleTheme, isDark } = useTheme();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authRequired, setAuthRequired] = useState(true);
@@ -45,7 +48,16 @@ export function Login() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-bg p-4">
+    <div className="relative flex min-h-screen items-center justify-center p-4">
+      <button
+        type="button"
+        onClick={toggleTheme}
+        className="absolute right-4 top-4 inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm text-text-secondary hover:bg-hover hover:text-text"
+        title="Toggle theme"
+      >
+        {isDark ? <Sun size={16} /> : <Moon size={16} />}
+        {isDark ? 'Light' : 'Dark'}
+      </button>
       <div className="w-full max-w-md rounded-xl border border-border bg-surface p-8 shadow-md">
         <div className="mb-6 text-center">
           <h1 className="text-2xl font-semibold">Pertisk-Proxy</h1>
@@ -81,7 +93,7 @@ export function Login() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full rounded-md bg-primary px-4 py-2 font-medium text-bg hover:opacity-90 disabled:opacity-50"
+              className="w-full rounded-md bg-primary px-4 py-2 font-medium text-white hover:opacity-90 disabled:opacity-50"
             >
               {loading ? 'Signing in…' : 'Sign in'}
             </button>

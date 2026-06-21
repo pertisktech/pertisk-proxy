@@ -49,6 +49,8 @@ html.light {
   --color-muted: #7a7a9a;
   --color-sidebar: #ebebf5;
   --color-primary: #6d3ef5;
+  --color-bg-gradient-start: #f4f4fb;
+  --color-bg-gradient-end: #ffffff;
 }
 
 * { box-sizing: border-box; }
@@ -58,12 +60,15 @@ html { font-size: 15px; }
 body {
   margin: 0;
   min-height: 100vh;
-  background: linear-gradient(180deg, var(--color-bg-gradient-start), var(--color-bg-gradient-end));
+  background-color: var(--color-bg);
+  background-image: linear-gradient(180deg, var(--color-bg-gradient-start), var(--color-bg-gradient-end));
   color: var(--color-text);
   font-family: var(--font-sans);
 }
 
-#root { min-height: 100vh; }
+#root {
+  min-height: 100vh;
+}
 
 input, textarea, select, button {
   font: inherit;

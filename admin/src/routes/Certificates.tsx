@@ -579,7 +579,7 @@ export function Certificates() {
 
       <Pagination totalItems={tlsList.length} pageSize={pageSize} page={page} onPageChange={setPage} />
 
-      <Modal open={uploadOpen} onClose={() => setUploadOpen(false)} title="Import certificate" wide>
+      <Modal open={uploadOpen} onClose={() => setUploadOpen(false)} title="Import certificate" wide protect={uploading}>
         <form onSubmit={handleUploadSubmit} className="space-y-4">
           {uploadError ? <p className="text-sm text-red-r1">{uploadError}</p> : null}
           <label className={labelCls}>

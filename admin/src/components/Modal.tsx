@@ -9,13 +9,15 @@ export type ModalProps = {
   title: string;
   children: ReactNode;
   wide?: boolean;
+  /** When true, backdrop click and Escape do not close (use Cancel / X to dismiss). */
+  protect?: boolean;
 };
 
-export function Modal({ open, onClose, title, children, wide }: ModalProps) {
+export function Modal({ open, onClose, title, children, wide, protect = false }: ModalProps) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !protect) onClose();
     };
     document.addEventListener('keydown', onKey);
     const prev = document.body.style.overflow;
@@ -24,28 +26,32 @@ export function Modal({ open, onClose, title, children, wide }: ModalProps) {
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
     };
-  }, [open, onClose]);
+  }, [open, onClose, protect]);
 
   if (!open) return null;
 
+  function handleBackdropClick() {
+    if (!protect) onClose();
+  }
+
   return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-      role="presentation"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+      <button
+        type="button"
+        className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm"
+        aria-label="Close dialog"
+        tabIndex={-1}
+        onClick={handleBackdropClick}
+      />
       <div
         role="dialog"
         aria-modal="true"
         className={cn(
-          'max-h-[90vh] w-full overflow-hidden rounded-lg border border-border bg-surface shadow-md',
-          wide ? 'max-w-2xl' : 'max-w-lg',
+          'relative z-10 flex max-h-[90vh] w-full flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-md',
+          wide ? 'max-w-4xl' : 'max-w-xl',
         )}
-        onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-border px-5 py-4">
+        <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-4">
           <h2 className="text-lg font-semibold">{title}</h2>
           <button
             type="button"
@@ -56,7 +62,7 @@ export function Modal({ open, onClose, title, children, wide }: ModalProps) {
             <X size={18} />
           </button>
         </div>
-        <div className="max-h-[calc(90vh-4rem)] overflow-y-auto px-5 py-4">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
       </div>
     </div>,
     document.body,
