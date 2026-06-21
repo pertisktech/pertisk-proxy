@@ -2,8 +2,9 @@
 //!
 //! Omni serves Connect JSON and gRPC-Web on HTTP/1.1 at `/api/<Service>/<Method>`. Classification
 //! follows pertisk-rproxy (header-based). Connect JSON (`Connect-Protocol-Version`) is plain HTTP
-//! passthrough; only native `application/grpc` on `/api/` is forced to HTTP/1.1 gRPC-Web mode so
-//! the path is not stripped and h2c is not used.
+//! passthrough. On the Omni UI host (`omni.pertisk.com` → :7600), native `application/grpc` on
+//! `/api/` is forced to HTTP/1.1 gRPC-Web mode. The machine API host (`api.omni.pertisk.com` →
+//! :8090) is h2c-only and always uses native gRPC upstream even for `/api/` paths.
 
 use http::{header, Method, Uri};
 use pingora_http::{RequestHeader, ResponseHeader};
@@ -34,16 +35,32 @@ pub fn is_grpc_rpc_path(path: &str) -> bool {
         && path.contains('/')
 }
 
+fn request_host(host: &str) -> &str {
+    host.split(':').next().unwrap_or(host).trim()
+}
+
+/// Omni machine API is native h2c gRPC only (port 8090); UI is HTTP/1.1 gRPC-Web on `/api/`.
+pub fn is_machine_api_host(host: &str) -> bool {
+    request_host(host).eq_ignore_ascii_case("api.omni.pertisk.com")
+}
+
+/// Upstreams that speak HTTP/2 prior knowledge only (no HTTP/1.1).
+pub fn is_h2c_only_upstream(host: &str, port: u16) -> bool {
+    port == 8090 || is_machine_api_host(host)
+}
+
 /// Classify gRPC traffic (aligned with pertisk-rproxy header detection).
 pub fn classify_grpc_request(
     headers: &http::HeaderMap,
     method: &Method,
     path: &str,
+    host: &str,
 ) -> (bool, bool) {
     let on_api_rpc = *method == Method::POST && is_grpc_rpc_path(path);
     let mut is_grpc_web = is_grpc_web_request(headers, method, path);
-    // Omni unary `/api/` RPCs may send Content-Type: application/grpc; keep HTTP/1.1 + full path.
-    if on_api_rpc && is_grpc_request(headers) {
+    // Omni UI unary `/api/` RPCs may send Content-Type: application/grpc; keep HTTP/1.1 + full path.
+    // Machine API uses native h2c even on `/api/` paths — do not force gRPC-Web there.
+    if on_api_rpc && is_grpc_request(headers) && !is_machine_api_host(host) {
         is_grpc_web = true;
     }
     let is_grpc = is_grpc_request(headers) || is_grpc_web;
@@ -122,8 +139,8 @@ pub fn is_h3_incompatible_request(headers: &http::HeaderMap, method: &Method, pa
         || (*method == Method::POST && is_grpc_rpc_path(path))
 }
 
-/// h2c upstream: native gRPC only (never for `/api/` gRPC-Web/Connect paths).
-pub fn uses_h2c_upstream(is_grpc: bool, is_grpc_web: bool, _path: &str) -> bool {
+/// h2c upstream: native gRPC only (never for `/api/` gRPC-Web/Connect paths on the UI host).
+pub fn uses_h2c_upstream(is_grpc: bool, is_grpc_web: bool) -> bool {
     is_grpc && !is_grpc_web
 }
 
@@ -342,7 +359,8 @@ mod tests {
         let mut headers = http::HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
         headers.insert("connect-protocol-version", "1".parse().unwrap());
-        let (is_grpc, is_grpc_web) = classify_grpc_request(&headers, &Method::POST, watch);
+        let (is_grpc, is_grpc_web) =
+            classify_grpc_request(&headers, &Method::POST, watch, "omni.pertisk.com");
         assert!(!is_grpc);
         assert!(!is_grpc_web);
         assert!(is_long_lived_api_stream(&Method::POST, watch, &headers));
@@ -353,10 +371,24 @@ mod tests {
         let get = "/api/omni.resources.ResourceService/Get";
         let mut headers = http::HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, "application/grpc".parse().unwrap());
-        let (is_grpc, is_grpc_web) = classify_grpc_request(&headers, &Method::POST, get);
+        let (is_grpc, is_grpc_web) =
+            classify_grpc_request(&headers, &Method::POST, get, "omni.pertisk.com");
         assert!(is_grpc);
         assert!(is_grpc_web);
-        assert!(!uses_h2c_upstream(is_grpc, is_grpc_web, get));
+        assert!(!uses_h2c_upstream(is_grpc, is_grpc_web));
+    }
+
+    #[test]
+    fn machine_api_keeps_native_grpc_on_api_paths() {
+        let get = "/api/cosi.resource.State/Get";
+        let mut headers = http::HeaderMap::new();
+        headers.insert(header::CONTENT_TYPE, "application/grpc".parse().unwrap());
+        let (is_grpc, is_grpc_web) =
+            classify_grpc_request(&headers, &Method::POST, get, "api.omni.pertisk.com");
+        assert!(is_grpc);
+        assert!(!is_grpc_web);
+        assert!(uses_h2c_upstream(is_grpc, is_grpc_web));
+        assert!(is_h2c_only_upstream("api.omni.pertisk.com", 8090));
     }
 
     #[test]
@@ -364,10 +396,11 @@ mod tests {
         let path = "/omni.resources.ResourceService/Watch";
         let mut headers = http::HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, "application/grpc".parse().unwrap());
-        let (is_grpc, is_grpc_web) = classify_grpc_request(&headers, &Method::POST, path);
+        let (is_grpc, is_grpc_web) =
+            classify_grpc_request(&headers, &Method::POST, path, "api.omni.pertisk.com");
         assert!(is_grpc);
         assert!(!is_grpc_web);
-        assert!(uses_h2c_upstream(is_grpc, is_grpc_web, path));
+        assert!(uses_h2c_upstream(is_grpc, is_grpc_web));
     }
 
     #[test]

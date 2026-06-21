@@ -99,8 +99,13 @@ impl ProxyHttp for Gateway {
 
     async fn early_request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<()> {
         let req = session.req_header();
-        let (is_grpc, is_grpc_web) =
-            grpc::classify_grpc_request(&req.headers, &req.method, req.uri.path());
+        let host = request_host(req);
+        let (is_grpc, is_grpc_web) = grpc::classify_grpc_request(
+            &req.headers,
+            &req.method,
+            req.uri.path(),
+            &host,
+        );
         ctx.is_long_lived_stream =
             grpc::is_long_lived_api_stream(&req.method, req.uri.path(), &req.headers);
         if is_grpc {
@@ -262,7 +267,6 @@ impl ProxyHttp for Gateway {
             plan.peer_port,
             &host,
             ctx,
-            req.uri.path(),
         ));
         Ok(peer)
     }
@@ -345,13 +349,14 @@ impl ProxyHttp for Gateway {
         upstream_response: &mut ResponseHeader,
         ctx: &mut Self::CTX,
     ) -> Result<()> {
+        let host = request_host(session.req_header());
         let protocol = downstream_protocol_label(session);
         upstream_response
             .insert_header("Server", format!("pertisk-proxy/{protocol}"))
             .ok();
 
         if is_downstream_tls(session) {
-            if ctx.is_grpc || ctx.is_long_lived_stream {
+            if ctx.is_grpc || ctx.is_long_lived_stream || grpc::is_machine_api_host(&host) {
                 upstream_response.insert_header("Alt-Svc", "clear").ok();
             } else if self.enable_h3 {
                 let alt_svc = format!(
@@ -427,10 +432,11 @@ fn configure_upstream_peer(
     peer_port: u16,
     sni: &str,
     ctx: &RequestCtx,
-    path: &str,
 ) -> HttpPeer {
     let mut peer = HttpPeer::new((peer_host, peer_port), false, sni.to_string());
-    if grpc::uses_h2c_upstream(ctx.is_grpc, ctx.is_grpc_web, path) {
+    if grpc::is_h2c_only_upstream(sni, peer_port)
+        || grpc::uses_h2c_upstream(ctx.is_grpc, ctx.is_grpc_web)
+    {
         peer.options.alpn = ALPN::H2;
         peer.options.max_h2_streams = 128;
         peer.options.h2_ping_interval = Some(grpc::grpc_h2_ping_interval());
