@@ -155,6 +155,14 @@ fn main() -> Result<()> {
 
     #[cfg(feature = "admin")]
     {
+        let sessions = pertisk_proxy::api::new_sessions();
+        tokio_runtime.block_on(async {
+            if let Err(err) =
+                pertisk_proxy::api::load_sessions_from_db(db.as_ref(), &sessions).await
+            {
+                tracing::warn!(error = %err, "failed to load sessions from database");
+            }
+        });
         let admin_state = pertisk_proxy::api::build_state(
             Arc::clone(&router),
             Arc::clone(&cert_store),
@@ -165,6 +173,7 @@ fn main() -> Result<()> {
             #[cfg(feature = "acme")]
             Some(acme_manager.clone()),
             runtime_config.clone(),
+            Some(sessions),
         );
         let admin_addr = pertisk_proxy::api::management_addr();
         tokio_runtime.spawn(async move {

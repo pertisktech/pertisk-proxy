@@ -21,11 +21,12 @@ export function Settings() {
       <Card>
         <h2 className="mb-3 text-lg font-semibold">Security</h2>
         <p className="text-sm text-text-secondary">
-          Management API auth: {authRequired ? 'enabled (PERTISK_ADMIN_PASSWORD)' : 'disabled'}
+          Management API auth: {authRequired ? 'enabled (username/password)' : 'disabled'}
         </p>
         <p className="mt-2 text-sm text-muted">
-          Set <code className="rounded bg-bg px-1">PERTISK_ADMIN_PASSWORD</code> and optionally{' '}
-          <code className="rounded bg-bg px-1">PERTISK_ADMIN_TOKEN</code> on the server.
+          Default credentials on first start: <code className="rounded bg-bg px-1">admin</code> /{' '}
+          <code className="rounded bg-bg px-1">admin</code> (stored in SQLite). Change the password
+          after first login.
         </p>
       </Card>
       <Card>

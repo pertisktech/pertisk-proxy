@@ -1,4 +1,4 @@
-//! SQLite schema: proxy_config, dns_providers, certificates.
+//! SQLite schema: proxy_config, dns_providers, users, sessions, certificates.
 
 use rusqlite::Connection;
 
@@ -17,6 +17,19 @@ pub fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
             credentials TEXT,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username);
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
         CREATE TABLE IF NOT EXISTS certificates (
             id TEXT PRIMARY KEY,
             hosts TEXT NOT NULL,

@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -19,6 +19,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -37,6 +38,19 @@ use crate::Router as ProxyRouter;
 use crate::tls::AcmeManager;
 
 const VERSION: &str = env!("pertisk_proxy_VERSION");
+const SESSION_TTL_SECS: u64 = 86_400;
+
+#[derive(Clone)]
+pub struct SessionEntry {
+    pub username: String,
+    pub expires_at: Instant,
+}
+
+pub type Sessions = Arc<DashMap<String, SessionEntry>>;
+
+pub fn new_sessions() -> Sessions {
+    Arc::new(DashMap::new())
+}
 
 #[derive(Clone)]
 pub struct AdminState {
@@ -46,8 +60,9 @@ pub struct AdminState {
     pub runtime_cfg: RuntimeConfig,
     pub runtime_config: Arc<RwLock<Config>>,
     pub started_at: Instant,
-    pub auth_password: Option<String>,
-    pub session_token: Arc<RwLock<Option<String>>>,
+    pub auth_required: bool,
+    pub env_password: Option<String>,
+    pub sessions: Option<Sessions>,
     pub admin_dist: PathBuf,
     pub dev_origin: Option<String>,
     pub db: Option<Arc<Database>>,
@@ -118,28 +133,64 @@ async fn require_auth_middleware(
     req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if state.auth_password.is_none() {
+    if !state.auth_required {
         return Ok(next.run(req).await);
     }
-    if is_authorized(&state, req.headers()) {
+    if is_authorized(&state, req.headers()).await {
         Ok(next.run(req).await)
     } else {
         Err(StatusCode::UNAUTHORIZED)
     }
 }
 
-fn is_authorized(state: &AdminState, headers: &HeaderMap) -> bool {
-    let token = extract_bearer(headers);
-    let Some(token) = token else {
-        return false;
-    };
-    if let Ok(guard) = state.session_token.try_read() {
-        if guard.as_deref() == Some(token) {
-            return true;
+fn session_ttl_secs() -> u64 {
+    std::env::var("PERTISK_SESSION_TTL_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(SESSION_TTL_SECS)
+}
+
+fn session_username(sessions: &DashMap<String, SessionEntry>, token: &str) -> Option<String> {
+    let now = Instant::now();
+    let entry = sessions.get(token)?;
+    if entry.expires_at > now {
+        Some(entry.username.clone())
+    } else {
+        drop(entry);
+        sessions.remove(token);
+        None
+    }
+}
+
+async fn is_authorized(state: &AdminState, headers: &HeaderMap) -> bool {
+    resolve_username(state, headers).await.is_some()
+}
+
+async fn resolve_username(state: &AdminState, headers: &HeaderMap) -> Option<String> {
+    let token = extract_bearer(headers)?;
+    if let Some(ref sessions) = state.sessions {
+        if let Some(username) = session_username(sessions, token) {
+            return Some(username);
+        }
+        if let Some(ref db) = state.db {
+            if let Ok(Some((username, expires_at))) = db.get_session(token).await {
+                let remaining_secs = (expires_at - chrono::Utc::now()).num_seconds().max(0) as u64;
+                sessions.insert(
+                    token.to_string(),
+                    SessionEntry {
+                        username: username.clone(),
+                        expires_at: Instant::now() + Duration::from_secs(remaining_secs.max(1)),
+                    },
+                );
+                return Some(username);
+            }
         }
     }
-    false
+    None
 }
+
+const DEFAULT_ADMIN_USERNAME: &str = crate::db::DEFAULT_ADMIN_USERNAME;
 
 fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
@@ -179,13 +230,13 @@ async fn auth_config(State(state): State<AdminState>) -> Json<AuthConfigResponse
     Json(AuthConfigResponse {
         mode: "local",
         supports_local: true,
-        auth_required: state.auth_password.is_some(),
+        auth_required: state.auth_required,
     })
 }
 
 #[derive(Deserialize)]
 struct LoginRequest {
-    username: Option<String>,
+    username: String,
     password: String,
 }
 
@@ -200,31 +251,92 @@ async fn auth_login(
     State(state): State<AdminState>,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, (StatusCode, Json<ApiError>)> {
-    let Some(expected) = state.auth_password.as_deref() else {
+    if !state.auth_required {
         return Ok(Json(LoginResponse {
             token: String::new(),
-            username: body.username.unwrap_or_else(|| "admin".into()),
+            username: body.username,
             expires_in: 0,
         }));
-    };
-    if body.password != expected {
+    }
+    let Some(ref sessions) = state.sessions else {
         return Err((
-            StatusCode::UNAUTHORIZED,
+            StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiError {
-                error: "invalid credentials".into(),
+                error: "login not configured".into(),
+            }),
+        ));
+    };
+
+    let username = body.username.trim();
+    if username.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "username required".into(),
             }),
         ));
     }
-    let token = state
-        .session_token
-        .read()
-        .await
-        .clone()
-        .unwrap_or_default();
+
+    let authenticated = if let Some(ref db) = state.db {
+        let Some(hash) = db
+            .get_user_password_hash(username)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiError {
+                        error: e.to_string(),
+                    }),
+                )
+            })?
+        else {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(ApiError {
+                    error: "invalid username or password".into(),
+                }),
+            ));
+        };
+        bcrypt::verify(&body.password, &hash).unwrap_or(false)
+    } else if let Some(ref expected) = state.env_password {
+        username == DEFAULT_ADMIN_USERNAME && body.password == *expected
+    } else {
+        false
+    };
+
+    if !authenticated {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiError {
+                error: "invalid username or password".into(),
+            }),
+        ));
+    }
+
+    let ttl_secs = session_ttl_secs();
+    let token = uuid::Uuid::new_v4().to_string();
+    let expires_at = Instant::now() + Duration::from_secs(ttl_secs);
+    sessions.insert(
+        token.clone(),
+        SessionEntry {
+            username: username.to_string(),
+            expires_at,
+        },
+    );
+    if let Some(ref db) = state.db {
+        let expires_at_chrono = chrono::Utc::now() + chrono::Duration::seconds(ttl_secs as i64);
+        if let Err(err) = db
+            .insert_session(&token, username, expires_at_chrono)
+            .await
+        {
+            warn!(error = %err, "failed to persist session to database");
+        }
+    }
+
     Ok(Json(LoginResponse {
         token,
-        username: body.username.unwrap_or_else(|| "admin".into()),
-        expires_in: 86_400,
+        username: username.to_string(),
+        expires_in: ttl_secs,
     }))
 }
 
@@ -238,9 +350,10 @@ async fn auth_check(
     State(state): State<AdminState>,
     headers: HeaderMap,
 ) -> Json<AuthCheckResponse> {
+    let username = resolve_username(&state, &headers).await;
     Json(AuthCheckResponse {
-        authenticated: state.auth_password.is_none() || is_authorized(&state, &headers),
-        username: Some("admin".into()),
+        authenticated: !state.auth_required || username.is_some(),
+        username,
     })
 }
 
@@ -1000,18 +1113,8 @@ pub fn resolve_admin_dist() -> PathBuf {
 pub fn admin_password() -> Option<String> {
     std::env::var("PERTISK_ADMIN_PASSWORD")
         .ok()
+        .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-}
-
-pub fn session_token() -> String {
-    std::env::var("PERTISK_ADMIN_TOKEN").unwrap_or_else(|_| {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        format!("ptproxy-{seed:x}")
-    })
 }
 
 pub fn management_addr() -> SocketAddr {
@@ -1027,6 +1130,22 @@ pub fn admin_dev_origin() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+pub async fn load_sessions_from_db(db: &Database, sessions: &Sessions) -> Result<()> {
+    let rows = db.load_active_sessions().await?;
+    let now = Instant::now();
+    for (token, username, expires_at) in rows {
+        let remaining_secs = (expires_at - chrono::Utc::now()).num_seconds().max(0) as u64;
+        sessions.insert(
+            token,
+            SessionEntry {
+                username,
+                expires_at: now + Duration::from_secs(remaining_secs.max(1)),
+            },
+        );
+    }
+    Ok(())
+}
+
 pub fn build_state(
     router: Arc<ProxyRouter>,
     cert_store: Arc<CertStore>,
@@ -1036,10 +1155,14 @@ pub fn build_state(
     http01_store: Arc<Http01ChallengeStore>,
     #[cfg(feature = "acme")] acme_manager: Option<Arc<AcmeManager>>,
     runtime_config: Config,
+    sessions: Option<Sessions>,
 ) -> AdminState {
-    let password = admin_password();
-    if password.is_none() {
-        warn!("PERTISK_ADMIN_PASSWORD is not set; management API allows unauthenticated access");
+    let env_password = admin_password();
+    let auth_required = db.is_some() || env_password.is_some();
+    if !auth_required {
+        warn!("PERTISK_ADMIN_PASSWORD is not set and no database configured; management API allows unauthenticated access");
+    } else if db.is_some() {
+        info!("management API requires login (users stored in database)");
     }
     let certs_dir = db
         .as_ref()
@@ -1052,8 +1175,9 @@ pub fn build_state(
         runtime_cfg,
         runtime_config: Arc::new(RwLock::new(runtime_config)),
         started_at: Instant::now(),
-        auth_password: password,
-        session_token: Arc::new(RwLock::new(Some(session_token()))),
+        auth_required,
+        env_password,
+        sessions,
         admin_dist: resolve_admin_dist(),
         dev_origin: admin_dev_origin(),
         db,

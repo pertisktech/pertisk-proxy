@@ -124,7 +124,7 @@ export const api = {
   authConfig: () =>
     request<{ mode: string; supports_local: boolean; auth_required: boolean }>('/auth/config'),
   login: (password: string, username = 'admin') =>
-    request<{ token: string; username: string }>('/auth/login', {
+    request<{ token: string; username: string; expires_in: number }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ password, username }),
     }),

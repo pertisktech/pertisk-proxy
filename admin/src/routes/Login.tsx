@@ -5,12 +5,15 @@ import { setToken, getToken } from '@/auth';
 
 export function Login() {
   const navigate = useNavigate();
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authRequired, setAuthRequired] = useState(true);
+  const [version, setVersion] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    api.version().then((v) => setVersion(v.version));
     api.authConfig().then((c) => {
       setAuthRequired(c.auth_required);
       if (!c.auth_required) navigate('/');
@@ -27,7 +30,7 @@ export function Login() {
     setLoading(true);
     setError('');
     try {
-      const res = await api.login(password);
+      const res = await api.login(password, username);
       if (res.token) setToken(res.token);
       navigate('/');
     } catch (err) {
@@ -41,22 +44,33 @@ export function Login() {
     <div className="flex min-h-screen items-center justify-center bg-bg p-4">
       <div className="w-full max-w-md rounded-xl border border-border bg-surface p-8 shadow-md">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-lg bg-primary/20 text-xl font-bold text-primary">
-            P
-          </div>
           <h1 className="text-2xl font-semibold">Pertisk-Proxy</h1>
           <p className="mt-1 text-sm text-text-secondary">Management console</p>
+          {version ? (
+            <p className="mt-1 font-mono text-xs text-muted">v{version}</p>
+          ) : null}
         </div>
         {authRequired ? (
           <form onSubmit={onSubmit} className="space-y-4">
+            <div>
+              <label className="mb-1 block text-sm text-text-secondary">Username</label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+                className="w-full rounded-md border border-border bg-bg px-3 py-2 outline-none focus:border-primary"
+                autoFocus
+              />
+            </div>
             <div>
               <label className="mb-1 block text-sm text-text-secondary">Password</label>
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
                 className="w-full rounded-md border border-border bg-bg px-3 py-2 outline-none focus:border-primary"
-                autoFocus
               />
             </div>
             {error ? <p className="text-sm text-red-r1">{error}</p> : null}

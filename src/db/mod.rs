@@ -1,4 +1,4 @@
-//! SQLite persistence for sites config, certificates, and DNS providers.
+//! SQLite persistence for sites config, certificates, DNS providers, and admin users.
 
 mod schema;
 
@@ -6,12 +6,36 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
+use bcrypt::{hash, DEFAULT_COST};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
+use tracing::info;
 use uuid::Uuid;
 
 pub use schema::init_schema;
+
+pub const DEFAULT_ADMIN_USERNAME: &str = "admin";
+pub const DEFAULT_ADMIN_PASSWORD: &str = "admin";
+
+fn seed_admin_user(conn: &Connection) -> Result<()> {
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
+    if count > 0 {
+        return Ok(());
+    }
+    let id = Uuid::new_v4().to_string();
+    let password_hash = hash(DEFAULT_ADMIN_PASSWORD, DEFAULT_COST)?;
+    let created_at = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO users (id, username, password_hash, created_at) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![id, DEFAULT_ADMIN_USERNAME, password_hash, created_at],
+    )?;
+    info!(
+        username = DEFAULT_ADMIN_USERNAME,
+        "seeded default admin user (change password after first login)"
+    );
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct Database {
@@ -47,7 +71,101 @@ impl Database {
         }
         let conn = Connection::open(&path)?;
         init_schema(&conn)?;
+        seed_admin_user(&conn)?;
         Ok(Self { path })
+    }
+
+    pub async fn get_user_password_hash(&self, username: &str) -> Result<Option<String>> {
+        let path = self.path.clone();
+        let username = username.to_string();
+        spawn_blocking(move || {
+            let conn = Connection::open(path)?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT password_hash FROM users WHERE username = ?1",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![username])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(row.get(0)?))
+            } else {
+                Ok(None)
+            }
+        })
+        .await?
+    }
+
+    pub async fn insert_session(
+        &self,
+        token: &str,
+        username: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        let path = self.path.clone();
+        let token = token.to_string();
+        let username = username.to_string();
+        let expires_at = expires_at.to_rfc3339();
+        spawn_blocking(move || {
+            let conn = Connection::open(path)?;
+            conn.execute(
+                "INSERT OR REPLACE INTO sessions (token, username, expires_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![token, username, expires_at],
+            )?;
+            Ok::<_, rusqlite::Error>(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    pub async fn get_session(
+        &self,
+        token: &str,
+    ) -> Result<Option<(String, chrono::DateTime<chrono::Utc>)>> {
+        let path = self.path.clone();
+        let token = token.to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        spawn_blocking(move || {
+            let conn = Connection::open(path)?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT username, expires_at FROM sessions WHERE token = ?1 AND expires_at > ?2",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![token, now])?;
+            if let Some(row) = rows.next()? {
+                let username: String = row.get(0)?;
+                let expires_at: String = row.get(1)?;
+                let expires_at = chrono::DateTime::parse_from_rfc3339(&expires_at)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now());
+                Ok(Some((username, expires_at)))
+            } else {
+                Ok(None)
+            }
+        })
+        .await?
+    }
+
+    pub async fn load_active_sessions(
+        &self,
+    ) -> Result<Vec<(String, String, chrono::DateTime<chrono::Utc>)>> {
+        let path = self.path.clone();
+        let now = chrono::Utc::now().to_rfc3339();
+        spawn_blocking(move || {
+            let conn = Connection::open(path)?;
+            let mut stmt = conn.prepare_cached(
+                "SELECT token, username, expires_at FROM sessions WHERE expires_at > ?1",
+            )?;
+            let mut rows = stmt.query(rusqlite::params![now])?;
+            let mut out = Vec::new();
+            while let Some(row) = rows.next()? {
+                let token: String = row.get(0)?;
+                let username: String = row.get(1)?;
+                let expires_at: String = row.get(2)?;
+                let expires_at = chrono::DateTime::parse_from_rfc3339(&expires_at)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now());
+                out.push((token, username, expires_at));
+            }
+            Ok(out)
+        })
+        .await?
     }
 
     pub fn path(&self) -> &PathBuf {
