@@ -1,0 +1,68 @@
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "pertisk-ingress.fullname" . }}
+  labels:
+    {{- include "pertisk-ingress.labels" . | nindent 4 }}
+rules:
+  # List/watch Ingress (cluster-wide or filtered by namespace in controller); create/update/delete for Admin UI "Add Site" / Edit / Delete
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Get/list Secrets (for Ingress spec.tls[].secretName; TLS certs)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  # Custom kinds: PertiskBackend and PertiskIngress (proxy.pertisk.tech)
+  - apiGroups: ["proxy.pertisk.tech"]
+    resources: ["pertiskbackends", "pertiskingresses"]
+    verbs: ["get", "list", "watch"]
+  # Gateway API (gateway.networking.k8s.io)
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "httproutes", "gatewayclasses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gatewayclasses/status", "gateways/status", "httproutes/status"]
+    verbs: ["get", "update", "patch"]
+  # Leases for leader election (when running multiple replicas with autoscaling)
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # Cluster dashboard (admin UI): read-only list for namespaces, pods, deployments, services, nodes
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["list"]
+  # Events (for logging and debugging)
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch"]
+  # Pod runtime metrics (equivalent source for `kubectl top pods`)
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "pertisk-ingress.fullname" . }}
+  labels:
+    {{- include "pertisk-ingress.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "pertisk-ingress.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "pertisk-ingress.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

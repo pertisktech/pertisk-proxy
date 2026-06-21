@@ -1,0 +1,6 @@
+{{- if .Values.installCRDs }}
+{{- $crds := .Files.Get "crds/pertiskbackends.yaml" }}
+{{- if $crds }}
+{{ $crds | nindent 0 }}
+{{- end }}
+{{- end }}

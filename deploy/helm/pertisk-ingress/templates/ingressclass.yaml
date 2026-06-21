@@ -1,0 +1,14 @@
+{{- if .Values.ingressClassResource.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: {{ .Values.ingressClassName }}
+  labels:
+    {{- include "pertisk-ingress.labels" . | nindent 4 }}
+  {{- if .Values.ingressClassResource.default }}
+  annotations:
+    ingressclass.kubernetes.io/is-default-class: "true"
+  {{- end }}
+spec:
+  controller: {{ .Values.ingressClassResource.controller }}
+{{- end }}

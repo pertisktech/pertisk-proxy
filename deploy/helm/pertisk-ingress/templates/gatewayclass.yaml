@@ -1,0 +1,10 @@
+{{- if .Values.gatewayClassResource.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ .Values.gatewayClassName }}
+  labels:
+    {{- include "pertisk-ingress.labels" . | nindent 4 }}
+spec:
+  controllerName: {{ .Values.gatewayClassResource.controllerName }}
+{{- end }}

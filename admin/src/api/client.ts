@@ -49,8 +49,65 @@ export type ManagementInfo = {
   process_memory_bytes?: number | null;
   ipv4_addrs?: string[];
   ipv6_addrs?: string[];
+  gateway_api_enabled?: boolean;
+  helm_enabled?: boolean;
+  ingress_class?: string | null;
+  gateway_class?: string | null;
+  leader_election?: {
+    enabled: boolean;
+    is_leader: boolean;
+    namespace: string;
+    lease_name: string;
+  } | null;
 };
 
+export type Site = {
+  host: string;
+  backend: string;
+  routes: PathRewrite[];
+  ingress_namespace?: string | null;
+  ingress_name?: string | null;
+  k8s_resource_kind?: string | null;
+};
+
+export type K8sNamespaceRow = { name: string; created_at?: string | null };
+export type K8sTlsSecretRow = { namespace: string; name: string; expires_at?: string | null };
+export type K8sServiceRow = {
+  name: string;
+  namespace: string;
+  ports_detail: { port: number; name?: string | null; protocol: string }[];
+};
+export type K8sGatewayRow = {
+  namespace: string;
+  name: string;
+  class?: string | null;
+  hosts: string[];
+  listeners?: { protocol: string; port: number; hostname?: string | null }[];
+  created_at?: string | null;
+};
+
+export type IngressFormRow = {
+  host: string;
+  namespace: string;
+  name: string;
+  service_namespace: string;
+  service_name: string;
+  service_port: number;
+  path: string;
+  path_type: string;
+  tls_secret_namespace?: string;
+  tls_secret_name?: string;
+  ingress_class_name?: string;
+};
+
+export type GatewayFormRow = {
+  host: string;
+  namespace: string;
+  name: string;
+  gateway_class_name?: string;
+  tls_secret_namespace?: string;
+  tls_secret_name?: string;
+};
 export type RouteView = {
   host: string;
   path: string;
@@ -70,12 +127,6 @@ export type PathRewrite = {
   path: string;
   path_type?: string;
   rewrite?: string;
-};
-
-export type Site = {
-  host: string;
-  backend: string;
-  routes: PathRewrite[];
 };
 
 export type TlsSource =
@@ -205,5 +256,65 @@ export const api = {
       }),
     delete: (id: string) =>
       request<{ ok: boolean }>(`/dns-providers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
+  kubernetes: {
+    namespaces: () => request<K8sNamespaceRow[]>('/kubernetes/namespaces'),
+    tlsSecrets: () => request<K8sTlsSecretRow[]>('/kubernetes/tls-secrets'),
+    services: (namespace?: string) => {
+      const q = namespace ? `?namespace=${encodeURIComponent(namespace)}` : '';
+      return request<K8sServiceRow[]>(`/kubernetes/services${q}`);
+    },
+    listIngresses: (namespace?: string) => {
+      const q = namespace ? `?namespace=${encodeURIComponent(namespace)}` : '';
+      return request<{ name: string; namespace: string; hosts: string[]; class?: string | null }[]>(
+        `/kubernetes/ingresses${q}`,
+      );
+    },
+    createIngress: (body: IngressFormRow) =>
+      request<{ namespace: string; name: string }>('/kubernetes/ingresses', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    updateIngress: (namespace: string, name: string, body: IngressFormRow) =>
+      request<{ ok: boolean }>(`/kubernetes/ingresses/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+    deleteIngress: (namespace: string, name: string) =>
+      request<{ ok: boolean }>(
+        `/kubernetes/ingresses/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+        { method: 'DELETE' },
+      ),
+    listGateways: () => request<K8sGatewayRow[]>('/kubernetes/gateways'),
+    createGateway: (body: GatewayFormRow) =>
+      request<{ namespace: string; name: string }>('/kubernetes/gateways', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    updateGateway: (namespace: string, name: string, body: GatewayFormRow) =>
+      request<{ ok: boolean }>(`/kubernetes/gateways/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+    deleteGateway: (namespace: string, name: string) =>
+      request<{ ok: boolean }>(
+        `/kubernetes/gateways/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+        { method: 'DELETE' },
+      ),
+    createGatewaySite: (body: IngressFormRow & { gateway_namespace?: string; gateway_name?: string }) =>
+      request<{ namespace: string; name: string }>('/kubernetes/gateway-sites', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    updateGatewaySite: (namespace: string, name: string, body: IngressFormRow) =>
+      request<{ ok: boolean }>(
+        `/kubernetes/gateway-sites/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+        { method: 'PUT', body: JSON.stringify(body) },
+      ),
+    deleteGatewaySite: (namespace: string, name: string) =>
+      request<{ ok: boolean }>(
+        `/kubernetes/gateway-sites/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+        { method: 'DELETE' },
+      ),
   },
 };

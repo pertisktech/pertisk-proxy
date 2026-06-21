@@ -1,5 +1,8 @@
 //! Management API + admin UI static file server (Axum on `PERTISK_MANAGEMENT_ADDR`).
 
+#[cfg(all(feature = "admin", feature = "ingress"))]
+pub mod kubernetes;
+
 #[cfg(all(feature = "admin", feature = "acme"))]
 pub mod acme;
 
@@ -55,6 +58,14 @@ pub fn new_sessions() -> Sessions {
 }
 
 #[derive(Clone)]
+pub struct LeaderElectionState {
+    pub enabled: bool,
+    pub is_leader: Option<Arc<std::sync::atomic::AtomicBool>>,
+    pub namespace: String,
+    pub lease_name: String,
+}
+
+#[derive(Clone)]
 pub struct AdminState {
     pub router: Arc<ProxyRouter>,
     pub cert_store: Arc<CertStore>,
@@ -72,6 +83,17 @@ pub struct AdminState {
     pub http01_store: Arc<Http01ChallengeStore>,
     pub proxy_log: Arc<ProxyLog>,
     pub proxy_log_enabled: Arc<AtomicBool>,
+    pub viewer_mode: bool,
+    #[cfg(feature = "ingress")]
+    pub kube_client: Option<kube::Client>,
+    #[cfg(feature = "ingress")]
+    pub ingress_class: Option<String>,
+    #[cfg(feature = "ingress")]
+    pub gateway_class: Option<String>,
+    #[cfg(feature = "ingress")]
+    pub gateway_api_enabled: bool,
+    #[cfg(feature = "ingress")]
+    pub leader_election: Option<LeaderElectionState>,
     #[cfg(feature = "acme")]
     pub acme_manager: Option<Arc<AcmeManager>>,
 }
@@ -120,8 +142,55 @@ pub fn router(state: AdminState) -> Router {
             get(dns_providers_get)
                 .put(dns_providers_put)
                 .delete(dns_providers_delete),
+        );
+
+    #[cfg(feature = "ingress")]
+    let protected = protected
+        .route("/api/kubernetes/namespaces", get(kubernetes::kubernetes_namespaces))
+        .route("/api/kubernetes/pods", get(kubernetes::kubernetes_pods))
+        .route("/api/kubernetes/deployments", get(kubernetes::kubernetes_deployments))
+        .route("/api/kubernetes/services", get(kubernetes::kubernetes_services))
+        .route("/api/kubernetes/configmaps", get(kubernetes::kubernetes_configmaps))
+        .route("/api/kubernetes/secrets", get(kubernetes::kubernetes_secrets))
+        .route("/api/kubernetes/tls-secrets", get(kubernetes::kubernetes_tls_secrets))
+        .route(
+            "/api/kubernetes/ingresses",
+            get(kubernetes::kubernetes_ingresses).post(kubernetes::kubernetes_ingresses_create),
         )
-        .layer(middleware::from_fn_with_state(
+        .route(
+            "/api/kubernetes/ingresses/{namespace}/{name}",
+            get(kubernetes::kubernetes_ingress_get)
+                .put(kubernetes::kubernetes_ingress_update)
+                .delete(kubernetes::kubernetes_ingress_delete),
+        )
+        .route(
+            "/api/kubernetes/gateway-sites",
+            post(kubernetes::kubernetes_gateway_sites_create),
+        )
+        .route(
+            "/api/kubernetes/gateway-sites/{namespace}/{name}",
+            get(kubernetes::kubernetes_gateway_site_get)
+                .put(kubernetes::kubernetes_gateway_site_update)
+                .delete(kubernetes::kubernetes_gateway_site_delete),
+        )
+        .route(
+            "/api/kubernetes/gateways",
+            get(kubernetes::kubernetes_gateways).post(kubernetes::kubernetes_gateways_create),
+        )
+        .route(
+            "/api/kubernetes/gateways/{namespace}/{name}",
+            get(kubernetes::kubernetes_gateway_get)
+                .put(kubernetes::kubernetes_gateway_update)
+                .delete(kubernetes::kubernetes_gateway_delete),
+        )
+        .route("/api/kubernetes/httproutes", get(kubernetes::kubernetes_httproutes))
+        .route("/api/kubernetes/nodes", get(kubernetes::kubernetes_nodes))
+        .route("/api/kubernetes/events", get(kubernetes::kubernetes_events))
+        .route(
+            "/api/kubernetes/cluster-summary",
+            get(kubernetes::kubernetes_cluster_summary),
+        );
+    let protected = protected.layer(middleware::from_fn_with_state(
             state.clone(),
             require_auth_middleware,
         ));
@@ -390,6 +459,24 @@ struct ManagementInfo {
     process_memory_bytes: Option<u64>,
     ipv4_addrs: Vec<String>,
     ipv6_addrs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gateway_api_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    helm_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ingress_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gateway_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    leader_election: Option<LeaderElectionInfo>,
+}
+
+#[derive(Serialize)]
+struct LeaderElectionInfo {
+    enabled: bool,
+    is_leader: bool,
+    namespace: String,
+    lease_name: String,
 }
 
 #[derive(Serialize)]
@@ -415,10 +502,14 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
         ipv6_addrs,
     ) = gather_system_info();
     Json(ManagementInfo {
-        mode: "proxy",
+        mode: if state.viewer_mode { "ingress" } else { "proxy" },
         version: VERSION,
         uptime_secs: state.started_at.elapsed().as_secs(),
-        db_path: state.proxy_config.db_path.display().to_string(),
+        db_path: state
+            .db
+            .as_ref()
+            .map(|d| d.path().display().to_string())
+            .unwrap_or_else(|| "(kubernetes)".into()),
         management_addr: cfg.management_addr.to_string(),
         route_count: state.router.route_count(),
         site_count: cfg.sites.len(),
@@ -444,6 +535,39 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
         process_memory_bytes,
         ipv4_addrs,
         ipv6_addrs,
+        gateway_api_enabled: if state.viewer_mode {
+            Some(state.gateway_api_enabled)
+        } else {
+            None
+        },
+        helm_enabled: if state.viewer_mode {
+            Some(std::env::var("PERTISK_HELM_ENABLED")
+                .ok()
+                .map(|v| !matches!(v.as_str(), "0" | "false" | "FALSE" | "no" | "NO"))
+                .unwrap_or(false))
+        } else {
+            None
+        },
+        ingress_class: if state.viewer_mode {
+            state.ingress_class.clone()
+        } else {
+            None
+        },
+        gateway_class: if state.viewer_mode {
+            state.gateway_class.clone()
+        } else {
+            None
+        },
+        leader_election: state.leader_election.as_ref().map(|le| LeaderElectionInfo {
+            enabled: le.enabled,
+            is_leader: le
+                .is_leader
+                .as_ref()
+                .map(|f| f.load(Ordering::Relaxed))
+                .unwrap_or(true),
+            namespace: le.namespace.clone(),
+            lease_name: le.lease_name.clone(),
+        }),
     })
 }
 
@@ -663,6 +787,14 @@ async fn put_config(
     State(state): State<AdminState>,
     Json(mut body): Json<Config>,
 ) -> Result<Json<ReloadResponse>, (StatusCode, Json<ApiError>)> {
+    if state.viewer_mode {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "config is read-only in ingress mode; manage via Kubernetes".into(),
+            }),
+        ));
+    }
     for tls in &mut body.tls {
         tls.expires_at = None;
     }
@@ -1320,10 +1452,15 @@ pub fn resolve_admin_dist() -> PathBuf {
 }
 
 pub fn admin_password() -> Option<String> {
-    std::env::var("PERTISK_ADMIN_PASSWORD")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    for key in ["PERTISK_ADMIN_PASSWORD", "PERTISK_PASSWORD"] {
+        if let Ok(s) = std::env::var(key) {
+            let s = s.trim().to_string();
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+    }
+    None
 }
 
 pub fn management_addr() -> SocketAddr {
@@ -1396,8 +1533,80 @@ pub fn build_state(
         http01_store,
         proxy_log,
         proxy_log_enabled,
+        viewer_mode: false,
+        #[cfg(feature = "ingress")]
+        kube_client: None,
+        #[cfg(feature = "ingress")]
+        ingress_class: None,
+        #[cfg(feature = "ingress")]
+        gateway_class: None,
+        #[cfg(feature = "ingress")]
+        gateway_api_enabled: false,
+        #[cfg(feature = "ingress")]
+        leader_election: None,
         #[cfg(feature = "acme")]
         acme_manager,
+    }
+}
+
+#[cfg(feature = "ingress")]
+pub fn build_ingress_state(
+    router: Arc<ProxyRouter>,
+    cert_store: Arc<CertStore>,
+    ingress_config: crate::config::IngressConfig,
+    runtime_cfg: RuntimeConfig,
+    kube_client: Option<kube::Client>,
+    ingress_class: Option<String>,
+    gateway_class: Option<String>,
+    gateway_api_enabled: bool,
+    leader_election: Option<LeaderElectionState>,
+    runtime_config: Arc<RwLock<Config>>,
+    sessions: Option<Sessions>,
+    http01_store: Arc<Http01ChallengeStore>,
+    proxy_log: Arc<ProxyLog>,
+    proxy_log_enabled: Arc<AtomicBool>,
+    certs_dir: PathBuf,
+) -> AdminState {
+    let env_password = admin_password();
+    let auth_required = env_password.is_some()
+        || std::env::var("PERTISK_API_TOKEN")
+            .ok()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+    if !auth_required {
+        warn!("PERTISK_PASSWORD / PERTISK_API_TOKEN not set; ingress management API allows unauthenticated access");
+    }
+    let proxy_config = ProxyConfig {
+        db_path: certs_dir.clone(),
+        server: ingress_config.server.clone(),
+        auto_https: false,
+        migrate_routes_path: None,
+    };
+    AdminState {
+        router,
+        cert_store,
+        proxy_config,
+        runtime_cfg,
+        runtime_config,
+        started_at: Instant::now(),
+        auth_required,
+        env_password,
+        sessions,
+        admin_dist: resolve_admin_dist(),
+        dev_origin: admin_dev_origin(),
+        db: None,
+        certs_dir,
+        http01_store,
+        proxy_log,
+        proxy_log_enabled,
+        viewer_mode: true,
+        kube_client,
+        ingress_class,
+        gateway_class,
+        gateway_api_enabled,
+        leader_election,
+        #[cfg(feature = "acme")]
+        acme_manager: None,
     }
 }
 

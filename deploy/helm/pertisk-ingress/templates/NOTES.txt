@@ -1,0 +1,46 @@
+Pertisk Ingress Controller has been installed.
+
+1. Get the management URL (viewer-only dashboard and probes):
+
+  export MANAGEMENT_PORT={{ .Values.service.managementPort }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "pertisk-ingress.fullname" . }} $MANAGEMENT_PORT:{{ .Values.service.managementPort }}
+
+  Then open http://127.0.0.1:$MANAGEMENT_PORT (viewer + logs only; no config/cert changes).
+
+2. Use this Ingress class in your Ingress resources:
+
+  spec:
+    ingressClassName: {{ .Values.ingressClassName }}
+
+3. TLS: reference Kubernetes Secrets (type kubernetes.io/tls) in your Ingress:
+
+  spec:
+    tls:
+      - secretName: my-tls-secret
+        hosts:
+          - example.com
+
+4. Probes (liveness/readiness) use the management port:
+   - GET http://<pod-ip>:9080/live
+   - GET http://<pod-ip>:9080/ready
+
+5. To see Backends and Sites in the Admin UI, use either CRDs or standard Ingress (or both). Both show in the same list:
+   CRDs:  kubectl apply -f deploy/helm/pertisk-ingress/examples/pertisk-backend-example.yaml
+          kubectl apply -f deploy/helm/pertisk-ingress/examples/pertisk-ingress-example.yaml
+   Ingress: kubectl apply -f deploy/helm/pertisk-ingress/examples/ingress-example.yaml
+   See deploy/helm/pertisk-ingress/examples/README.md for all examples.
+
+{{ if .Values.autoscaling.enabled }}
+
+6. Autoscaling is enabled (HPA): min {{ .Values.autoscaling.minReplicas }}, max {{ .Values.autoscaling.maxReplicas }}.
+
+7. Leases RBAC is included for leader election when multiple replicas run.
+
+{{ end }}
+
+{{ if eq .Values.service.type "LoadBalancer" }}
+
+{{- if .Values.autoscaling.enabled }}8{{- else }}6{{- end }}. To get the external LoadBalancer IP/hostname (when ready):
+
+  kubectl --namespace {{ .Release.Namespace }} get svc {{ include "pertisk-ingress.fullname" . }} -w
+{{ end }}

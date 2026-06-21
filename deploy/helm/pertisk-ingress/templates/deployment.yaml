@@ -1,0 +1,229 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/yannh/kubernetes-json-schema/master/v1.28.0/deployment.json
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pertisk-ingress.fullname" . }}
+  labels:
+    {{- include "pertisk-ingress.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "pertisk-ingress.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pertisk-ingress.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "pertisk-ingress.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ include "pertisk-ingress.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            - name: management
+              containerPort: 9080
+              protocol: TCP
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.service.http3Port }}
+            - name: http3
+              containerPort: 8443
+              protocol: UDP
+            {{- end }}
+          env:
+            - name: PERTISK_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: PERTISK_LEADER_ELECTION_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: PERTISK_LEADER_ELECTION_ENABLED
+              value: {{ .Values.leaderElection.enabled | quote }}
+            - name: PERTISK_LEADER_ELECTION_NAME
+              value: {{ default (printf "%s-leader" (include "pertisk-ingress.fullname" .)) .Values.leaderElection.leaseName | quote }}
+            - name: PERTISK_LEADER_ELECTION_LEASE_DURATION_SECONDS
+              value: {{ .Values.leaderElection.leaseDurationSeconds | quote }}
+            - name: PERTISK_LEADER_ELECTION_RENEW_INTERVAL_SECONDS
+              value: {{ .Values.leaderElection.renewIntervalSeconds | quote }}
+            - name: PERTISK_HELM_ENABLED
+              value: {{ .Values.helm.enabled | quote }}
+            - name: PERTISK_HELM_RELEASE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['app.kubernetes.io/instance']
+            - name: PERTISK_HELM_NAMESPACE
+              value: {{ default .Release.Namespace .Values.helm.namespace | quote }}
+            - name: PERTISK_HELM_HISTORY_MAX
+              value: {{ .Values.helm.historyMax | quote }}
+            - name: PERTISK_HTTP_ADDR
+              value: {{ .Values.httpAddr | quote }}
+            - name: PERTISK_HTTPS_ADDR
+              value: {{ .Values.httpsAddr | quote }}
+            - name: PERTISK_MANAGEMENT_ADDR
+              value: {{ .Values.managementAddr | quote }}
+            - name: PERTISK_HTTP3_ADDR
+              value: {{ .Values.http3Addr | quote }}
+            - name: PERTISK_HTTP3_ADVERTISED_PORT
+              value: {{ default 443 .Values.service.http3Port | quote }}
+            {{- if .Values.http3 }}
+            - name: PERTISK_HTTP3_MAX_STREAMS
+              value: {{ .Values.http3.maxStreams | quote }}
+            - name: PERTISK_HTTP3_STREAM_RECEIVE_WINDOW
+              value: {{ .Values.http3.streamReceiveWindow | quote }}
+            - name: PERTISK_HTTP3_CONN_RECEIVE_WINDOW
+              value: {{ .Values.http3.connReceiveWindow | quote }}
+            - name: PERTISK_HTTP3_IDLE_TIMEOUT_SECS
+              value: {{ .Values.http3.idleTimeoutSecs | quote }}
+            - name: PERTISK_HTTP3_KEEPALIVE_SECS
+              value: {{ .Values.http3.keepaliveSecs | quote }}
+            {{- end }}
+            - name: PERTISK_INGRESS_MODE
+              value: {{ .Values.runtime.mode | quote }}
+            - name: PERTISK_INGRESS_CLASS
+              value: {{ .Values.ingressClassName | quote }}
+            - name: PERTISK_GATEWAY_CLASS
+              value: {{ .Values.gatewayClassName | quote }}
+            - name: PERTISK_GATEWAY_API_ENABLED
+              value: {{ .Values.gatewayApi.enabled | quote }}
+            - name: PERTISK_GATEWAY_CONTROLLER_NAME
+              value: {{ .Values.gatewayClassResource.controllerName | quote }}
+            {{- if .Values.watchNamespace }}
+            - name: PERTISK_WATCH_NAMESPACE
+              value: {{ .Values.watchNamespace | quote }}
+            {{- end }}
+            - name: PERTISK_CPU_LIMIT_MILLICORES
+              valueFrom:
+                resourceFieldRef:
+                  containerName: {{ .Chart.Name }}
+                  resource: limits.cpu
+                  divisor: 1m
+            {{- if not .Values.runtime.autoWorkerThreads }}
+            - name: PERTISK_WORKER_THREADS
+              value: {{ .Values.runtime.workerThreads | quote }}
+            {{- end }}
+            - name: PERTISK_MAX_BLOCKING_THREADS
+              value: {{ .Values.runtime.maxBlockingThreads | quote }}
+            {{- if .Values.runtime.threadStackSizeKb }}
+            - name: PERTISK_THREAD_STACK_SIZE_KB
+              value: {{ .Values.runtime.threadStackSizeKb | quote }}
+            {{- end }}
+            - name: PERTISK_PROXY_LOG
+              value: {{ .Values.runtime.proxyLog | quote }}
+            - name: PERTISK_LOG_LEVEL
+              value: {{ .Values.logging.level | quote }}
+            - name: PERTISK_LOG_FORMAT
+              value: {{ .Values.logging.format | quote }}
+            {{- if .Values.logging.rustLog }}
+            - name: RUST_LOG
+              value: {{ .Values.logging.rustLog | quote }}
+            {{- end }}
+            {{- if .Values.upstream }}
+            - name: PERTISK_UPSTREAM_POOL_MAX_IDLE_PER_HOST
+              value: {{ .Values.upstream.poolMaxIdlePerHost | quote }}
+            - name: PERTISK_UPSTREAM_POOL_IDLE_TIMEOUT_SECS
+              value: {{ .Values.upstream.poolIdleTimeoutSecs | quote }}
+            - name: PERTISK_UPSTREAM_H2_KEEPALIVE_SECS
+              value: {{ .Values.upstream.h2KeepaliveSecs | quote }}
+            - name: PERTISK_UPSTREAM_H2_KEEPALIVE_TIMEOUT_SECS
+              value: {{ .Values.upstream.h2KeepaliveTimeoutSecs | quote }}
+            {{- end }}
+            - name: PERTISK_AUTH_MODE
+              value: {{ .Values.auth.mode | quote }}
+            {{- if .Values.auth.enabled }}
+            - name: PERTISK_AUTH0_DOMAIN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pertisk-ingress.authSecretName" . }}
+                  key: {{ .Values.auth0.domainKey | quote }}
+                  optional: true
+            - name: PERTISK_AUTH0_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pertisk-ingress.authSecretName" . }}
+                  key: {{ .Values.auth0.clientIdKey | quote }}
+                  optional: true
+            - name: PERTISK_AUTH0_AUDIENCE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pertisk-ingress.authSecretName" . }}
+                  key: {{ .Values.auth0.audienceKey | quote }}
+                  optional: true
+            {{- else }}
+            - name: PERTISK_AUTH0_DOMAIN
+              value: {{ .Values.auth0.domain | quote }}
+            - name: PERTISK_AUTH0_CLIENT_ID
+              value: {{ .Values.auth0.clientId | quote }}
+            - name: PERTISK_AUTH0_AUDIENCE
+              value: {{ .Values.auth0.audience | quote }}
+            {{- end }}
+            {{- if .Values.metrics.enabled }}
+            - name: PERTISK_METRICS_ADDR
+              value: {{ .Values.metrics.addr | quote }}
+            {{- end }}
+            {{- if .Values.auth.enabled }}
+            - name: PERTISK_ADMIN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pertisk-ingress.authSecretName" . }}
+                  key: {{ .Values.auth.usernameKey | quote }}
+            - name: PERTISK_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pertisk-ingress.authSecretName" . }}
+                  key: {{ .Values.auth.passwordKey | quote }}
+            - name: PERTISK_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pertisk-ingress.authSecretName" . }}
+                  key: {{ .Values.auth.apiTokenKey | quote }}
+                  optional: true
+            - name: PERTISK_AUTH_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "pertisk-ingress.authSecretName" . }}
+                  key: {{ .Values.auth.signingSecretKey | quote }}
+                  optional: true
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

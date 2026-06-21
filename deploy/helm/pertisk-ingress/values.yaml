@@ -1,0 +1,313 @@
+# Default values for pertisk-ingress.
+# This is a YAML-formatted file. Declare variables to be passed into your templates.
+# Install into namespace pertisk-proxy: helm upgrade --install pertisk-ingress . -n pertisk-proxy --create-namespace
+
+# -- Number of controller replicas (ignored when autoscaling.enabled; use DaemonSet or multiple replicas + LB for HA)
+replicaCount: 1
+
+# -- HorizontalPodAutoscaler
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 75
+  # -- Memory utilization target (%). Scale when any pod's memory usage vs request exceeds this. Set to 0 to disable memory scaling.
+  targetMemoryUtilizationPercentage: 75
+  # -- Optional: scale on management API requests (e.g. prometheus adapter). Omit to use only CPU/memory.
+  # behavior:
+  #   scaleDown:
+  #     stabilizationWindowSeconds: 300
+  #     policies:
+  #       - type: Percent
+  #         value: 10
+  #         periodSeconds: 60
+
+# -- Controller image (Harbor: docker pull harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress:$version)
+image:
+  registry: harbor.tools.thaidevops.co
+  repository: pertisksoft/pertisk-proxy/ingress
+  tag: "1.0.55" # defaults to Chart appVersion (e.g. 0.1.0) when empty
+  pullPolicy: Always # IfNotPresent, Always, Never
+
+# -- Image pull secrets for private registries
+imagePullSecrets: []
+
+# -- Name override for resources (defaults to chart name)
+nameOverride: ""
+# -- Full name override
+fullnameOverride: ""
+
+# -- Service account: create one and use it (required for RBAC)
+serviceAccount:
+  create: true
+  # -- Annotations for the service account
+  annotations: {}
+  # -- Use existing service account name (ignored if serviceAccount.create is true)
+  name: ""
+
+# -- RBAC: create ClusterRole and ClusterRoleBinding for Ingress, Secret, and custom kinds
+rbac:
+  create: true
+
+# -- Leader election (creates a Lease in the namespace for visibility/coordination)
+leaderElection:
+  enabled: true
+  # -- Lease name (defaults to <release>-leader when empty)
+  leaseName: ""
+  leaseDurationSeconds: 15
+  renewIntervalSeconds: 5
+
+# -- Helm history view in admin UI (requires helm binary in image)
+helm:
+  enabled: true
+  # -- Helm release namespace (defaults to .Release.Namespace when empty)
+  namespace: ""
+  # -- Max history revisions to return
+  historyMax: 20
+
+# -- Install CRDs (PertiskBackend, PertiskIngress) with the chart. Set false if CRDs were applied manually (avoids Helm adoption errors).
+installCRDs: false
+
+# -- Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+# -- Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+    add:
+      - NET_BIND_SERVICE
+
+# -- Ingress class name: Ingress resources with this class are managed by this controller
+ingressClassName: pertisk
+
+# -- Gateway class name: Gateway resources with this class are managed by this controller (Gateway API)
+gatewayClassName: pertisk
+
+# -- Enable Gateway API reconciliation (Gateway + HTTPRoute). Requires Gateway API CRDs in the cluster.
+gatewayApi:
+  enabled: false
+
+# -- Optional: limit controller to a single namespace (leave empty for cluster-wide Ingress)
+watchNamespace: ""
+
+# -- Proxy listen addresses (inside container)
+httpAddr: "0.0.0.0:8080"
+httpsAddr: "0.0.0.0:8443"
+managementAddr: "0.0.0.0:9080"
+# -- HTTP/3 (QUIC) port; set to same as HTTPS or separate (e.g. "0.0.0.0:8443")
+http3Addr: "0.0.0.0:8443"
+
+# -- Runtime worker tuning for ingress process (Tokio runtime)
+runtime:
+  # -- Runtime mode: auto | standard | performance
+  mode: performance
+  # -- Derive worker thread count from pod CPU limit (PERTISK_CPU_LIMIT_MILLICORES). When true, workerThreads is ignored.
+  autoWorkerThreads: true
+  # -- Number of async worker threads (ignored when autoWorkerThreads is true)
+  workerThreads: 4
+  # -- Max blocking thread pool size
+  maxBlockingThreads: 2048
+  # -- Optional stack size per runtime thread in KiB (null to omit)
+  threadStackSizeKb: null
+  # -- Enable proxy access logging (per-request log entries). Disable for high-throughput ingress
+  # deployments: Kubernetes already captures stdout/stderr and per-request logging adds lock contention.
+  proxyLog: false
+
+# PERTISK_LOG_LEVEL (logging.level) controls app log verbosity. Optional logging.rustLog sets
+# RUST_LOG for advanced per-crate filters; PERTISK_LOG_LEVEL still takes precedence when set.
+logging:
+  # -- Log level: trace | debug | info | warn | error
+  level: warn
+  # -- Log format: json | text (ingress default is json when unset)
+  format: json
+  # -- Optional full RUST_LOG filter (e.g. "warn,kube=error"). Leave empty to use level only.
+  rustLog: ""
+
+# -- Upstream HTTP/2 connection pool (proxy -> backend Services)
+upstream:
+  # -- Max idle connections kept open per upstream host (reuse for lower latency under load).
+  poolMaxIdlePerHost: 512
+  # -- Close idle upstream connections after this many seconds.
+  poolIdleTimeoutSecs: 90
+  # -- HTTP/2 PING interval to upstream (seconds).
+  h2KeepaliveSecs: 20
+  # -- HTTP/2 PING ack timeout (seconds).
+  h2KeepaliveTimeoutSecs: 10
+
+# -- HTTP/3 (QUIC) tuning
+# IMPORTANT: HTTP/3 with multiple replicas requires the LoadBalancer to maintain UDP session
+# affinity (route all packets from one QUIC connection to the same pod). If not supported,
+# use replicaCount:1 / autoscaling.minReplicas:1 for QUIC stability, or set http3Enabled:false.
+http3:
+  # -- Max concurrent bidirectional QUIC streams per connection.
+  # Set >= expected concurrent VUs (e.g. 2048 for k6 with 100+ VUs).
+  maxStreams: 2048
+  # -- Per-stream receive window in bytes (default 8 MiB). Increase for high-bandwidth uploads.
+  streamReceiveWindow: 8388608
+  # -- Per-connection receive window in bytes (default 64 MiB).
+  connReceiveWindow: 67108864
+  # -- QUIC connection idle timeout in seconds (0 = no timeout).
+  idleTimeoutSecs: 300
+  # -- QUIC keepalive interval in seconds (0 = disabled).
+  keepaliveSecs: 10
+
+# -- Metrics server (Prometheus)
+metrics:
+  enabled: true
+  # -- Metrics listen address inside container
+  addr: "0.0.0.0:9090"
+  # -- Service port for metrics
+  port: 9090
+  # -- ServiceMonitor for Prometheus Operator
+  serviceMonitor:
+    enabled: false
+    # -- Additional labels for ServiceMonitor
+    labels: {}
+    # -- Scrape endpoint path
+    path: /metrics
+    interval: 15s
+    scrapeTimeout: 10s
+    honorLabels: false
+    # -- Relabelings and metricRelabelings follow Prometheus Operator schema
+    relabelings: []
+    metricRelabelings: []
+
+# -- Extra env vars for the controller container
+extraEnv: []
+
+# -- Admin auth for ingress management UI (env-based, no DB)
+auth:
+  # -- Auth mode for admin login: local | sso | both
+  mode: both
+  enabled: true
+  createSecret: true
+  # -- Existing Secret name. If empty, a Secret named <release>-auth is created.
+  secretName: ""
+  # -- Secret keys for admin credentials, API token, and bearer signing secret
+  usernameKey: "PERTISK_ADMIN"
+  passwordKey: "PERTISK_PASSWORD"
+  apiTokenKey: "PERTISK_API_TOKEN"
+  signingSecretKey: "PERTISK_AUTH_SIGNING_SECRET"
+  # -- Secret values (used when createSecret: true)
+  username: "admin"
+  password: "admin"
+  apiToken: ""
+  # -- Optional signing secret for bearer tokens. If empty, password is used.
+  signingSecret: ""
+
+# -- Auth0 SSO settings (used by ingress admin login)
+auth0:
+  # -- Auth0 tenant domain, e.g. your-tenant.us.auth0.com
+  domain: "dev-od6cfzs2tugxm53g.us.auth0.com"
+  # -- Auth0 application client id
+  clientId: "djuW8aR7VZQeS9SbW4ddnRCitgc6TiKO"
+  # -- Auth0 API audience
+  audience: "https://dev-od6cfzs2tugxm53g.us.auth0.com/api/v2/"
+  # -- Secret key names for Auth0 settings (stored in the auth Secret when auth.createSecret: true)
+  domainKey: "PERTISK_AUTH0_DOMAIN"
+  clientIdKey: "PERTISK_AUTH0_CLIENT_ID"
+  audienceKey: "PERTISK_AUTH0_AUDIENCE"
+
+# -- Resource limits and requests
+resources:
+  limits:
+    cpu: "2"
+    memory: 1Gi
+  requests:
+    cpu: "1"
+    memory: 512Mi
+
+# -- Liveness probe (management API /live)
+livenessProbe:
+  httpGet:
+    path: /live
+    port: management
+  initialDelaySeconds: 10
+  periodSeconds: 30
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -- Readiness probe (management API /ready)
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: management
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -- Service: expose HTTP, HTTPS, management (and optionally HTTP/3 UDP)
+service:
+  type: LoadBalancer
+  # -- ClusterIP, NodePort, or LoadBalancer
+  # type: ClusterIP
+  httpPort: 80
+  httpsPort: 443
+  managementPort: 9080
+  # -- Metrics port (HTTP). Exposed only when metrics.enabled is true.
+  metricsPort: 9090
+  # -- Set to expose HTTP/3 (UDP); 443 is typical. HTTP/3 only works if your LoadBalancer forwards UDP 443 (e.g. NLB/MetalLB; ALB does not).
+  http3Port: 443
+  # -- Annotations for the Service (e.g. cloud LB config)
+  annotations: {}
+  # -- External traffic policy for LoadBalancer/NodePort. "Local" can reduce one network hop and improve latency.
+  externalTrafficPolicy: Cluster
+  # -- Load balancer source ranges (GKE/AWS: restrict client IPs). Set to [] to omit.
+  loadBalancerSourceRanges: []
+  # -- Dual-stack (IPv4 + IPv6): PreferDualStack or RequireDualStack (K8s 1.20+). Set to SingleStack + [IPv4] for IPv4-only clusters.
+  ipFamilyPolicy: PreferDualStack
+  ipFamilies:
+    - IPv4
+    - IPv6
+  # -- Session affinity for login sessions without shared DB. Use ClientIP for ingress mode with multiple replicas.
+  sessionAffinity: "ClientIP"
+  # -- Session affinity configuration (when sessionAffinity is ClientIP).
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+
+# -- Node selector for pod placement
+nodeSelector: {}
+  #node-cloud: hetzner
+
+# -- Tolerations for pod assignment
+tolerations: []
+
+# -- Affinity rules
+affinity: {}
+
+# -- Pod disruption budget: min available (only if replicaCount > 1)
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# -- Optional: create IngressClass resource so users can set ingressClassName: pertisk-proxy
+ingressClassResource:
+  enabled: true
+  # -- IngressClass default (only one default per cluster)
+  default: false
+  # -- Controller string (for IngressClass.spec.controller)
+  controller: pertisk.tech/ingress-controller
+
+# -- Optional: create GatewayClass resource for Gateway API (gatewayClassName: pertisk-proxy)
+gatewayClassResource:
+  enabled: true
+  # -- Controller name (GatewayClass.spec.controllerName)
+  controllerName: pertisk.tech/ingress-controller
+
+# -- Deploy test: Ingress that maps a host (e.g. admin.homelab.thaidevops.co) to the management UI (port 9080)
+adminIngress:
+  enabled: true
+  # -- Hostname for the management UI (viewer-only dashboard)
+  host: admin.talos.thaidevops.co
+  # -- Optional: Secret (type kubernetes.io/tls) in release namespace for HTTPS. Leave empty for HTTP only.
+  tlsSecretName: "admin-talos-tls"

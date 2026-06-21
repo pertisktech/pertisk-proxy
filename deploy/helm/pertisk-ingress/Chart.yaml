@@ -1,0 +1,18 @@
+apiVersion: v2
+name: pertisk-ingress
+description: Pertisk-Proxy Ingress Controller - Kubernetes Ingress with TLS from Secrets, HTTP/1.1, HTTP/2, HTTP/3, compression (zstd, brotli, gzip). Management API is viewer-only.
+type: application
+version: 0.6.8
+appVersion: "v1.0.55"
+keywords:
+  - ingress
+  - proxy
+  - http3
+  - quic
+  - tls
+home: https://github.com/pertisktech/pertisk-proxy
+sources:
+  - https://github.com/pertisktech/pertisk-proxy
+maintainers:
+  - name: Pertisk Tech
+    url: https://github.com/pertisktech

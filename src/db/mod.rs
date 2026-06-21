@@ -427,7 +427,8 @@ impl Database {
     }
 }
 
-fn cert_expiry_from_pem(pem: &[u8]) -> Option<String> {
+/// Parse first certificate in PEM and return its not_after as RFC2822 string.
+pub fn cert_expiry_from_pem(pem: &[u8]) -> Option<String> {
     use std::io::Cursor;
     use x509_parser::pem::Pem;
     use x509_parser::prelude::{FromDer, X509Certificate};
@@ -439,4 +440,57 @@ fn cert_expiry_from_pem(pem: &[u8]) -> Option<String> {
         .to_rfc2822()
         .ok()
         .map(|s| s.to_string())
+}
+
+/// Parse CN and DNS SAN names from the first certificate in PEM.
+pub fn cert_hosts_from_pem(pem: &[u8]) -> Vec<String> {
+    use std::collections::HashSet;
+    use std::io::Cursor;
+    use x509_parser::pem::Pem;
+    use x509_parser::prelude::{FromDer, GeneralName, X509Certificate};
+    let mut reader = Cursor::new(pem);
+    let (pem, _) = match Pem::read(&mut reader) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let (_, cert) = match X509Certificate::from_der(&pem.contents) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let mut hosts = HashSet::new();
+    for cn in cert
+        .subject()
+        .iter_common_name()
+        .flat_map(|cn| cn.as_str().ok())
+    {
+        let cn = cn.trim();
+        if !cn.is_empty() {
+            hosts.insert(cn.to_string());
+        }
+    }
+    if let Ok(Some(san)) = cert.subject_alternative_name() {
+        for name in san.value.general_names.iter() {
+            if let GeneralName::DNSName(dns) = name {
+                let host = dns.trim();
+                if !host.is_empty() {
+                    hosts.insert(host.to_string());
+                }
+            }
+        }
+    }
+    hosts.into_iter().collect()
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CertValidity {
+    pub issued_at: Option<String>,
+    pub expires_at: Option<String>,
+}
+
+/// Parse first certificate in PEM and return issued/expiry timestamps.
+pub fn cert_validity_from_pem(cert_pem: &[u8]) -> CertValidity {
+    CertValidity {
+        issued_at: None,
+        expires_at: cert_expiry_from_pem(cert_pem),
+    }
 }

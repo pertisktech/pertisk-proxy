@@ -2,7 +2,7 @@
 	test check package package-clean package-amd64 package-arm64 package-deb package-rpm \
 	package-proxy package-ingress release release-amd release-arm \
 	deploy-package deploy-package-ingress deploy-remote \
-	deploy-deb deploy-deb-ingress deploy-rpm deploy-rpm-ingress apply-ingress-rbac \
+	deploy-deb deploy-deb-ingress deploy-rpm deploy-rpm-ingress apply-ingress-rbac deploy-ingress-helm \
 	install-admin admin-dist fix-perms dev dev-vite dev-serve dev-admin dev-stop
 
 CARGO ?= cargo
@@ -225,6 +225,13 @@ apply-ingress-rbac:
 	else \
 		kubectl apply -f deploy/kubernetes-rbac.yaml; \
 	fi
+
+# Helm: deploy ingress controller (namespace defaults to pertisk-proxy)
+HELM_RELEASE ?= pertisk-ingress
+HELM_NAMESPACE ?= pertisk-proxy
+deploy-ingress-helm:
+	helm upgrade --install $(HELM_RELEASE) deploy/helm/pertisk-ingress \
+		-n $(HELM_NAMESPACE) --create-namespace
 
 # Remote install DEB/RPM over SSH
 deploy-package:
