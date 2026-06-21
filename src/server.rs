@@ -2,21 +2,24 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use pingora_core::listeners::tls::TlsSettings;
+use pingora_core::listeners::TcpSocketOptions;
+use pingora_core::listeners::TlsAcceptCallbacks;
 use pingora_core::server::configuration::Opt;
 use pingora_core::server::Server;
 use pingora_proxy::http_proxy_service;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::config::ServerConfig;
 use crate::h3::{tcp_bind_addrs, H3Config};
 use crate::proxy::Gateway;
 use crate::runtime::RuntimeConfig;
-use crate::tls::{validate_cert_pair, CertStore};
+use crate::tls::{validate_cert_pair, CertStore, CertStoreSniCallback};
 use crate::Router;
 
 /// HTTP/3 listeners to start after Pingora TCP/TLS bind (avoids concurrent TLS stack init crashes).
 pub struct PendingH3 {
     pub router: Arc<Router>,
+    pub cert_store: Arc<CertStore>,
     pub configs: Vec<H3Config>,
     pub runtime_cfg: RuntimeConfig,
 }
@@ -31,7 +34,8 @@ pub fn run(
     http01_store: Option<Arc<crate::tls::Http01ChallengeStore>>,
     pending_h3: Option<PendingH3>,
 ) -> Result<()> {
-    let tls_paths = resolve_tls_paths(server_config, &cert_store);
+    let https_enabled = https_should_listen(server_config, &cert_store);
+    let sni_enabled = cert_store.host_count() > 0;
 
     info!(
         http = %server_config.http_listen,
@@ -40,25 +44,22 @@ pub fn run(
         https_listeners = ?tcp_bind_addrs(&server_config.https_listen),
         h3_udp = %server_config.h3_udp_listen,
         h3_listeners = ?crate::h3::h3_bind_addrs(&server_config.h3_udp_listen),
-        https_enabled = tls_paths.is_some(),
+        https_enabled,
         h3_enabled = server_config.enable_h3,
-        http2_enabled = tls_paths.is_some() && server_config.enable_h2,
+        http2_enabled = https_enabled && server_config.enable_h2,
         tls_hosts = cert_store.host_count(),
+        tls_sni = sni_enabled,
         auto_https,
         "starting data plane"
     );
-
-    if cert_store.host_count() > 1 {
-        warn!(
-            "multiple site TLS certificates are configured; HTTPS listener uses the default cert until SNI selection is added"
-        );
-    }
 
     let pingora_conf = crate::runtime::pingora_server_conf(runtime_cfg);
     info!(
         pingora_threads = pingora_conf.threads,
         pingora_listener_tasks = pingora_conf.listener_tasks_per_fd,
         pingora_upstream_keepalive = pingora_conf.upstream_keepalive_pool_size,
+        grace_period_seconds = pingora_conf.grace_period_seconds,
+        graceful_shutdown_timeout_seconds = pingora_conf.graceful_shutdown_timeout_seconds,
         tcp_listen_backlog = crate::runtime::tcp_listen_backlog(runtime_cfg),
         runtime_mode = runtime_cfg.resolved_mode.as_str(),
         "pingora runtime tuning"
@@ -79,26 +80,35 @@ pub fn run(
     );
     let mut proxy = http_proxy_service(&server.configuration, gateway);
     for addr in tcp_bind_addrs(&server_config.http_listen) {
-        proxy.add_tcp(&addr);
+        if let Some(opts) = dual_stack_tcp_options(&addr) {
+            proxy.add_tcp_with_settings(&addr, opts);
+        } else {
+            proxy.add_tcp(&addr);
+        }
         info!(addr = %addr, "HTTP listener started");
     }
 
-    if let Some((cert, key)) = tls_paths.as_ref() {
-        validate_cert_pair(std::path::Path::new(cert), std::path::Path::new(key))
-            .with_context(|| format!("HTTPS listener cannot load cert={cert} key={key}"))?;
-    }
-
-        if let Some((cert, key)) = tls_paths {
-        for addr in tcp_bind_addrs(&server_config.https_listen) {
-            let mut tls_settings = TlsSettings::intermediate(&cert, &key)
+    if https_enabled {
+        if let Some(paths) = cert_store.default_paths() {
+            validate_cert_pair(&paths.cert, &paths.key)
+                .with_context(|| format!("invalid default TLS cert={}", paths.cert.display()))?;
+        } else if !sni_enabled {
+            let cert = server_config.tls_cert_path()?;
+            let key = server_config.tls_key_path()?;
+            validate_cert_pair(std::path::Path::new(cert), std::path::Path::new(key))
                 .with_context(|| format!("HTTPS listener cannot load cert={cert} key={key}"))?;
-            if server_config.enable_h2 {
-                tls_settings.enable_h2();
-            }
-            proxy.add_tls_with_settings(&addr, None, tls_settings);
+        }
+
+        for addr in tcp_bind_addrs(&server_config.https_listen) {
+            let tls_settings = build_tls_settings(
+                server_config,
+                Arc::clone(&cert_store),
+                server_config.enable_h2,
+            )?;
+            proxy.add_tls_with_settings(&addr, dual_stack_tcp_options(&addr), tls_settings);
             info!(
                 addr = %addr,
-                cert = %cert,
+                sni = sni_enabled,
                 http2 = server_config.enable_h2,
                 "HTTPS (HTTP/1 + HTTP/2) listener started"
             );
@@ -110,6 +120,7 @@ pub fn run(
     if let Some(h3) = pending_h3 {
         for config in h3.configs {
             let router = Arc::clone(&h3.router);
+            let cert_store = Arc::clone(&h3.cert_store);
             let runtime_cfg = h3.runtime_cfg.clone();
             let udp = config.udp_listen.clone();
             let udp_err = udp.clone();
@@ -131,7 +142,8 @@ pub fn run(
                         }
                     };
                     rt.block_on(async move {
-                        if let Err(err) = crate::h3::run(router, config, &runtime_cfg).await {
+                        if let Err(err) = crate::h3::run(router, config, cert_store, &runtime_cfg).await
+                        {
                             tracing::error!(error = %err, udp = %udp, "HTTP/3 listener stopped");
                         }
                     });
@@ -145,18 +157,48 @@ pub fn run(
     server.run_forever();
 }
 
-fn resolve_tls_paths(
-    server_config: &ServerConfig,
-    cert_store: &CertStore,
-) -> Option<(String, String)> {
-    if let (Ok(cert), Ok(key)) = (server_config.tls_cert_path(), server_config.tls_key_path()) {
-        return Some((cert.to_string(), key.to_string()));
-    }
+/// Dual-stack TCP on `[::]:port` (IPV6_V6ONLY=0), matching UDP QUIC and pertisk-rproxy.
+fn dual_stack_tcp_options(addr: &str) -> Option<TcpSocketOptions> {
+    addr
+        .parse::<std::net::SocketAddr>()
+        .ok()
+        .filter(|a| a.is_ipv6())
+        .map(|_| {
+            let mut opts = TcpSocketOptions::default();
+            opts.ipv6_only = Some(false);
+            opts
+        })
+}
 
-    cert_store.default_paths().map(|paths| {
-        (
-            paths.cert.to_string_lossy().into_owned(),
-            paths.key.to_string_lossy().into_owned(),
-        )
-    })
+fn https_should_listen(server_config: &ServerConfig, cert_store: &CertStore) -> bool {
+    cert_store.host_count() > 0
+        || cert_store.default_paths().is_some()
+        || (server_config.tls_cert_path().is_ok() && server_config.tls_key_path().is_ok())
+}
+
+fn build_tls_settings(
+    server_config: &ServerConfig,
+    cert_store: Arc<CertStore>,
+    enable_h2: bool,
+) -> Result<TlsSettings> {
+    let mut tls_settings = if cert_store.host_count() > 0 {
+        let callbacks: TlsAcceptCallbacks = Box::new(CertStoreSniCallback {
+            store: cert_store,
+        });
+        TlsSettings::with_callbacks(callbacks)?
+    } else if let Some(paths) = cert_store.default_paths() {
+        TlsSettings::intermediate(
+            &paths.cert.to_string_lossy(),
+            &paths.key.to_string_lossy(),
+        )?
+    } else {
+        let cert = server_config.tls_cert_path()?;
+        let key = server_config.tls_key_path()?;
+        TlsSettings::intermediate(cert, key)?
+    };
+
+    if enable_h2 {
+        tls_settings.enable_h2();
+    }
+    Ok(tls_settings)
 }

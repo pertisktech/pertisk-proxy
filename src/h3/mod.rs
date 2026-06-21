@@ -13,6 +13,8 @@ mod settings;
 #[cfg(feature = "h3-quinn")]
 mod quinn_server;
 
+pub use bind::effective_listen_display;
+pub use bind::effective_udp_listen_display;
 pub use bind::h3_bind_addrs;
 pub use bind::tcp_bind_addrs;
 pub use config::H3Config;
@@ -27,6 +29,7 @@ pub use server::run;
 pub async fn run(
     _router: std::sync::Arc<crate::Router>,
     _config: H3Config,
+    _cert_store: std::sync::Arc<crate::tls::CertStore>,
     _runtime_cfg: &crate::runtime::RuntimeConfig,
 ) -> anyhow::Result<()> {
     anyhow::bail!("HTTP/3 support not compiled in (enable h3-quinn or h3-quiche feature)")

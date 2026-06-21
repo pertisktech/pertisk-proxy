@@ -15,8 +15,10 @@ use crate::deny;
 use crate::health::{is_health_path, is_json_health_path, API_HEALTH_BODY};
 use crate::h3::config::H3Config;
 use crate::proxy::forward::resolve_forward;
+use crate::proxy::grpc;
 use crate::router::Router;
 use crate::runtime::RuntimeConfig;
+use crate::tls::{CertStore, CertStoreResolver};
 
 const ALPN_H3: &[u8] = b"h3";
 
@@ -28,7 +30,31 @@ fn env_u64(name: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
-fn build_rustls_config(cert_path: &str, key_path: &str) -> Result<rustls::ServerConfig> {
+fn build_rustls_config(cert_store: Arc<CertStore>) -> Result<rustls::ServerConfig> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    if cert_store.host_count() > 0 {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let resolver = CertStoreResolver::new_arc(Arc::clone(&cert_store), provider.clone());
+        let mut config = rustls::ServerConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])
+            .context("TLS protocol versions")?
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(resolver));
+        config.alpn_protocols = vec![ALPN_H3.to_vec()];
+        return Ok(config);
+    }
+
+    let paths = cert_store
+        .default_paths()
+        .ok_or_else(|| anyhow::anyhow!("no TLS certificates available for HTTP/3"))?;
+    build_rustls_config_from_paths(
+        &paths.cert.to_string_lossy(),
+        &paths.key.to_string_lossy(),
+    )
+}
+
+fn build_rustls_config_from_paths(cert_path: &str, key_path: &str) -> Result<rustls::ServerConfig> {
     let cert_pem = std::fs::read(cert_path).with_context(|| format!("read cert {cert_path}"))?;
     let key_pem = std::fs::read(key_path).with_context(|| format!("read key {key_path}"))?;
     let mut cert_reader = std::io::Cursor::new(cert_pem);
@@ -47,12 +73,17 @@ fn build_rustls_config(cert_path: &str, key_path: &str) -> Result<rustls::Server
     Ok(config)
 }
 
-pub async fn run(router: Arc<Router>, config: H3Config, _runtime_cfg: &RuntimeConfig) -> Result<()> {
+pub async fn run(
+    router: Arc<Router>,
+    config: H3Config,
+    cert_store: Arc<CertStore>,
+    _runtime_cfg: &RuntimeConfig,
+) -> Result<()> {
     let addr: std::net::SocketAddr = config
         .udp_listen
         .parse()
         .with_context(|| format!("invalid H3 UDP address {}", config.udp_listen))?;
-    let rustls_config = build_rustls_config(&config.tls_cert_path, &config.tls_key_path)?;
+    let rustls_config = build_rustls_config(cert_store)?;
     let quic_crypto =
         quinn::crypto::rustls::QuicServerConfig::try_from(Arc::new(rustls_config))
             .context("QuicServerConfig from rustls")?;
@@ -148,6 +179,19 @@ async fn handle_request(
     mut stream: h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
 ) -> Result<()> {
     if try_serve_health(&req, &mut stream).await? {
+        return Ok(());
+    }
+
+    if grpc::is_grpc_like_request(req.headers(), req.method(), req.uri().path()) {
+        send_h3_response(
+            &mut stream,
+            plain_response(
+                http::StatusCode::MISDIRECTED_REQUEST,
+                b"gRPC requires HTTP/2 (Alt-Svc: clear)",
+            ),
+            Bytes::from_static(b"gRPC requires HTTP/2 (Alt-Svc: clear)"),
+        )
+        .await?;
         return Ok(());
     }
 

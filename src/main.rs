@@ -74,6 +74,15 @@ fn main() -> Result<()> {
         .await
         {
             cert_store.reload_from_configs(&runtime_config.tls).ok();
+            if let Err(err) = pertisk_proxy::api::load_db_certs_into_store(
+                db.as_ref(),
+                cert_store.as_ref(),
+                &certs_dir,
+            )
+            .await
+            {
+                tracing::warn!(error = %err, "failed to reload DB certificates after config reconcile");
+            }
         }
     });
 
@@ -166,39 +175,26 @@ fn main() -> Result<()> {
     }
 
     let pending_h3 = if proxy_env.server.enable_h3 {
-        let paths = cert_store.default_paths().or_else(|| {
-            proxy_env
-                .server
-                .tls_cert_path
-                .as_ref()
-                .zip(proxy_env.server.tls_key_path.as_ref())
-                .map(|(cert, key)| pertisk_proxy::tls::CertPaths {
-                    cert: cert.clone(),
-                    key: key.clone(),
-                })
-        });
-
-        if let Some(paths) = paths {
+        if cert_store.host_count() > 0 || cert_store.default_paths().is_some() {
             let configs = h3::h3_bind_addrs(&proxy_env.server.h3_udp_listen)
                 .into_iter()
                 .map(|udp_addr| {
                     info!(udp = %udp_addr, "HTTP/3 listener queued");
-                    H3Config::from_tls_paths(
-                        paths.cert.to_string_lossy(),
-                        paths.key.to_string_lossy(),
-                        udp_addr,
-                    )
+                    H3Config::new(udp_addr)
                 })
                 .collect();
             Some(PendingH3 {
                 router: Arc::clone(&router),
+                cert_store: Arc::clone(&cert_store),
                 configs,
                 runtime_cfg: runtime_cfg.clone(),
             })
+        } else if !runtime_config.tls.iter().any(|t| t.source.is_acme()) {
+            tracing::warn!(
+                "ENABLE_H3 is set but no TLS certificates are available; HTTP/3 disabled"
+            );
+            None
         } else {
-            if !runtime_config.tls.iter().any(|t| t.source.is_acme()) {
-                tracing::warn!("ENABLE_H3 is set but no TLS certificates are available; HTTP/3 disabled");
-            }
             None
         }
     } else {
@@ -221,6 +217,12 @@ async fn load_or_migrate_config(
     migrate_path: Option<&std::path::Path>,
 ) -> Result<Config> {
     if let Some(mut cfg) = db.get_proxy_config().await? {
+        let before = serde_json::to_string(&cfg.tls).ok();
+        pertisk_proxy::proxy_config::normalize_tls_config(&mut cfg.tls);
+        if serde_json::to_string(&cfg.tls).ok().as_deref() != before.as_deref() {
+            db.save_proxy_config(&cfg).await?;
+            info!("normalized duplicate TLS entries in database");
+        }
         info!("loaded proxy config from database");
         return Ok(cfg);
     }

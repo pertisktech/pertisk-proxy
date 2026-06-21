@@ -299,24 +299,45 @@ export function Sites() {
         return;
       }
       const hosts = formWildcard ? [hostToWildcard(host), host] : [host];
+      const mergeAcmeTls = (acmeSource: TlsSource) => {
+        const wildcardKey = formWildcard ? hostToWildcard(host).toLowerCase() : null;
+        const existingIdx = newTls.findIndex((t) => {
+          if (t.source?.type !== 'acme') return false;
+          if (acmeChallengeFromSource(t.source as Extract<TlsSource, { type: 'acme' }>) !== formAcmeChallenge) {
+            return false;
+          }
+          if (wildcardKey) {
+            return (t.hosts ?? []).some((h) => h.trim().toLowerCase() === wildcardKey);
+          }
+          return (t.hosts ?? []).some((h) => h.trim().toLowerCase() === host.trim().toLowerCase());
+        });
+        if (existingIdx >= 0) {
+          const existing = newTls[existingIdx];
+          const mergedHosts = [...new Set([...(existing.hosts ?? []), ...hosts])];
+          newTls = newTls.map((t, i) =>
+            i === existingIdx ? { ...t, hosts: mergedHosts, source: acmeSource } : t,
+          );
+        } else {
+          newTls = [...newTls, { hosts, source: acmeSource }];
+        }
+      };
       if (formAcmeChallenge === 'dns01' && formDnsProviderId) {
         try {
           const provider = await api.dnsProviders.get(formDnsProviderId);
-          const acmeSource: TlsSource = {
+          mergeAcmeTls({
             type: 'acme',
             challenge: 'dns01',
             email: acmeEmailTrim,
             dns_provider: provider.name,
             dns_provider_type: provider.provider_type,
             dns_credentials: provider.credentials ?? undefined,
-          };
-          newTls = [...newTls, { hosts, source: acmeSource }];
+          });
         } catch (err) {
           setSiteError(err instanceof Error ? err.message : 'Failed to load DNS Provider');
           return;
         }
       } else {
-        newTls = [...newTls, { hosts, source: { type: 'acme', challenge: 'http01', email: acmeEmailTrim } }];
+        mergeAcmeTls({ type: 'acme', challenge: 'http01', email: acmeEmailTrim });
       }
     }
 

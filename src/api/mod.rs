@@ -282,9 +282,9 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
         auto_https: state.proxy_config.auto_https,
         runtime_mode: state.runtime_cfg.resolved_mode.as_str().to_string(),
         listeners: ListenerInfo {
-            http: server.http_listen.clone(),
-            https: server.https_listen.clone(),
-            h3_udp: server.h3_udp_listen.clone(),
+            http: crate::h3::effective_listen_display(&server.http_listen),
+            https: crate::h3::effective_listen_display(&server.https_listen),
+            h3_udp: crate::h3::effective_udp_listen_display(&server.h3_udp_listen),
         },
         http3: cfg.http3.clone(),
     })
@@ -341,6 +341,7 @@ async fn acme_http01_challenge(
 
 async fn get_config(State(state): State<AdminState>) -> Result<Json<Config>, (StatusCode, Json<ApiError>)> {
     let mut cfg = state.runtime_config.read().await.clone();
+    crate::proxy_config::normalize_tls_config(&mut cfg.tls);
     if let Some(db) = &state.db {
         enrich_tls_expiries(&mut cfg, db).await;
     }
@@ -365,6 +366,7 @@ async fn put_config(
     for tls in &mut body.tls {
         tls.expires_at = None;
     }
+    crate::proxy_config::normalize_tls_config(&mut body.tls);
     let Some(db) = &state.db else {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
@@ -400,6 +402,11 @@ async fn put_config(
                 }),
             )
         })?;
+    if let Err(err) =
+        load_db_certs_into_store(db.as_ref(), state.cert_store.as_ref(), &state.certs_dir).await
+    {
+        tracing::warn!(error = %err, "config save: failed to reload certificates from database");
+    }
     *state.runtime_config.write().await = body.clone();
     #[cfg(feature = "acme")]
     if let Some(acme) = state.acme_manager.clone() {

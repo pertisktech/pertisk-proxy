@@ -1,4 +1,7 @@
 mod config;
+#[cfg(feature = "h3-quinn")]
+mod resolver;
+mod sni;
 mod store;
 mod validate;
 
@@ -7,6 +10,9 @@ mod dns_01;
 mod acme;
 
 pub use config::{TlsConfig, TlsSource};
+#[cfg(feature = "h3-quinn")]
+pub use resolver::CertStoreResolver;
+pub use sni::CertStoreSniCallback;
 pub use store::{CertPaths, CertStore};
 pub use validate::validate_cert_pair;
 

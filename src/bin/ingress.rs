@@ -54,9 +54,20 @@ fn main() -> Result<()> {
         }
     });
 
+    let cert_store = Arc::new(CertStore::new());
+    if let (Ok(cert), Ok(key)) = (
+        config.server.tls_cert_path(),
+        config.server.tls_key_path(),
+    ) {
+        cert_store
+            .set_global_fallback(cert.into(), key.into())
+            .ok();
+    }
+
     let pending_h3 = if config.server.enable_h3 {
         Some(PendingH3 {
             router: Arc::clone(&router),
+            cert_store: Arc::clone(&cert_store),
             configs: vec![H3Config::from_server(&config.server)?],
             runtime_cfg: runtime_cfg.clone(),
         })
@@ -67,7 +78,7 @@ fn main() -> Result<()> {
     server::run(
         &config.server,
         router,
-        Arc::new(CertStore::new()),
+        cert_store,
         false,
         &runtime_cfg,
         None,

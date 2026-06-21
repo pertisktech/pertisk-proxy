@@ -199,6 +199,7 @@ EnvironmentFile=-/etc/pertisk-proxy/pertisk-proxy.conf
 ExecStart=/usr/bin/pertisk-proxy
 Restart=always
 RestartSec=5
+TimeoutStopSec=30
 LimitNOFILE=65535
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
@@ -226,6 +227,7 @@ EnvironmentFile=-/etc/pertisk-proxy/pertisk-proxy-ingress.conf
 ExecStart=/usr/bin/pertisk-proxy-ingress
 Restart=always
 RestartSec=5
+TimeoutStopSec=30
 LimitNOFILE=65535
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
@@ -246,9 +248,9 @@ cat > build/pertisk-proxy.conf << 'CONF'
 
 PERTISK_DB_PATH=/var/lib/pertisk-proxy/proxy.sqlite
 
-LISTEN_HTTP=0.0.0.0:80
-LISTEN_HTTPS=0.0.0.0:443
-LISTEN_H3_UDP=0.0.0.0:443
+LISTEN_HTTP=[::]:80
+LISTEN_HTTPS=[::]:443
+LISTEN_H3_UDP=[::]:443
 ENABLE_H3=true
 
 # Admin UI + management API (bind locally; put a reverse proxy in front in production)

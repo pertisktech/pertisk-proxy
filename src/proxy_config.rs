@@ -1,7 +1,7 @@
 //! Configuration types for the reverse proxy: path matching, backends, routes, and TLS.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -122,6 +122,109 @@ pub enum TlsSource {
 
 fn default_challenge() -> String {
     "http01".to_string()
+}
+
+fn tls_hosts_set(hosts: &[String]) -> HashSet<String> {
+    hosts
+        .iter()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn acme_wildcard_host(hosts: &[String]) -> Option<String> {
+    hosts
+        .iter()
+        .find(|h| h.trim().starts_with("*."))
+        .map(|h| h.trim().to_ascii_lowercase())
+}
+
+fn acme_sources_equivalent(a: &TlsSource, b: &TlsSource) -> bool {
+    match (a, b) {
+        (
+            TlsSource::Acme {
+                email: e1,
+                challenge: c1,
+                dns_provider: d1,
+                dns_provider_type: t1,
+                ..
+            },
+            TlsSource::Acme {
+                email: e2,
+                challenge: c2,
+                dns_provider: d2,
+                dns_provider_type: t2,
+                ..
+            },
+        ) => e1 == e2 && c1 == c2 && d1 == d2 && t1 == t2,
+        (TlsSource::File { cert: c1, key: k1 }, TlsSource::File { cert: c2, key: k2 }) => {
+            c1 == c2 && k1 == k2
+        }
+        _ => false,
+    }
+}
+
+fn tls_entries_should_merge(a: &TlsConfig, b: &TlsConfig) -> bool {
+    if !acme_sources_equivalent(&a.source, &b.source) {
+        return false;
+    }
+    match (&a.source, &b.source) {
+        (TlsSource::Acme { .. }, TlsSource::Acme { .. }) => {
+            if acme_wildcard_host(&a.hosts).is_some()
+                && acme_wildcard_host(&a.hosts) == acme_wildcard_host(&b.hosts)
+            {
+                return true;
+            }
+            !tls_hosts_set(&a.hosts).is_disjoint(&tls_hosts_set(&b.hosts))
+        }
+        (TlsSource::File { .. }, TlsSource::File { .. }) => true,
+        _ => false,
+    }
+}
+
+/// Merge duplicate TLS rows (e.g. repeated ACME wildcard entries from site saves).
+pub fn normalize_tls_config(tls: &mut Vec<TlsConfig>) {
+    let mut merged: Vec<TlsConfig> = Vec::new();
+    for entry in tls.drain(..) {
+        if let Some(idx) = merged.iter().position(|e| tls_entries_should_merge(e, &entry)) {
+            let existing = &mut merged[idx];
+            for h in entry.hosts {
+                let h = h.trim().to_string();
+                if h.is_empty() {
+                    continue;
+                }
+                if !existing
+                    .hosts
+                    .iter()
+                    .any(|x| x.eq_ignore_ascii_case(&h))
+                {
+                    existing.hosts.push(h);
+                }
+            }
+            existing.expires_at = None;
+        } else {
+            merged.push(entry);
+        }
+    }
+    *tls = merged;
+}
+
+/// True when `*.example.com` covers `app.example.com` (single label only).
+pub fn wildcard_covers_host(wildcard: &str, host: &str) -> bool {
+    let w = wildcard.trim();
+    let h = host.trim().to_ascii_lowercase();
+    if w.is_empty() || h.is_empty() {
+        return false;
+    }
+    if !w.starts_with('*') {
+        return w.eq_ignore_ascii_case(&h);
+    }
+    let suffix = w.strip_prefix('*').unwrap_or(w);
+    if !h.ends_with(suffix) || h.len() <= suffix.len() {
+        return false;
+    }
+    let prefix = &h[..h.len() - suffix.len()];
+    !prefix.is_empty() && !prefix.contains('.')
 }
 
 /// TLS block per host or shared (wildcard).

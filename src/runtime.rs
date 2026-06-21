@@ -208,6 +208,26 @@ pub fn pingora_listener_tasks_per_fd(cfg: &RuntimeConfig) -> usize {
     }
 }
 
+/// Grace period after SIGTERM before Pingora tears down runtimes (default 15s; Pingora built-in default is 300s).
+pub fn grace_period_seconds() -> u64 {
+    const DEFAULT: u64 = 15;
+    std::env::var("PERTISK_GRACE_PERIOD_SECONDS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT)
+}
+
+/// Final runtime shutdown timeout after the grace period (default 10s).
+pub fn graceful_shutdown_timeout_seconds() -> u64 {
+    const DEFAULT: u64 = 10;
+    std::env::var("PERTISK_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT)
+}
+
 /// Build Pingora `ServerConf` tuned from runtime mode.
 pub fn pingora_server_conf(cfg: &RuntimeConfig) -> pingora_core::server::configuration::ServerConf {
     let mut conf = pingora_core::server::configuration::ServerConf::new()
@@ -215,6 +235,8 @@ pub fn pingora_server_conf(cfg: &RuntimeConfig) -> pingora_core::server::configu
 
     conf.threads = pingora_service_threads(cfg);
     conf.listener_tasks_per_fd = pingora_listener_tasks_per_fd(cfg);
+    conf.grace_period_seconds = Some(grace_period_seconds());
+    conf.graceful_shutdown_timeout_seconds = Some(graceful_shutdown_timeout_seconds());
 
     if is_performance_mode(cfg) {
         conf.upstream_keepalive_pool_size = 512;

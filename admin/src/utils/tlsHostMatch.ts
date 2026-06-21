@@ -141,6 +141,18 @@ export function certRowCoversTls(certHosts: string[] | undefined, tlsHosts: stri
   return have.size === wildSet.size && [...have].every((h) => wildSet.has(h));
 }
 
+/** True when `*.example.com` covers `app.example.com` (single DNS label). */
+export function wildcardCoversHost(wildcard: string, host: string): boolean {
+  const w = wildcard.trim();
+  const h = host.trim().toLowerCase();
+  if (!w || !h) return false;
+  if (!w.startsWith('*')) return w.toLowerCase() === h;
+  const suffix = w.slice(1);
+  if (!h.endsWith(suffix) || h.length <= suffix.length) return false;
+  const prefix = h.slice(0, h.length - suffix.length);
+  return prefix.length > 0 && !prefix.includes('.');
+}
+
 /** Match backend `cert_row_matches_tls_config`. */
 export function certRowMatchesTlsConfig(certHosts: string[] | undefined, tlsHosts: string[] | undefined): boolean {
   if (!certRowCoversTls(certHosts, tlsHosts)) return false;
@@ -148,7 +160,9 @@ export function certRowMatchesTlsConfig(certHosts: string[] | undefined, tlsHost
   for (const h of tlsHosts ?? []) {
     const t = h.trim();
     if (!t || t.startsWith('*')) continue;
-    if (!have.has(t)) return false;
+    if (have.has(t)) continue;
+    if ([...have].some((w) => wildcardCoversHost(w, t))) continue;
+    return false;
   }
   return true;
 }

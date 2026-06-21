@@ -57,6 +57,26 @@ pub fn tcp_bind_addrs(listen: &str) -> Vec<String> {
     dual_stack_tcp_bind_addrs(listen)
 }
 
+/// Effective listen address(es) for admin UI and logs.
+/// `0.0.0.0:port` is shown as `[::]:port` on Linux (single dual-stack socket).
+/// On macOS, both `0.0.0.0:port` and `[::]:port` are listed when applicable.
+pub fn effective_listen_display(listen: &str) -> String {
+    let addrs = tcp_bind_addrs(listen);
+    if addrs.len() == 1 {
+        addrs[0].clone()
+    } else {
+        addrs.join(", ")
+    }
+}
+
+/// Effective UDP listen address for admin UI (always one dual-stack socket).
+pub fn effective_udp_listen_display(listen: &str) -> String {
+    h3_bind_addrs(listen)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| listen.to_string())
+}
+
 const UDP_BUFFER_BYTES: usize = 7 * 1024 * 1024;
 
 fn tune_udp_socket(socket: &Socket) -> Result<()> {
@@ -122,5 +142,18 @@ mod tests {
         assert_eq!(h3_bind_addrs("0.0.0.0:443"), vec!["[::]:443"]);
         assert_eq!(tcp_bind_addrs("[::]:80"), vec!["[::]:80"]);
         assert_eq!(tcp_bind_addrs("127.0.0.1:8080"), vec!["127.0.0.1:8080"]);
+    }
+
+    #[test]
+    fn effective_listen_display_unspecified() {
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            effective_listen_display("0.0.0.0:443"),
+            "0.0.0.0:443, [::]:443"
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(effective_listen_display("0.0.0.0:443"), "[::]:443");
+        assert_eq!(effective_udp_listen_display("0.0.0.0:443"), "[::]:443");
+        assert_eq!(effective_listen_display("[::]:80"), "[::]:80");
     }
 }

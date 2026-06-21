@@ -10,6 +10,8 @@ use crate::db::{CertificateRow, Database};
 use crate::proxy_config::{Config, TlsSource};
 use crate::tls::{AcmeManager, CertStore};
 
+use super::load_db_certs_into_store;
+
 static ACME_INFLIGHT: Lazy<DashSet<String>> = Lazy::new(DashSet::new);
 
 fn cert_expires_within_days(expires_at: Option<&String>, days: i64) -> bool {
@@ -60,7 +62,7 @@ pub fn cert_row_covers_tls_hosts(cert_hosts: &[String], tls_hosts: &[String]) ->
     !wildcard_only.is_empty() && have == wildcard_only
 }
 
-/// Every non-wildcard TLS hostname must appear explicitly in the certificate SAN list.
+/// Every non-wildcard TLS hostname must appear in the cert SAN or be covered by a wildcard SAN.
 pub fn cert_row_matches_tls_config(row: &CertificateRow, tls_hosts: &[String]) -> bool {
     if !cert_row_covers_tls_hosts(&row.hosts, tls_hosts) {
         return false;
@@ -71,9 +73,16 @@ pub fn cert_row_matches_tls_config(row: &CertificateRow, tls_hosts: &[String]) -
         if h.is_empty() || h.starts_with('*') {
             continue;
         }
-        if !have.contains(h) {
-            return false;
+        if have.contains(h) {
+            continue;
         }
+        if have
+            .iter()
+            .any(|w| crate::proxy_config::wildcard_covers_host(w, h))
+        {
+            continue;
+        }
+        return false;
     }
     true
 }
@@ -138,15 +147,21 @@ async fn reload_acme_cert_into_store(
 fn acme_hosts_for_order(hosts: &[String], challenge: &str) -> Vec<String> {
     let is_dns01 = challenge.eq_ignore_ascii_case("dns01") || challenge.eq_ignore_ascii_case("dns-01");
     if is_dns01 {
-        // Include apex/subdomain names alongside wildcards in one ACME order (DNS-01).
-        hosts.to_vec()
-    } else {
-        hosts
+        let wildcards: Vec<String> = hosts
             .iter()
-            .filter(|h| !h.starts_with('*'))
+            .filter(|h| h.starts_with('*'))
             .cloned()
-            .collect()
+            .collect();
+        if !wildcards.is_empty() {
+            return wildcards;
+        }
+        return hosts.to_vec();
     }
+    hosts
+        .iter()
+        .filter(|h| !h.starts_with('*'))
+        .cloned()
+        .collect()
 }
 
 fn acme_tls_count(config: &Config) -> usize {
@@ -290,18 +305,6 @@ pub async fn spawn_auto_ssl_for_config(
                     hosts.join(", "),
                     e
                 ),
-            }
-        } else if let Some(row) = cert_rows.iter().find(|row| {
-            row.source_type.eq_ignore_ascii_case("acme") && cert_row_covers_hosts(row, &hosts)
-        }) {
-            tracing::info!(
-                "Auto-SSL: ACME certificate {} for {} does not cover all configured hostnames ({}) — re-obtaining",
-                row.id,
-                row.hosts.join(", "),
-                hosts.join(", ")
-            );
-            if db.delete_certificate(&row.id).await.ok() == Some(true) {
-                cert_store.remove_for_hosts(&row.hosts);
             }
         }
 
@@ -461,6 +464,10 @@ pub async fn spawn_auto_ssl_for_config(
         tracing::info!("Auto-SSL sweep: no new certificate tasks started");
     } else {
         tracing::info!("Auto-SSL sweep: started {} background obtain task(s)", spawned);
+    }
+
+    if let Err(e) = load_db_certs_into_store(db.as_ref(), cert_store.as_ref(), &certs_dir).await {
+        tracing::warn!("Auto-SSL: failed to sync certificates into memory store: {}", e);
     }
 }
 

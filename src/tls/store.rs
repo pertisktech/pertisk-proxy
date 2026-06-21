@@ -122,7 +122,30 @@ impl CertStore {
     }
 
     pub fn has_cert_for_host(&self, host: &str) -> bool {
-        self.get(host).is_some()
+        self.lookup_sni(host).is_some()
+    }
+
+    /// Exact hostname or wildcard match only (no global default fallback).
+    pub fn lookup_sni(&self, host: &str) -> Option<CertPaths> {
+        let g = self.inner.read().ok()?;
+        let host = normalize_host(host);
+        if let Some(paths) = g.by_host.get(&host) {
+            return Some(paths.clone());
+        }
+
+        let mut best: Option<(usize, CertPaths)> = None;
+        for (key, paths) in &g.by_host {
+            if let Some(suffix) = key.strip_prefix("*.") {
+                let suffix = format!(".{suffix}");
+                if host.ends_with(&suffix) && host.len() > suffix.len() {
+                    let len = suffix.len();
+                    if best.as_ref().map(|(l, _)| *l).unwrap_or(0) < len {
+                        best = Some((len, paths.clone()));
+                    }
+                }
+            }
+        }
+        best.map(|(_, paths)| paths)
     }
 
     /// Register certificate file paths for the given hostnames.
@@ -177,32 +200,46 @@ impl CertStore {
     }
 
     pub fn get(&self, host: &str) -> Option<CertPaths> {
-        let g = self.inner.read().ok()?;
-        let host = normalize_host(host);
-        if let Some(paths) = g.by_host.get(&host) {
-            return Some(paths.clone());
-        }
-
-        let mut best: Option<(usize, CertPaths)> = None;
-        for (key, paths) in &g.by_host {
-            if let Some(suffix) = key.strip_prefix("*.") {
-                let suffix = format!(".{suffix}");
-                if host.ends_with(&suffix) && host.len() > suffix.len() {
-                    let len = suffix.len();
-                    if best.as_ref().map(|(l, _)| *l).unwrap_or(0) < len {
-                        best = Some((len, paths.clone()));
-                    }
-                }
-            }
-        }
-        if let Some((_, paths)) = best {
-            return Some(paths);
-        }
-
-        g.default.clone()
+        self.lookup_sni(host).or_else(|| {
+            self.inner
+                .read()
+                .ok()
+                .and_then(|g| g.default.clone())
+        })
     }
 }
 
 fn normalize_host(host: &str) -> String {
     host.split(':').next().unwrap_or(host).to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lookup_sni_does_not_use_unrelated_default() {
+        let store = CertStore::new();
+        store.insert_paths_for_hosts(
+            &["*.amd.thaidevops.co".into()],
+            CertPaths {
+                cert: "/amd.pem".into(),
+                key: "/amd.key".into(),
+            },
+        );
+        store.insert_paths_for_hosts(
+            &["*.apps.pertisk.com".into()],
+            CertPaths {
+                cert: "/apps.pem".into(),
+                key: "/apps.key".into(),
+            },
+        );
+        assert_eq!(
+            store.lookup_sni("gitlab.apps.pertisk.com").unwrap().cert,
+            PathBuf::from("/apps.pem")
+        );
+        assert!(store.lookup_sni("unknown.example.com").is_none());
+        // get() still falls back to default for clients without a matching SNI entry.
+        assert!(store.get("unknown.example.com").is_some());
+    }
 }

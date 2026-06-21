@@ -1,10 +1,14 @@
 pub mod routes;
 pub mod forward;
 pub mod apply;
+pub mod grpc;
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use pingora_core::listeners::ALPN;
+use pingora_core::modules::http::grpc_web::{GrpcWeb, GrpcWebBridge};
+use pingora_core::modules::http::HttpModules;
 use pingora_core::upstreams::peer::HttpPeer;
 use pingora_core::Result;
 use pingora_http::{RequestHeader, ResponseHeader};
@@ -21,6 +25,8 @@ pub struct RequestCtx {
     pub strip_prefix: Option<String>,
     pub request_headers: Vec<(String, String)>,
     pub response_headers: Vec<(String, String)>,
+    pub is_grpc: bool,
+    pub is_grpc_web: bool,
 }
 
 impl From<crate::proxy::forward::MiddlewareAction> for RequestCtx {
@@ -29,6 +35,8 @@ impl From<crate::proxy::forward::MiddlewareAction> for RequestCtx {
             strip_prefix: mw.strip_prefix,
             request_headers: mw.request_headers,
             response_headers: mw.response_headers,
+            is_grpc: false,
+            is_grpc_web: false,
         }
     }
 }
@@ -86,6 +94,32 @@ impl ProxyHttp for Gateway {
 
     fn new_ctx(&self) -> Self::CTX {
         RequestCtx::default()
+    }
+
+    fn init_downstream_modules(&self, modules: &mut HttpModules) {
+        modules.add_module(Box::new(GrpcWeb));
+    }
+
+    async fn early_request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<()> {
+        let req = session.req_header();
+        let (is_grpc, is_grpc_web) =
+            grpc::classify_grpc_request(&req.headers, &req.method, req.uri.path());
+        if !is_grpc {
+            return Ok(());
+        }
+
+        if is_grpc_web && grpc::uses_grpc_web_bridge(true, req.uri.path()) {
+            grpc::normalize_grpc_web_content_type(session.req_header_mut());
+            session
+                .downstream_modules_ctx
+                .get_mut::<GrpcWebBridge>()
+                .expect("GrpcWeb module registered")
+                .init();
+        }
+
+        ctx.is_grpc = true;
+        ctx.is_grpc_web = is_grpc_web;
+        Ok(())
     }
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
@@ -181,10 +215,25 @@ impl ProxyHttp for Gateway {
             .uri
             .path_and_query()
             .map(|pq| pq.as_str())
-            .unwrap_or(&path);
+            .unwrap_or(&path)
+            .to_string();
 
-        if let Ok(plan) = resolve_forward(self.router.snapshot().as_ref(), &host, path_q) {
+        if let Ok(plan) = resolve_forward(self.router.snapshot().as_ref(), &host, &path_q) {
+            let is_grpc = ctx.is_grpc;
+            let is_grpc_web = ctx.is_grpc_web;
             *ctx = plan.middleware.into();
+            ctx.is_grpc = is_grpc;
+            ctx.is_grpc_web = is_grpc_web;
+        }
+
+        if ctx.is_grpc {
+            let req = session.req_header();
+            if let Err(msg) = grpc::validate_downstream(req, session, ctx.is_grpc_web) {
+                tracing::warn!(host = %host, path = %path_q, error = msg, "invalid gRPC request");
+                grpc::respond_error(session, 2, msg, ctx.is_grpc_web).await?;
+                return Ok(true);
+            }
+            tracing::debug!(host = %host, path = %path_q, grpc_web = ctx.is_grpc_web, "gRPC request");
         }
 
         Ok(false)
@@ -205,14 +254,23 @@ impl ProxyHttp for Gateway {
 
         let plan = resolve_forward(self.router.snapshot().as_ref(), &host, path_q)?;
 
-        if ctx.strip_prefix.is_none() && ctx.request_headers.is_empty() && ctx.response_headers.is_empty() {
+        if ctx.strip_prefix.is_none()
+            && ctx.request_headers.is_empty()
+            && ctx.response_headers.is_empty()
+        {
+            let is_grpc = ctx.is_grpc;
+            let is_grpc_web = ctx.is_grpc_web;
             *ctx = plan.middleware.into();
+            ctx.is_grpc = is_grpc;
+            ctx.is_grpc_web = is_grpc_web;
         }
 
-        let peer = Box::new(HttpPeer::new(
-            (plan.peer_host.as_str(), plan.peer_port),
-            false,
-            host,
+        let peer = Box::new(configure_upstream_peer(
+            &plan.peer_host,
+            plan.peer_port,
+            &host,
+            ctx,
+            req.uri.path(),
         ));
         Ok(peer)
     }
@@ -234,22 +292,27 @@ impl ProxyHttp for Gateway {
         }
 
         if let Some(prefix) = &ctx.strip_prefix {
-            let path = upstream_request.uri.path();
-            if let Some(stripped) = path.strip_prefix(prefix) {
-                let new_path = if stripped.is_empty() { "/" } else { stripped };
-                let mut parts = upstream_request.uri.clone().into_parts();
-                parts.path_and_query = Some(new_path.parse().map_err(|_| {
-                    pingora_error::Error::explain(
-                        pingora_error::ErrorType::InternalError,
-                        "invalid stripped path",
-                    )
-                })?);
-                upstream_request.set_uri(http::Uri::from_parts(parts).map_err(|_| {
-                    pingora_error::Error::explain(
-                        pingora_error::ErrorType::InternalError,
-                        "failed to rebuild uri",
-                    )
-                })?);
+            let client_path = session.req_header().uri.path();
+            let skip_strip = ctx.is_grpc_web
+                && !grpc::uses_grpc_web_bridge(ctx.is_grpc_web, client_path);
+            if !skip_strip {
+                let path = upstream_request.uri.path();
+                if let Some(stripped) = path.strip_prefix(prefix) {
+                    let new_path = if stripped.is_empty() { "/" } else { stripped };
+                    let mut parts = upstream_request.uri.clone().into_parts();
+                    parts.path_and_query = Some(new_path.parse().map_err(|_| {
+                        pingora_error::Error::explain(
+                            pingora_error::ErrorType::InternalError,
+                            "invalid stripped path",
+                        )
+                    })?);
+                    upstream_request.set_uri(http::Uri::from_parts(parts).map_err(|_| {
+                        pingora_error::Error::explain(
+                            pingora_error::ErrorType::InternalError,
+                            "failed to rebuild uri",
+                        )
+                    })?);
+                }
             }
         }
 
@@ -257,6 +320,29 @@ impl ProxyHttp for Gateway {
             upstream_request.insert_header(name, value).ok();
         }
 
+        if ctx.is_grpc {
+            let path = upstream_request.uri.path().to_string();
+            if !ctx.is_grpc_web || grpc::uses_grpc_web_bridge(ctx.is_grpc_web, &path) {
+                grpc::rewrite_upstream_grpc_path(upstream_request)?;
+            }
+            grpc::prepare_upstream_request(upstream_request, ctx.is_grpc_web, &path);
+        }
+
+        Ok(())
+    }
+
+    async fn response_filter(
+        &self,
+        session: &mut Session,
+        upstream_response: &mut ResponseHeader,
+        ctx: &mut Self::CTX,
+    ) -> Result<()> {
+        let path = session.req_header().uri.path();
+        if ctx.is_grpc && grpc::uses_grpc_web_bridge(ctx.is_grpc_web, path) {
+            grpc::prepare_streaming_grpc_response_headers(upstream_response);
+        } else if ctx.is_grpc || session.as_downstream().is_http2() {
+            grpc::strip_hop_by_hop_response_headers(upstream_response);
+        }
         Ok(())
     }
 
@@ -271,7 +357,7 @@ impl ProxyHttp for Gateway {
             .insert_header("Server", format!("pertisk-proxy/{protocol}"))
             .ok();
 
-        if is_downstream_tls(session) {
+        if is_downstream_tls(session) && !ctx.is_grpc {
             if self.enable_h3 {
                 let alt_svc = format!(
                     "h3=\":{}\"; ma=86400; persist=1, h3-29=\":{}\"; ma=86400; persist=1",
@@ -289,6 +375,30 @@ impl ProxyHttp for Gateway {
 
         Ok(())
     }
+}
+
+fn configure_upstream_peer(
+    peer_host: &str,
+    peer_port: u16,
+    sni: &str,
+    ctx: &RequestCtx,
+    path: &str,
+) -> HttpPeer {
+    let mut peer = HttpPeer::new((peer_host, peer_port), false, sni.to_string());
+    if grpc::uses_h2c_upstream(ctx.is_grpc, ctx.is_grpc_web, path) {
+        peer.options.alpn = ALPN::H2;
+        peer.options.max_h2_streams = 128;
+        peer.options.h2_ping_interval = Some(grpc::grpc_h2_ping_interval());
+    }
+    if ctx.is_grpc {
+        let timeout = grpc::grpc_upstream_timeout();
+        if timeout != std::time::Duration::MAX {
+            peer.options.read_timeout = Some(timeout);
+            peer.options.write_timeout = Some(timeout);
+            peer.options.idle_timeout = Some(timeout);
+        }
+    }
+    peer
 }
 
 fn downstream_protocol_label(session: &Session) -> &'static str {

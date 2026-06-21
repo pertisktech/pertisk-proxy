@@ -18,8 +18,8 @@ pub struct ServerConfig {
 impl ServerConfig {
     pub fn from_env_proxy_defaults() -> Self {
         Self {
-            http_listen: env_or("LISTEN_HTTP", "0.0.0.0:80"),
-            https_listen: env_or("LISTEN_HTTPS", "0.0.0.0:443"),
+            http_listen: env_or("LISTEN_HTTP", "[::]:80"),
+            https_listen: env_or("LISTEN_HTTPS", "[::]:443"),
             h3_udp_listen: env_or("LISTEN_H3_UDP", "[::]:443"),
             enable_h3: crate::config::common::resolve_enable_h3(env_bool("ENABLE_H3", false)),
             enable_h2: env_bool("PERTISK_ENABLE_H2", true),
