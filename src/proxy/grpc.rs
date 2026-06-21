@@ -1,9 +1,8 @@
 //! gRPC and gRPC-Web detection and upstream header handling.
 //!
-//! Omni exposes gRPC-Web on HTTP/1.1 at `/api/<Service>/<Method>` (unary RPCs like `Get`) and
-//! native gRPC (h2c) at `/<Service>/<Method>`. Server-streaming RPCs such as `Watch` need the
-//! Pingora GrpcWeb bridge plus h2c upstream; unary calls must pass through on HTTP/1.1 with the
-//! `/api/` prefix intact (same as pertisk-rproxy).
+//! Omni serves Connect/gRPC-Web on HTTP/1.1 at `/api/<Service>/<Method>` for both unary (`Get`)
+//! and server-streaming (`Watch`) RPCs. All `/api/` traffic is proxied on HTTP/1.1 with the path
+//! unchanged (same as pertisk-rproxy). Native gRPC (h2c) applies only to non-`/api/` paths.
 
 use http::{header, Method, Uri};
 use pingora_http::{RequestHeader, ResponseHeader};
@@ -34,8 +33,8 @@ pub fn is_grpc_rpc_path(path: &str) -> bool {
         && path.contains('/')
 }
 
-/// Classify gRPC traffic. All POST `/api/<Service>/<Method>` calls use gRPC-Web upstream
-/// (HTTP/1.1, keep `/api/`) except server-streaming methods that need the bridge + h2c.
+/// Classify gRPC traffic. All POST `/api/<Service>/<Method>` calls use HTTP/1.1 upstream
+/// with the `/api/` prefix intact.
 pub fn classify_grpc_request(
     headers: &http::HeaderMap,
     method: &Method,
@@ -53,17 +52,12 @@ pub fn grpc_rpc_method(path: &str) -> Option<&str> {
     path.rsplit('/').next().filter(|m| !m.is_empty())
 }
 
-/// Server-streaming gRPC-Web RPCs need bridge + h2c + `/api/` strip (Omni `Watch`, etc.).
+/// Long-lived server-streaming RPCs (`Watch`, etc.).
 pub fn is_grpc_server_streaming(path: &str) -> bool {
     matches!(
         grpc_rpc_method(path),
         Some("Watch" | "Subscribe" | "Listen" | "Stream" | "Tail" | "Events")
     )
-}
-
-/// Pingora GrpcWeb bridge: only for server-streaming gRPC-Web over HTTP/2 downstream.
-pub fn uses_grpc_web_bridge(is_grpc_web: bool, path: &str) -> bool {
-    is_grpc_web && is_grpc_server_streaming(path)
 }
 
 /// gRPC-Web detection (aligned with pertisk-rproxy, scoped to RPC paths for grpc-metadata).
@@ -99,16 +93,9 @@ pub fn is_grpc_like_request(headers: &http::HeaderMap, method: &Method, path: &s
     is_grpc_request(headers) || is_grpc_web_request(headers, method, path)
 }
 
-/// h2c upstream: native gRPC always; gRPC-Web only for server-streaming (with bridge).
-pub fn uses_h2c_upstream(is_grpc: bool, is_grpc_web: bool, path: &str) -> bool {
-    if !is_grpc {
-        return false;
-    }
-    if is_grpc_web {
-        uses_grpc_web_bridge(true, path)
-    } else {
-        true
-    }
+/// h2c upstream: native gRPC only (never for `/api/` gRPC-Web/Connect paths).
+pub fn uses_h2c_upstream(is_grpc: bool, is_grpc_web: bool, _path: &str) -> bool {
+    is_grpc && !is_grpc_web
 }
 
 /// Strip `/api` prefix for native gRPC upstream paths (Omni h2c layout).
@@ -153,23 +140,6 @@ fn rebuild_upstream_path(upstream: &mut RequestHeader, new_path: &str) -> Result
     Ok(())
 }
 
-/// Ensure Pingora's GrpcWeb bridge recognizes Omni requests (text/plain + grpc-metadata-*).
-pub fn normalize_grpc_web_content_type(req: &mut RequestHeader) {
-    if !uses_grpc_web_bridge(true, req.uri.path()) {
-        return;
-    }
-    if req
-        .headers
-        .get(header::CONTENT_TYPE.as_str())
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|ct| ct.starts_with("application/grpc-web"))
-    {
-        return;
-    }
-    req.insert_header(header::CONTENT_TYPE.as_str(), "application/grpc-web+proto")
-        .ok();
-}
-
 pub fn validate_downstream(
     req: &RequestHeader,
     session: &Session,
@@ -186,15 +156,14 @@ pub fn validate_downstream(
     Ok(())
 }
 
-pub fn prepare_upstream_request(upstream: &mut RequestHeader, is_grpc_web: bool, path: &str) {
+pub fn prepare_upstream_request(upstream: &mut RequestHeader, is_grpc_web: bool) {
     upstream.remove_header(header::CONNECTION.as_str());
     upstream.remove_header(header::UPGRADE.as_str());
     upstream.remove_header(header::TRANSFER_ENCODING.as_str());
     upstream.remove_header("keep-alive");
     upstream.remove_header("proxy-connection");
 
-    let native_upstream = !is_grpc_web || uses_grpc_web_bridge(is_grpc_web, path);
-    if native_upstream && !upstream.headers.contains_key(header::TE.as_str()) {
+    if !is_grpc_web && !upstream.headers.contains_key(header::TE.as_str()) {
         upstream.insert_header(header::TE.as_str(), "trailers").ok();
     }
 }
@@ -206,7 +175,7 @@ pub fn strip_hop_by_hop_response_headers(resp: &mut ResponseHeader) {
     resp.remove_header("proxy-connection");
 }
 
-pub fn prepare_streaming_grpc_response_headers(resp: &mut ResponseHeader) {
+pub fn prepare_streaming_response_headers(resp: &mut ResponseHeader) {
     strip_hop_by_hop_response_headers(resp);
     resp.remove_header(header::CONTENT_LENGTH.as_str());
     resp.insert_header(header::CACHE_CONTROL.as_str(), "no-cache, no-transform")
@@ -246,6 +215,31 @@ pub fn grpc_upstream_timeout() -> std::time::Duration {
     } else {
         std::time::Duration::from_secs(secs)
     }
+}
+
+/// Client cancelled an HTTP/2 stream (common when Connect Watch retries or tab navigates away).
+pub fn is_benign_downstream_disconnect(error: &pingora_error::Error) -> bool {
+    use pingora_error::{ErrorSource, ErrorType};
+
+    if error.esource() != &ErrorSource::Downstream {
+        return false;
+    }
+
+    if matches!(
+        error.etype(),
+        ErrorType::ConnectionClosed | ErrorType::ReadError | ErrorType::WriteError
+    ) {
+        return true;
+    }
+
+    if matches!(error.etype(), ErrorType::H2Error) {
+        let detail = format!("{error}");
+        return detail.contains("stream no longer needed")
+            || detail.contains("Client closed H2")
+            || detail.contains("CANCEL");
+    }
+
+    false
 }
 
 pub fn grpc_h2_ping_interval() -> std::time::Duration {
@@ -293,13 +287,12 @@ mod tests {
     }
 
     #[test]
-    fn get_uses_h1_passthrough_watch_uses_bridge() {
+    fn api_rpc_uses_h1_passthrough_including_watch() {
         let get = "/api/omni.resources.ResourceService/Get";
         let watch = "/api/omni.resources.ResourceService/Watch";
-        assert!(!uses_grpc_web_bridge(true, get));
-        assert!(uses_grpc_web_bridge(true, watch));
         assert!(!uses_h2c_upstream(true, true, get));
-        assert!(uses_h2c_upstream(true, true, watch));
+        assert!(!uses_h2c_upstream(true, true, watch));
+        assert!(is_grpc_server_streaming(watch));
     }
 
     #[test]

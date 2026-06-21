@@ -7,12 +7,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use pingora_core::listeners::ALPN;
-use pingora_core::modules::http::grpc_web::{GrpcWeb, GrpcWebBridge};
-use pingora_core::modules::http::HttpModules;
 use pingora_core::upstreams::peer::HttpPeer;
 use pingora_core::Result;
+use pingora_error::{Error, ErrorSource, ErrorType};
 use pingora_http::{RequestHeader, ResponseHeader};
-use pingora_proxy::{ProxyHttp, Session};
+use pingora_proxy::{FailToProxy, ProxyHttp, Session};
 
 use crate::deny;
 use crate::health;
@@ -96,25 +95,12 @@ impl ProxyHttp for Gateway {
         RequestCtx::default()
     }
 
-    fn init_downstream_modules(&self, modules: &mut HttpModules) {
-        modules.add_module(Box::new(GrpcWeb));
-    }
-
     async fn early_request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<()> {
         let req = session.req_header();
         let (is_grpc, is_grpc_web) =
             grpc::classify_grpc_request(&req.headers, &req.method, req.uri.path());
         if !is_grpc {
             return Ok(());
-        }
-
-        if is_grpc_web && grpc::uses_grpc_web_bridge(true, req.uri.path()) {
-            grpc::normalize_grpc_web_content_type(session.req_header_mut());
-            session
-                .downstream_modules_ctx
-                .get_mut::<GrpcWebBridge>()
-                .expect("GrpcWeb module registered")
-                .init();
         }
 
         ctx.is_grpc = true;
@@ -292,9 +278,7 @@ impl ProxyHttp for Gateway {
         }
 
         if let Some(prefix) = &ctx.strip_prefix {
-            let client_path = session.req_header().uri.path();
-            let skip_strip = ctx.is_grpc_web
-                && !grpc::uses_grpc_web_bridge(ctx.is_grpc_web, client_path);
+            let skip_strip = ctx.is_grpc_web;
             if !skip_strip {
                 let path = upstream_request.uri.path();
                 if let Some(stripped) = path.strip_prefix(prefix) {
@@ -321,11 +305,10 @@ impl ProxyHttp for Gateway {
         }
 
         if ctx.is_grpc {
-            let path = upstream_request.uri.path().to_string();
-            if !ctx.is_grpc_web || grpc::uses_grpc_web_bridge(ctx.is_grpc_web, &path) {
+            if !ctx.is_grpc_web {
                 grpc::rewrite_upstream_grpc_path(upstream_request)?;
             }
-            grpc::prepare_upstream_request(upstream_request, ctx.is_grpc_web, &path);
+            grpc::prepare_upstream_request(upstream_request, ctx.is_grpc_web);
         }
 
         Ok(())
@@ -338,8 +321,8 @@ impl ProxyHttp for Gateway {
         ctx: &mut Self::CTX,
     ) -> Result<()> {
         let path = session.req_header().uri.path();
-        if ctx.is_grpc && grpc::uses_grpc_web_bridge(ctx.is_grpc_web, path) {
-            grpc::prepare_streaming_grpc_response_headers(upstream_response);
+        if ctx.is_grpc && grpc::is_grpc_server_streaming(path) {
+            grpc::prepare_streaming_response_headers(upstream_response);
         } else if ctx.is_grpc || session.as_downstream().is_http2() {
             grpc::strip_hop_by_hop_response_headers(upstream_response);
         }
@@ -374,6 +357,56 @@ impl ProxyHttp for Gateway {
         }
 
         Ok(())
+    }
+
+    fn suppress_error_log(&self, session: &Session, ctx: &Self::CTX, error: &Error) -> bool {
+        if !ctx.is_grpc {
+            return false;
+        }
+        if !grpc::is_benign_downstream_disconnect(error) {
+            return false;
+        }
+        tracing::debug!(
+            path = session.req_header().uri.path(),
+            "client closed gRPC/Connect stream"
+        );
+        true
+    }
+
+    async fn fail_to_proxy(
+        &self,
+        session: &mut Session,
+        e: &Error,
+        ctx: &mut Self::CTX,
+    ) -> FailToProxy {
+        if ctx.is_grpc && grpc::is_benign_downstream_disconnect(e) {
+            return FailToProxy {
+                error_code: 0,
+                can_reuse_downstream: false,
+            };
+        }
+
+        let code = match e.etype() {
+            ErrorType::HTTPStatus(code) => *code,
+            _ => match e.esource() {
+                ErrorSource::Upstream => 502,
+                ErrorSource::Downstream => match e.etype() {
+                    ErrorType::WriteError | ErrorType::ReadError | ErrorType::ConnectionClosed => 0,
+                    _ => 400,
+                },
+                ErrorSource::Internal | ErrorSource::Unset => 500,
+            },
+        };
+        if code > 0 {
+            if let Err(err) = session.respond_error(code).await {
+                tracing::debug!(error = %err, code, "failed to send error response to downstream");
+            }
+        }
+
+        FailToProxy {
+            error_code: code,
+            can_reuse_downstream: false,
+        }
     }
 }
 
