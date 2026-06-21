@@ -2,7 +2,9 @@
 	test check package package-clean package-amd64 package-arm64 package-deb package-rpm \
 	package-proxy package-ingress release release-amd release-arm \
 	deploy-package deploy-package-ingress deploy-remote \
-	deploy-deb deploy-deb-ingress deploy-rpm deploy-rpm-ingress apply-ingress-rbac deploy-ingress-helm \
+	deploy-deb deploy-deb-ingress deploy-rpm deploy-rpm-ingress apply-ingress-rbac \
+	deploy-ingress-helm deploy-ingress uninstall-legacy-ingress-helm \
+	docker-ingress docker-ingress-push docker-ingress-multi \
 	install-admin admin-dist fix-perms dev dev-vite dev-serve dev-admin dev-stop
 
 CARGO ?= cargo
@@ -226,12 +228,53 @@ apply-ingress-rbac:
 		kubectl apply -f deploy/kubernetes-rbac.yaml; \
 	fi
 
+# --- Docker: ingress controller image (buildx) ---
+# make docker-ingress              — build local single-arch image
+# make docker-ingress-push         — build + push single-arch
+# make docker-ingress-multi        — build + push linux/amd64,linux/arm64 manifest
+# make deploy-ingress              — docker-ingress-multi + helm upgrade (full pipeline)
+INGRESS_BUILD_PLATFORMS ?= linux/amd64,linux/arm64
+HARBOR_INGRESS_IMAGE ?= harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress
+INGRESS_DOCKERFILE ?= Dockerfile
+
+docker-ingress: admin-dist
+	chmod +x build/ingress-image.sh
+	VERSION="$(VERSION)" HARBOR_INGRESS_IMAGE="$(HARBOR_INGRESS_IMAGE)" \
+		INGRESS_DOCKERFILE="$(INGRESS_DOCKERFILE)" ./build/ingress-image.sh "$(VERSION)"
+
+docker-ingress-push: admin-dist
+	chmod +x build/ingress-image.sh
+	VERSION="$(VERSION)" HARBOR_INGRESS_IMAGE="$(HARBOR_INGRESS_IMAGE)" \
+		INGRESS_DOCKERFILE="$(INGRESS_DOCKERFILE)" PUSH=1 ./build/ingress-image.sh "$(VERSION)"
+	@echo "Pushed $(HARBOR_INGRESS_IMAGE):$(VERSION)"
+
+docker-ingress-multi: admin-dist
+	chmod +x build/ingress-image.sh
+	VERSION="$(VERSION)" HARBOR_INGRESS_IMAGE="$(HARBOR_INGRESS_IMAGE)" \
+		INGRESS_DOCKERFILE="$(INGRESS_DOCKERFILE)" \
+		PLATFORMS="$(INGRESS_BUILD_PLATFORMS)" CACHE_BACKEND=registry PUSH=1 \
+		./build/ingress-image.sh "$(VERSION)"
+	@echo "Pushed multi-arch ($(INGRESS_BUILD_PLATFORMS)): $(HARBOR_INGRESS_IMAGE):$(VERSION)"
+
 # Helm: deploy ingress controller (namespace defaults to pertisk-proxy)
-HELM_RELEASE ?= pertisk-ingress
+HELM_RELEASE ?= pertisk-proxy-ingress
 HELM_NAMESPACE ?= pertisk-proxy
+HELM_INGRESS_VALUES ?= deploy/helm/pertisk-ingress/values.yaml
+HELM_KUBECONFIG_FLAG := $(if $(K8S_KUBECONFIG),--kubeconfig=$(K8S_KUBECONFIG),$(if $(KUBECONFIG),--kubeconfig=$(KUBECONFIG),))
+
 deploy-ingress-helm:
 	helm upgrade --install $(HELM_RELEASE) deploy/helm/pertisk-ingress \
-		-n $(HELM_NAMESPACE) --create-namespace
+		$(HELM_KUBECONFIG_FLAG) -n $(HELM_NAMESPACE) --create-namespace \
+		-f $(HELM_INGRESS_VALUES) --set image.tag=$(VERSION)
+
+# Build multi-arch image, push, and deploy with matching tag
+deploy-ingress: docker-ingress-multi deploy-ingress-helm
+	@echo "Done. $(HELM_RELEASE) deployed with $(HARBOR_INGRESS_IMAGE):$(VERSION)"
+
+# Remove legacy pertisk-rproxy ingress release (ClusterRole name collision with release "pertisk-ingress")
+uninstall-legacy-ingress-helm:
+	helm uninstall pertisk-ingress -n pertisk-rproxy 2>/dev/null || true
+	@echo "If ClusterRole pertisk-ingress remains, delete manually: kubectl delete clusterrole pertisk-ingress clusterrolebinding pertisk-ingress"
 
 # Remote install DEB/RPM over SSH
 deploy-package:

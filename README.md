@@ -46,9 +46,15 @@ Config: `/etc/pertisk-proxy/pertisk-proxy-ingress.conf` (see `build/pertisk-prox
 ### Kubernetes
 
 ```bash
-docker build -t pertisk-proxy-ingress .
-kubectl apply -f deploy/kubernetes.yaml
-kubectl apply -f deploy/example-ingress.yaml
+# Multi-arch build + push + Helm deploy
+make deploy-ingress VERSION=0.1.0
+
+# Or step by step:
+make docker-ingress-multi VERSION=0.1.0
+make deploy-ingress-helm VERSION=0.1.0
+
+# Local single-arch image only:
+make docker-ingress VERSION=0.1.0
 ```
 
 ## Packaging

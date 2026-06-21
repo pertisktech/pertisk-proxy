@@ -9,10 +9,39 @@ Deploy **pertisk-proxy-ingress** as a Kubernetes Ingress + Gateway API controlle
 
 ## Install
 
+**Helm only** (image must already exist in registry):
+
 ```bash
-helm upgrade --install pertisk-ingress ./deploy/helm/pertisk-ingress \
-  -n pertisk-proxy --create-namespace
+make deploy-ingress-helm VERSION=0.1.0
 ```
+
+**Full pipeline** — build multi-arch image, push, deploy:
+
+```bash
+make deploy-ingress VERSION=0.1.0
+```
+
+**Docker only:**
+
+```bash
+make docker-ingress-multi VERSION=0.1.0   # linux/amd64 + linux/arm64 → registry
+make docker-ingress VERSION=0.1.0         # local single-arch load
+make docker-ingress-push VERSION=0.1.0    # single-arch push
+```
+
+Override registry: `HARBOR_INGRESS_IMAGE=my.registry/pertisk-proxy/ingress make deploy-ingress`
+
+### Migrating from pertisk-rproxy
+
+If install fails with `ClusterRole "pertisk-ingress" ... release-namespace must equal "pertisk-proxy": current value is "pertisk-rproxy"`, uninstall the old release first:
+
+```bash
+make uninstall-legacy-ingress-helm
+# then
+make deploy-ingress-helm
+```
+
+This chart uses `fullnameOverride: pertisk-proxy-ingress` so cluster-scoped RBAC does not collide with the old `pertisk-rproxy` chart.
 
 ## Modes
 
