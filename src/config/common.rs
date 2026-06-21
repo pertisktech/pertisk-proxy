@@ -55,6 +55,15 @@ impl ServerConfig {
         parse_port(&self.h3_udp_listen).unwrap_or(self.https_port())
     }
 
+    /// Port clients should use for QUIC (Alt-Svc). May differ from the in-container UDP bind port.
+    pub fn http3_advertised_port(&self) -> u16 {
+        std::env::var("PERTISK_HTTP3_ADVERTISED_PORT")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .filter(|p| *p > 0)
+            .unwrap_or_else(|| self.https_port())
+    }
+
     pub fn tls_cert_path(&self) -> Result<&str> {
         self.tls_cert_path
             .as_ref()

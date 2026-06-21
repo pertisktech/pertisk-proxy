@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/api/client';
-import { setToken, getToken } from '@/auth';
+import { setToken, getToken, clearToken } from '@/auth';
 
 export function Login() {
   const navigate = useNavigate();
@@ -20,8 +20,12 @@ export function Login() {
     });
     if (getToken()) {
       api.authCheck().then((c) => {
-        if (c.authenticated) navigate('/');
-      });
+        if (c.authenticated) {
+          navigate('/');
+        } else {
+          clearToken();
+        }
+      }).catch(() => clearToken());
     }
   }, [navigate]);
 

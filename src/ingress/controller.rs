@@ -20,7 +20,6 @@ use kube::{
     Client, ResourceExt,
 };
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use tokio::sync::RwLock as AsyncRwLock;
@@ -57,7 +56,6 @@ pub struct IngressController {
     router: Arc<Router>,
     runtime_config: Arc<AsyncRwLock<Config>>,
     cert_store: Arc<CertStore>,
-    certs_dir: PathBuf,
     proxy_log: Arc<ProxyLog>,
     /// Hosts for which we inserted certs from Ingress TLS Secrets; cleared and repopulated each reconcile.
     last_ingress_tls_hosts: RwLock<Vec<String>>,
@@ -70,7 +68,6 @@ impl IngressController {
         router: Arc<Router>,
         runtime_config: Arc<AsyncRwLock<Config>>,
         cert_store: Arc<CertStore>,
-        certs_dir: PathBuf,
         proxy_log: Arc<ProxyLog>,
     ) -> Self {
         Self {
@@ -79,7 +76,6 @@ impl IngressController {
             router,
             runtime_config,
             cert_store,
-            certs_dir,
             proxy_log,
             last_ingress_tls_hosts: RwLock::new(Vec::new()),
         }
@@ -277,17 +273,10 @@ impl IngressController {
                 source: TlsSource::Kubernetes,
                 expires_at,
             });
-            let secret_id = format!(
-                "k8s-{}-{}",
-                namespace.replace('/', "_"),
-                secret_name.replace('/', "_")
-            );
-            if let Err(e) = self.cert_store.insert_pem_for_hosts(
+            if let Err(e) = self.cert_store.insert_pem_in_memory_for_hosts(
                 &merged_hosts,
                 &cert_pem,
                 &key_pem,
-                &self.certs_dir,
-                &secret_id,
             ) {
                 warn!(
                     "Failed to load TLS from Secret {}/{}: {}",
@@ -846,6 +835,35 @@ fn backend_name_for(backend: &IngressBackend, ingress_name: &str) -> String {
     }
 }
 
+fn resolve_upstream_addr(service_name: &str, namespace: &str, port: u16) -> String {
+    if is_self_management_service(service_name, namespace, port) {
+        format!("127.0.0.1:{port}")
+    } else {
+        format!("{service_name}.{namespace}.svc.cluster.local:{port}")
+    }
+}
+
+/// When an Ingress/Gateway routes to this release's Service on the management port, proxy
+/// loopback — the admin UI runs in-process on the same pod (ClusterIP hairpin often fails).
+fn is_self_management_service(service_name: &str, namespace: &str, port: u16) -> bool {
+    if port != crate::api::management_addr().port() {
+        return false;
+    }
+    let Some(release) = std::env::var("PERTISK_HELM_RELEASE")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    else {
+        return false;
+    };
+    let helm_ns = std::env::var("PERTISK_HELM_NAMESPACE")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "pertisk-proxy".to_string());
+    service_name == release && namespace == helm_ns
+}
+
 fn upstreams_from_backend(
     backend: &IngressBackend,
     namespace: Option<&str>,
@@ -860,7 +878,7 @@ fn upstreams_from_backend(
             .map(|p| p as u16)
             .unwrap_or(default_port);
         let ns = namespace.unwrap_or("default");
-        let addr = format!("{}.{}.svc.cluster.local:{}", name, ns, port);
+        let addr = resolve_upstream_addr(name, ns, port);
         vec![Upstream { addr, weight: 1 }]
     } else {
         Vec::new()
@@ -1040,10 +1058,7 @@ fn upstreams_from_gateway_backend(
         .as_deref()
         .or(namespace)
         .unwrap_or("default");
-    let addr = format!(
-        "{}.{}.svc.cluster.local:{}",
-        backend_ref.name, ns, port
-    );
+    let addr = resolve_upstream_addr(&backend_ref.name, ns, port);
     vec![Upstream { addr, weight: 1 }]
 }
 

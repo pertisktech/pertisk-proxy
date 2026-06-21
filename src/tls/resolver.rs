@@ -4,7 +4,7 @@ use rustls::pki_types::CertificateDer;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
 
-use super::store::{CertPaths, CertStore};
+use super::store::{CertStore, StoredCert};
 
 /// Resolves server certificates from [`CertStore`] by SNI (HTTPS via rustls / HTTP/3).
 #[derive(Clone)]
@@ -27,25 +27,24 @@ impl std::fmt::Debug for CertStoreResolver {
 
 impl ResolvesServerCert for CertStoreResolver {
     fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
-        let paths = if let Some(name) = client_hello.server_name() {
+        let cert = if let Some(name) = client_hello.server_name() {
             self.store.lookup_sni(name)?
         } else {
-            self.store.default_paths()?
+            self.store.default_cert()?
         };
-        paths_to_certified_key(&paths, self.provider.as_ref())
+        stored_to_certified_key(&cert, self.provider.as_ref())
             .ok()
             .map(Arc::new)
     }
 }
 
-fn paths_to_certified_key(
-    paths: &CertPaths,
+fn stored_to_certified_key(
+    cert: &StoredCert,
     provider: &rustls::crypto::CryptoProvider,
 ) -> Result<CertifiedKey, String> {
-    let cert_pem =
-        std::fs::read(&paths.cert).map_err(|e| format!("read cert {}: {e}", paths.cert.display()))?;
-    let key_pem =
-        std::fs::read(&paths.key).map_err(|e| format!("read key {}: {e}", paths.key.display()))?;
+    let (cert_pem, key_pem) = cert
+        .read_pem()
+        .map_err(|e| format!("read TLS PEM: {e}"))?;
     let cert_chain: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_pem.as_slice())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("parse cert PEM: {e}"))?

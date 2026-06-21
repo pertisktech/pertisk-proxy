@@ -22,6 +22,17 @@ use crate::tls::{CertStore, CertStoreResolver};
 
 const ALPN_H3: &[u8] = b"h3";
 
+fn is_benign_h3_disconnect(err: &anyhow::Error) -> bool {
+    let msg = err.to_string().to_ascii_lowercase();
+    msg.contains("aborted by peer")
+        || msg.contains("closed abruptly")
+        || msg.contains("connection reset")
+        || msg.contains("timed out")
+        // Normal client shutdown (curl, k6, browsers closing QUIC cleanly).
+        || msg.contains("h3_no_error")
+        || msg.contains("h3_cancel")
+}
+
 fn env_u64(name: &str, default: u64) -> u64 {
     std::env::var(name)
         .ok()
@@ -77,6 +88,14 @@ pub async fn run(
     cert_store: Arc<CertStore>,
     _runtime_cfg: &RuntimeConfig,
 ) -> Result<()> {
+    while cert_store.host_count() == 0 && cert_store.default_paths().is_none() {
+        tracing::info!(
+            udp = %config.udp_listen,
+            "HTTP/3 waiting for TLS certificates from ingress reconcile"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+
     let addr: std::net::SocketAddr = config
         .udp_listen
         .parse()
@@ -126,7 +145,11 @@ pub async fn run(
                         Ok(connection) => {
                             let h3_conn = h3_quinn::Connection::new(connection);
                             if let Err(err) = serve_h3_connection(router, client, h3_conn).await {
-                                warn!(error = %err, "HTTP/3 connection error");
+                                if is_benign_h3_disconnect(&err) {
+                                    tracing::debug!(error = %err, "HTTP/3 client closed connection");
+                                } else {
+                                    warn!(error = %err, "HTTP/3 connection error");
+                                }
                             }
                         }
                         Err(err) => warn!(error = %err, "HTTP/3 handshake failed"),

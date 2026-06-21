@@ -111,6 +111,7 @@ if [ -n "$PLATFORMS" ]; then
   fi
   docker buildx build --builder "$BUILDER_NAME" --platform "$PLATFORMS" -f "$DOCKERFILE" \
     "${cache_args[@]}" \
+    --build-arg "VERSION=${VERSION}" \
     --provenance="$PROVENANCE" \
     --sbom="$SBOM" \
     -t "${IMAGE}:${VERSION}" \
@@ -120,6 +121,7 @@ if [ -n "$PLATFORMS" ]; then
 else
   docker buildx build --builder "$BUILDER_NAME" --load -f "$DOCKERFILE" \
     "${cache_args[@]}" \
+    --build-arg "VERSION=${VERSION}" \
     -t "${IMAGE}:${VERSION}" \
     -t "${IMAGE}:latest" \
     .

@@ -13,7 +13,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const r = await fetch(`${API}${path}`, { ...options, headers });
   if (r.status === 401) {
     clearToken();
-    window.location.href = '/login';
+    const onLogin = window.location.pathname === '/login' || window.location.pathname.startsWith('/login/');
+    if (!onLogin) {
+      window.location.href = '/login';
+    }
     throw new Error('Unauthorized');
   }
   if (!r.ok) {
@@ -72,10 +75,28 @@ export type Site = {
 
 export type K8sNamespaceRow = { name: string; created_at?: string | null };
 export type K8sTlsSecretRow = { namespace: string; name: string; expires_at?: string | null };
+export type K8sServicePortDetail = {
+  port: number;
+  name?: string | null;
+  protocol: string;
+};
+
 export type K8sServiceRow = {
   name: string;
   namespace: string;
-  ports_detail: { port: number; name?: string | null; protocol: string }[];
+  type?: string;
+  cluster_ip?: string | null;
+  external_ip?: string | null;
+  ports?: string[];
+  ports_detail: K8sServicePortDetail[];
+};
+
+export type IngressFormRouteRow = {
+  path: string;
+  path_type: string;
+  service_name: string;
+  service_port?: number | null;
+  service_port_name?: string | null;
 };
 export type K8sGatewayRow = {
   namespace: string;
@@ -95,9 +116,16 @@ export type IngressFormRow = {
   service_port: number;
   path: string;
   path_type: string;
+  routes?: IngressFormRouteRow[];
   tls_secret_namespace?: string;
   tls_secret_name?: string;
   ingress_class_name?: string;
+  gateway_namespace?: string;
+  gateway_name?: string;
+};
+
+export type IngressSubmitBody = IngressFormRow & {
+  ingress_namespace?: string;
 };
 
 export type GatewayFormRow = {
@@ -260,9 +288,11 @@ export const api = {
   kubernetes: {
     namespaces: () => request<K8sNamespaceRow[]>('/kubernetes/namespaces'),
     tlsSecrets: () => request<K8sTlsSecretRow[]>('/kubernetes/tls-secrets'),
-    services: (namespace?: string) => {
-      const q = namespace ? `?namespace=${encodeURIComponent(namespace)}` : '';
-      return request<K8sServiceRow[]>(`/kubernetes/services${q}`);
+    services: (params?: { namespace?: string }) => {
+      const search = new URLSearchParams();
+      if (params?.namespace?.trim()) search.set('namespace', params.namespace.trim());
+      const q = search.toString();
+      return request<K8sServiceRow[]>(q ? `/kubernetes/services?${q}` : '/kubernetes/services');
     },
     listIngresses: (namespace?: string) => {
       const q = namespace ? `?namespace=${encodeURIComponent(namespace)}` : '';
@@ -270,12 +300,16 @@ export const api = {
         `/kubernetes/ingresses${q}`,
       );
     },
-    createIngress: (body: IngressFormRow) =>
+    getIngress: (namespace: string, name: string) =>
+      request<IngressFormRow>(
+        `/kubernetes/ingresses/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+      ),
+    createIngress: (body: IngressSubmitBody) =>
       request<{ namespace: string; name: string }>('/kubernetes/ingresses', {
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    updateIngress: (namespace: string, name: string, body: IngressFormRow) =>
+    updateIngress: (namespace: string, name: string, body: IngressSubmitBody) =>
       request<{ ok: boolean }>(`/kubernetes/ingresses/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, {
         method: 'PUT',
         body: JSON.stringify(body),
@@ -301,12 +335,16 @@ export const api = {
         `/kubernetes/gateways/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
         { method: 'DELETE' },
       ),
-    createGatewaySite: (body: IngressFormRow & { gateway_namespace?: string; gateway_name?: string }) =>
+    getGatewaySite: (namespace: string, name: string) =>
+      request<IngressFormRow>(
+        `/kubernetes/gateway-sites/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+      ),
+    createGatewaySite: (body: IngressSubmitBody) =>
       request<{ namespace: string; name: string }>('/kubernetes/gateway-sites', {
         method: 'POST',
         body: JSON.stringify(body),
       }),
-    updateGatewaySite: (namespace: string, name: string, body: IngressFormRow) =>
+    updateGatewaySite: (namespace: string, name: string, body: IngressSubmitBody) =>
       request<{ ok: boolean }>(
         `/kubernetes/gateway-sites/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
         { method: 'PUT', body: JSON.stringify(body) },

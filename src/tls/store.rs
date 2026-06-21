@@ -8,16 +8,38 @@ use tracing::{info, warn};
 use super::config::{TlsConfig, TlsSource};
 use super::validate::{self, validate_cert_pair as validate_tls_pair, validate_cert_pair_pem};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CertPaths {
     pub cert: PathBuf,
     pub key: PathBuf,
 }
 
+/// Certificate material held in the store (on disk or in memory).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StoredCert {
+    File(CertPaths),
+    Pem { cert: Vec<u8>, key: Vec<u8> },
+}
+
+impl StoredCert {
+    pub fn read_pem(&self) -> Result<(Vec<u8>, Vec<u8>)> {
+        match self {
+            StoredCert::File(paths) => {
+                let cert = std::fs::read(&paths.cert)
+                    .with_context(|| format!("read cert {}", paths.cert.display()))?;
+                let key = std::fs::read(&paths.key)
+                    .with_context(|| format!("read key {}", paths.key.display()))?;
+                Ok((cert, key))
+            }
+            StoredCert::Pem { cert, key } => Ok((cert.clone(), key.clone())),
+        }
+    }
+}
+
 #[derive(Default)]
 struct CertStoreInner {
-    by_host: HashMap<String, CertPaths>,
-    default: Option<CertPaths>,
+    by_host: HashMap<String, StoredCert>,
+    default: Option<StoredCert>,
 }
 
 /// In-memory map of hostname -> certificate file paths.
@@ -51,7 +73,7 @@ impl CertStore {
         let paths = CertPaths { cert, key };
         if let Ok(mut g) = self.inner.write() {
             if g.default.is_none() {
-                g.default = Some(paths);
+                g.default = Some(StoredCert::File(paths));
             }
         }
         Ok(())
@@ -60,7 +82,7 @@ impl CertStore {
     /// Replace site TLS entries from `routes.yaml` `tls:` blocks.
     pub fn reload_from_configs(&self, configs: &[TlsConfig]) -> Result<()> {
         let mut by_host = HashMap::new();
-        let mut default = None;
+        let mut default: Option<StoredCert> = None;
         let mut acme_pending = 0usize;
 
         for entry in configs {
@@ -79,10 +101,10 @@ impl CertStore {
                         key: key.clone(),
                     };
                     if default.is_none() {
-                        default = Some(paths.clone());
+                        default = Some(StoredCert::File(paths.clone()));
                     }
                     for host in &entry.hosts {
-                        by_host.insert(normalize_host(host), paths.clone());
+                        by_host.insert(normalize_host(host), StoredCert::File(paths.clone()));
                     }
                     info!(
                         hosts = ?entry.hosts,
@@ -114,11 +136,23 @@ impl CertStore {
         Ok(())
     }
 
-    pub fn default_paths(&self) -> Option<CertPaths> {
+    pub fn default_cert(&self) -> Option<StoredCert> {
         let g = self.inner.read().ok()?;
         g.default
             .clone()
             .or_else(|| g.by_host.values().next().cloned())
+    }
+
+    pub fn default_paths(&self) -> Option<CertPaths> {
+        let g = self.inner.read().ok()?;
+        match g
+            .default
+            .as_ref()
+            .or_else(|| g.by_host.values().next())
+        {
+            Some(StoredCert::File(paths)) => Some(paths.clone()),
+            _ => None,
+        }
     }
 
     pub fn has_cert_for_host(&self, host: &str) -> bool {
@@ -126,41 +160,45 @@ impl CertStore {
     }
 
     /// Exact hostname or wildcard match only (no global default fallback).
-    pub fn lookup_sni(&self, host: &str) -> Option<CertPaths> {
+    pub fn lookup_sni(&self, host: &str) -> Option<StoredCert> {
         let g = self.inner.read().ok()?;
         let host = normalize_host(host);
-        if let Some(paths) = g.by_host.get(&host) {
-            return Some(paths.clone());
+        if let Some(cert) = g.by_host.get(&host) {
+            return Some(cert.clone());
         }
 
-        let mut best: Option<(usize, CertPaths)> = None;
-        for (key, paths) in &g.by_host {
+        let mut best: Option<(usize, StoredCert)> = None;
+        for (key, cert) in &g.by_host {
             if let Some(suffix) = key.strip_prefix("*.") {
                 let suffix = format!(".{suffix}");
                 if host.ends_with(&suffix) && host.len() > suffix.len() {
                     let len = suffix.len();
                     if best.as_ref().map(|(l, _)| *l).unwrap_or(0) < len {
-                        best = Some((len, paths.clone()));
+                        best = Some((len, cert.clone()));
                     }
                 }
             }
         }
-        best.map(|(_, paths)| paths)
+        best.map(|(_, cert)| cert)
     }
 
-    /// Register certificate file paths for the given hostnames.
-    pub fn insert_paths_for_hosts(&self, hosts: &[String], paths: CertPaths) {
+    fn insert_stored_for_hosts(&self, hosts: &[String], cert: StoredCert) {
         if let Ok(mut g) = self.inner.write() {
             if g.default.is_none() {
-                g.default = Some(paths.clone());
+                g.default = Some(cert.clone());
             }
             for host in hosts {
                 let host = host.trim();
                 if !host.is_empty() {
-                    g.by_host.insert(normalize_host(host), paths.clone());
+                    g.by_host.insert(normalize_host(host), cert.clone());
                 }
             }
         }
+    }
+
+    /// Register certificate file paths for the given hostnames.
+    pub fn insert_paths_for_hosts(&self, hosts: &[String], paths: CertPaths) {
+        self.insert_stored_for_hosts(hosts, StoredCert::File(paths));
     }
 
     /// Remove host mappings (e.g. after deleting a DB certificate).
@@ -199,13 +237,28 @@ impl CertStore {
         Ok(())
     }
 
-    pub fn get(&self, host: &str) -> Option<CertPaths> {
-        self.lookup_sni(host).or_else(|| {
-            self.inner
-                .read()
-                .ok()
-                .and_then(|g| g.default.clone())
-        })
+    /// Keep PEM material in memory (for Kubernetes Secrets; no filesystem write).
+    pub fn insert_pem_in_memory_for_hosts(
+        &self,
+        hosts: &[String],
+        cert_pem: &[u8],
+        key_pem: &[u8],
+    ) -> Result<()> {
+        validate_cert_pair_pem(cert_pem, key_pem).context("invalid certificate PEM")?;
+        validate::warn_host_cert_mismatch_pem(cert_pem, hosts)?;
+        self.insert_stored_for_hosts(
+            hosts,
+            StoredCert::Pem {
+                cert: cert_pem.to_vec(),
+                key: key_pem.to_vec(),
+            },
+        );
+        Ok(())
+    }
+
+    pub fn get(&self, host: &str) -> Option<StoredCert> {
+        self.lookup_sni(host)
+            .or_else(|| self.default_cert())
     }
 }
 
@@ -235,8 +288,11 @@ mod tests {
             },
         );
         assert_eq!(
-            store.lookup_sni("gitlab.apps.pertisk.com").unwrap().cert,
-            PathBuf::from("/apps.pem")
+            store.lookup_sni("gitlab.apps.pertisk.com").unwrap(),
+            StoredCert::File(CertPaths {
+                cert: "/apps.pem".into(),
+                key: "/apps.key".into(),
+            })
         );
         assert!(store.lookup_sni("unknown.example.com").is_none());
         // get() still falls back to default for clients without a matching SNI entry.

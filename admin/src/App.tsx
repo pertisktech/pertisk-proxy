@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { ThemeProvider } from '@/context/ThemeContext';
@@ -17,7 +17,13 @@ import { Settings } from '@/routes/Settings';
 import { api, type ManagementInfo } from '@/api/client';
 import { clearToken, getToken } from '@/auth';
 
-function Protected({ children }: { children: React.ReactNode }) {
+function Protected({
+  children,
+  onAuthed,
+}: {
+  children: React.ReactNode;
+  onAuthed?: () => void;
+}) {
   const [ok, setOk] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -39,6 +45,10 @@ function Protected({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  useEffect(() => {
+    if (ok) onAuthed?.();
+  }, [ok, onAuthed]);
+
   if (ok === null) return <div className="flex min-h-screen items-center justify-center text-text-secondary">Loading…</div>;
   if (!ok) return <Navigate to="/login" replace />;
   return <>{children}</>;
@@ -48,12 +58,20 @@ export default function App() {
   const [mode, setMode] = useState<ApiMode | undefined>(undefined);
   const [managementInfo, setManagementInfo] = useState<ManagementInfo | null>(null);
 
-  useEffect(() => {
+  const refreshManagement = useCallback(() => {
     api.management().then((info) => {
       setManagementInfo(info);
       if (info.mode === 'proxy' || info.mode === 'ingress') setMode(info.mode);
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    api.authConfig().then((cfg) => {
+      if (!cfg.auth_required || getToken()) {
+        refreshManagement();
+      }
+    }).catch(() => {});
+  }, [refreshManagement]);
 
   function logout() {
     clearToken();
@@ -74,7 +92,7 @@ export default function App() {
               <Route path="/login" element={<Login />} />
               <Route
                 element={
-                  <Protected>
+                  <Protected onAuthed={refreshManagement}>
                     <Layout onLogout={logout} />
                   </Protected>
                 }

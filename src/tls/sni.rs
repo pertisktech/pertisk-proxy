@@ -8,7 +8,7 @@ use pingora_core::tls::ssl::NameType;
 use pingora_core::tls::{pkey, pkey::Private, x509};
 use tracing::warn;
 
-use super::store::{CertPaths, CertStore};
+use super::store::{CertStore, StoredCert};
 
 /// Pingora OpenSSL/BoringSSL callback: pick certificate from [`CertStore`] using client SNI.
 pub struct CertStoreSniCallback {
@@ -21,25 +21,25 @@ impl TlsAccept for CertStoreSniCallback {
         let sni = ssl
             .servername(NameType::HOST_NAME)
             .map(str::to_owned);
-        let paths = sni
+        let cert = sni
             .as_deref()
             .and_then(|host| self.store.lookup_sni(host))
             .or_else(|| {
                 if sni.is_none() {
-                    self.store.default_paths()
+                    self.store.default_cert()
                 } else {
                     None
                 }
             });
 
-        let Some(paths) = paths else {
+        let Some(cert) = cert else {
             warn!(sni = ?sni, "TLS handshake: no certificate for SNI");
             return;
         };
 
-        match load_openssl_key_pair(&paths) {
-            Ok((cert, chain, key)) => {
-                if let Err(err) = ssl_use_certificate(ssl, &cert) {
+        match load_openssl_key_pair(&cert) {
+            Ok((leaf, chain, key)) => {
+                if let Err(err) = ssl_use_certificate(ssl, &leaf) {
                     warn!(error = %err, sni = ?sni, "failed to set TLS certificate");
                     return;
                 }
@@ -54,24 +54,18 @@ impl TlsAccept for CertStoreSniCallback {
                 }
             }
             Err(err) => {
-                warn!(
-                    error = %err,
-                    sni = ?sni,
-                    cert = %paths.cert.display(),
-                    "failed to load TLS certificate for SNI"
-                );
+                warn!(error = %err, sni = ?sni, "failed to load TLS certificate for SNI");
             }
         }
     }
 }
 
 fn load_openssl_key_pair(
-    paths: &CertPaths,
+    cert: &StoredCert,
 ) -> Result<(x509::X509, Vec<x509::X509>, pkey::PKey<Private>), String> {
-    let cert_bytes = std::fs::read(&paths.cert)
-        .map_err(|e| format!("read cert {}: {e}", paths.cert.display()))?;
-    let key_bytes = std::fs::read(&paths.key)
-        .map_err(|e| format!("read key {}: {e}", paths.key.display()))?;
+    let (cert_bytes, key_bytes) = cert
+        .read_pem()
+        .map_err(|e| format!("read TLS PEM: {e}"))?;
     let stack = x509::X509::stack_from_pem(&cert_bytes)
         .map_err(|e| format!("parse cert PEM: {e}"))?;
     if stack.is_empty() {

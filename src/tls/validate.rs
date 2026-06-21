@@ -56,6 +56,22 @@ pub fn validate_cert_pair_pem(cert_pem: &[u8], key_pem: &[u8]) -> Result<()> {
     Ok(())
 }
 
+pub fn warn_host_cert_mismatch_pem(cert_pem: &[u8], configured_hosts: &[String]) -> Result<()> {
+    let cert_names = leaf_cert_names(cert_pem).context("failed to parse certificate PEM")?;
+    for host in configured_hosts {
+        let host = host.split(':').next().unwrap_or(host).to_ascii_lowercase();
+        if cert_covers_host(&cert_names, &host) {
+            continue;
+        }
+        warn!(
+            configured_host = %host,
+            cert_names = ?cert_names,
+            "TLS hostname is not covered by certificate; clients will reject the handshake (BadCertificate)"
+        );
+    }
+    Ok(())
+}
+
 /// Warn when configured TLS hostnames are not covered by the certificate SAN/CN.
 pub fn warn_host_cert_mismatch(cert_path: &Path, configured_hosts: &[String]) -> Result<()> {
     let pem = fs::read(cert_path)

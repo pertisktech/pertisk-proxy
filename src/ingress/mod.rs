@@ -130,7 +130,7 @@ pub fn run() -> anyhow::Result<()> {
     let runtime_config = Arc::new(RwLock::new(Config::default()));
     let certs_dir = std::env::var("PERTISK_CERTS_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("/var/lib/pertisk-proxy/certs"));
+        .unwrap_or_else(|_| std::env::temp_dir().join("pertisk-proxy-certs"));
     std::fs::create_dir_all(&certs_dir).ok();
 
     let proxy_log_enabled = Arc::new(AtomicBool::new(
@@ -151,7 +151,6 @@ pub fn run() -> anyhow::Result<()> {
         Arc::clone(&router),
         Arc::clone(&runtime_config),
         Arc::clone(&cert_store),
-        certs_dir.clone(),
         Arc::clone(&proxy_log),
     );
 
