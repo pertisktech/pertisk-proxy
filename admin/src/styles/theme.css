@@ -3,6 +3,12 @@
 .status-red { color: var(--color-red-r1); background: color-mix(in srgb, var(--color-red-r1) 14%, transparent); }
 .status-gray { color: var(--color-muted); background: color-mix(in srgb, var(--color-muted) 14%, transparent); }
 
+.alert-warning {
+  color: var(--color-yellow-y1);
+  background: color-mix(in srgb, var(--color-yellow-y1) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-yellow-y1) 34%, transparent);
+}
+
 .badge {
   display: inline-flex;
   align-items: center;

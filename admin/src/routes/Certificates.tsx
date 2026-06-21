@@ -426,9 +426,9 @@ export function Certificates() {
   return (
     <div className="space-y-4">
       {pendingAcme.length > 0 ? (
-        <div className="rounded-lg border border-yellow-y1/30 bg-yellow-y1/10 p-4 text-sm" role="status">
-          <p className="font-medium text-yellow-y1">ACME issuance in progress</p>
-          <ul className="mt-2 space-y-1 text-text-secondary">
+        <div className="alert-warning rounded-lg p-4 text-sm" role="status">
+          <p className="font-medium">ACME issuance in progress</p>
+          <ul className="mt-2 space-y-1 opacity-90">
             {pendingAcme.map((tls, i) => (
               <li key={i}>
                 {domainLabelForTls(tls)} — {challengeLabel(tls)}
@@ -484,7 +484,7 @@ export function Certificates() {
                       <Award size={16} className="text-primary" />
                       {domainLabelForTls(tls)}
                     </h3>
-                    {pending ? <span className="text-xs text-yellow-y1">Pending</span> : null}
+                    {pending ? <span className="badge status-yellow">Pending</span> : null}
                   </div>
                   <p className="mt-1 flex items-center gap-1 text-sm text-text-secondary">
                     <Shield size={14} /> {issuerLabel(tls, certRows)}
@@ -544,7 +544,7 @@ export function Certificates() {
                     <tr className="border-b border-border hover:bg-hover/50">
                       <td className="px-4 py-3 font-medium">
                         {domainLabelForTls(tls)}
-                        {pending ? <span className="ml-2 text-xs text-yellow-y1">Pending</span> : null}
+                        {pending ? <span className="badge status-yellow ml-2">Pending</span> : null}
                       </td>
                       <td className="px-4 py-3">{issuerLabel(tls, certRows)}</td>
                       <td className="px-4 py-3">

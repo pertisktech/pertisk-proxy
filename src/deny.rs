@@ -50,6 +50,7 @@ pub async fn respond_pingora(session: &mut Session, tls: bool, server: &str) -> 
     let template = if tls { &*TLS_421_HEADERS } else { &*PLAIN_404_HEADERS };
     let mut resp = template.clone();
     resp.insert_header("Server", server)?;
+    resp.insert_header("X-App-Name", crate::app_name())?;
     session.write_response_header(Box::new(resp), false).await?;
     session
         .write_response_body(Some(Bytes::from_static(BODY)), true)
@@ -63,6 +64,7 @@ pub fn h3_response(tls: bool) -> http::Response<Vec<u8>> {
         .header("content-type", "text/plain")
         .header("content-length", BODY.len())
         .header("server", "pertisk-proxy/h3")
+        .header("x-app-name", crate::app_name())
         .body(BODY.to_vec())
         .unwrap()
 }

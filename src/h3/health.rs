@@ -81,6 +81,8 @@ pub async fn try_serve(incoming: IncomingH3Headers) {
     };
 
     let headers = (*h3_headers).clone();
+    let mut headers = headers.to_vec();
+    headers.push(H3Header::new(b"x-app-name", crate::app_name().as_bytes()));
 
     // Respond immediately; drain request body in the background so we don't
     // add recv latency to the probe hot path.

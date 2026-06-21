@@ -18,6 +18,7 @@ export default {
         sidebar: 'var(--color-sidebar)',
         'red-r1': 'var(--color-red-r1)',
         'green-g1': 'var(--color-green-g1)',
+        'yellow-y1': 'var(--color-yellow-y1)',
       },
       fontFamily: {
         sans: 'var(--font-sans)',

@@ -295,6 +295,7 @@ async fn handle_request(
         headers.insert(http::header::CONTENT_LENGTH, v);
     }
     headers.insert(http::header::SERVER, http::HeaderValue::from_static("pertisk-proxy/h3"));
+    crate::apply_app_name(&mut headers);
     for (name, value) in &plan.middleware.response_headers {
         if let (Ok(n), Ok(v)) = (
             http::HeaderName::from_bytes(name.as_bytes()),
@@ -338,6 +339,7 @@ async fn try_serve_health(
         .status(http::StatusCode::OK)
         .header(http::header::CONTENT_TYPE, content_type)
         .header(http::header::SERVER, "pertisk-proxy/h3")
+        .header("x-app-name", crate::app_name())
         .body(())
         .unwrap();
     if !body.is_empty() {
@@ -354,6 +356,7 @@ fn plain_response(status: http::StatusCode, body: &[u8]) -> http::Response<()> {
         .status(status)
         .header(http::header::CONTENT_TYPE, "text/plain")
         .header(http::header::SERVER, "pertisk-proxy/h3")
+        .header("x-app-name", crate::app_name())
         .body(())
         .unwrap();
     if let Ok(v) = http::HeaderValue::from_str(&body.len().to_string()) {

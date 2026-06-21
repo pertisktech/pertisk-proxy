@@ -297,6 +297,7 @@ async fn handle_proxied_request(
 
     let mut response = http::Response::builder().status(status);
     response = response.header("Server", "pertisk-proxy/h3");
+    response = response.header("x-app-name", crate::app_name());
     for (name, value) in response_headers.iter() {
         if name == http::header::SERVER {
             continue;

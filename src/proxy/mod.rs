@@ -150,8 +150,9 @@ impl ProxyHttp for Gateway {
                 let token = token.trim_end_matches('/');
                 if !token.is_empty() {
                     if let Some(body) = store.get(token) {
-                        let mut resp = ResponseHeader::build(http::StatusCode::OK, Some(1))?;
+                        let mut resp = ResponseHeader::build(http::StatusCode::OK, Some(2))?;
                         resp.insert_header("Content-Type", "text/plain")?;
+                        resp.insert_header("X-App-Name", crate::app_name())?;
                         session.write_response_header(Box::new(resp), false).await?;
                         session
                             .write_response_body(Some(bytes::Bytes::from(body)), true)
@@ -198,9 +199,10 @@ impl ProxyHttp for Gateway {
             let target = format!("https://{host}{port_suffix}{path_q}");
 
             let mut resp =
-                ResponseHeader::build(http::StatusCode::PERMANENT_REDIRECT, Some(2))?;
+                ResponseHeader::build(http::StatusCode::PERMANENT_REDIRECT, Some(3))?;
             resp.insert_header("Location", target)?;
             resp.insert_header("Content-Length", "0")?;
+            resp.insert_header("X-App-Name", crate::app_name())?;
             session.write_response_header(Box::new(resp), true).await?;
             return Ok(true);
         }
@@ -372,6 +374,9 @@ impl ProxyHttp for Gateway {
         let protocol = downstream_protocol_label(session);
         upstream_response
             .insert_header("Server", format!("pertisk-proxy/{protocol}"))
+            .ok();
+        upstream_response
+            .insert_header("X-App-Name", crate::app_name())
             .ok();
 
         if is_downstream_tls(session) {

@@ -94,6 +94,7 @@ pub fn error_response(status: StatusCode, message: &str) -> Response<Vec<u8>> {
         .status(status)
         .header("content-type", "text/plain")
         .header("server", "pertisk-proxy/h3")
+        .header("x-app-name", crate::app_name())
         .body(message.as_bytes().to_vec())
         .unwrap()
 }

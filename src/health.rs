@@ -74,6 +74,7 @@ pub async fn try_respond_health(
             resp.insert_header("Content-Type", content_type)?;
             resp.insert_header("Content-Length", body.len())?;
             resp.insert_header("Server", server)?;
+            resp.insert_header("X-App-Name", crate::app_name())?;
             session.write_response_header(Box::new(resp), false).await?;
             session
                 .write_response_body(Some(Bytes::from_static(body)), true)
@@ -85,6 +86,7 @@ pub async fn try_respond_health(
             resp.insert_header("Content-Type", content_type)?;
             resp.insert_header("Content-Length", body.len())?;
             resp.insert_header("Server", server)?;
+            resp.insert_header("X-App-Name", crate::app_name())?;
             session.write_response_header(Box::new(resp), true).await?;
             Ok(true)
         }
