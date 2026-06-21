@@ -19,6 +19,7 @@ use pertisk_proxy::h3::H3Config;
 #[cfg(feature = "ingress")]
 use pertisk_proxy::logging;
 #[cfg(feature = "ingress")]
+use pertisk_proxy::log::ProxyLog;
 use pertisk_proxy::runtime;
 #[cfg(feature = "ingress")]
 use pertisk_proxy::server::{self, PendingH3};
@@ -29,7 +30,8 @@ use pertisk_proxy::Router;
 
 #[cfg(feature = "ingress")]
 fn main() -> Result<()> {
-    logging::init();
+    let proxy_log = Arc::new(ProxyLog::new(10_000));
+    logging::init(Some(Arc::clone(&proxy_log)));
     let runtime_cfg = runtime::runtime_config_from_env(&runtime::ingress_runtime_env())?;
     let tokio_runtime = runtime::build_runtime(&runtime_cfg, "pertisk-proxy-ingress-worker")?;
 
@@ -55,6 +57,7 @@ fn main() -> Result<()> {
     });
 
     let cert_store = Arc::new(CertStore::new());
+    let proxy_log_enabled = Arc::new(std::sync::atomic::AtomicBool::new(true));
     if let (Ok(cert), Ok(key)) = (
         config.server.tls_cert_path(),
         config.server.tls_key_path(),
@@ -83,6 +86,8 @@ fn main() -> Result<()> {
         &runtime_cfg,
         None,
         pending_h3,
+        proxy_log,
+        proxy_log_enabled,
     )
 }
 

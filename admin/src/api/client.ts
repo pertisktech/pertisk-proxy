@@ -28,14 +28,27 @@ export type ManagementInfo = {
   version: string;
   uptime_secs: number;
   db_path: string;
+  management_addr: string;
   route_count: number;
   site_count: number;
+  backend_count: number;
+  tls_count: number;
   tls_host_count: number;
   enable_h3: boolean;
   auto_https: boolean;
   runtime_mode: string;
   listeners: { http: string; https: string; h3_udp: string };
   http3: Record<string, unknown>;
+  hostname?: string | null;
+  os?: string | null;
+  cpu_count?: number | null;
+  cpu_usage_percent?: number | null;
+  memory_total_bytes?: number | null;
+  memory_used_bytes?: number | null;
+  process_cpu_usage_percent?: number | null;
+  process_memory_bytes?: number | null;
+  ipv4_addrs?: string[];
+  ipv6_addrs?: string[];
 };
 
 export type RouteView = {
@@ -118,6 +131,29 @@ export type SupportedDnsProvider = {
   fields: SupportedDnsProviderField[];
 };
 
+export type LogEntryType =
+  | 'request'
+  | 'response'
+  | 'health_check'
+  | 'config_reload'
+  | 'tracing'
+  | 'error';
+
+export type LogEntry = {
+  timestamp: string;
+  level: string;
+  host?: string | null;
+  path?: string | null;
+  upstream?: string | null;
+  status?: number | null;
+  duration_ms?: number | null;
+  message: string;
+  type: LogEntryType;
+  protocol?: string | null;
+  encoding?: string | null;
+  method?: string | null;
+};
+
 export const api = {
   health: () => request<{ status: string }>('/health'),
   version: () => request<{ version: string; binary: string }>('/version'),
@@ -130,6 +166,13 @@ export const api = {
     }),
   authCheck: () => request<{ authenticated: boolean }>('/auth/check'),
   management: () => request<ManagementInfo>('/management'),
+  logs: (params?: { type?: 'system' | 'proxy' | 'http' | 'all'; host?: string }) => {
+    const search = new URLSearchParams();
+    if (params?.type && params.type !== 'all') search.set('type', params.type === 'http' ? 'proxy' : params.type);
+    if (params?.host) search.set('host', params.host);
+    const q = search.toString();
+    return request<LogEntry[]>(q ? `/logs?${q}` : '/logs');
+  },
   routes: () => request<{ routes: RouteView[]; count: number }>('/routes'),
   config: () => request<ProxyConfig>('/config'),
   saveConfig: (config: ProxyConfig) =>

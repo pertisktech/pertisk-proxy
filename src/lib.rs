@@ -11,6 +11,7 @@ pub mod db;
 pub mod controller;
 pub mod h3;
 pub mod logging;
+pub mod log;
 pub mod proxy;
 pub mod router;
 pub mod routes_config;
@@ -19,5 +20,6 @@ pub mod server;
 pub mod tls;
 
 pub use config::{IngressConfig, ProxyConfig, ServerConfig};
+pub use log::{ProxyLog, ProxyLogEntry};
 pub use proxy::Gateway;
 pub use router::Router;

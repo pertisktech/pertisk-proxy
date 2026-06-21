@@ -1,9 +1,131 @@
-use tracing::Level;
-use tracing_subscriber::{fmt, EnvFilter};
+use std::sync::Arc;
 
-pub fn init() {
+use tracing::field::{Field, Visit};
+use tracing::{Event, Level, Subscriber};
+use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{fmt, EnvFilter, Registry};
+
+use crate::log::{LogLevel, ProxyLog, ProxyLogEntry};
+
+pub fn init(ui_log: Option<Arc<ProxyLog>>) {
     let filter = env_filter(parse_log_level_from_env());
-    fmt().with_env_filter(filter).init();
+    let fmt_layer = fmt::layer();
+
+    if let Some(log) = ui_log {
+        Registry::default()
+            .with(filter)
+            .with(fmt_layer)
+            .with(UiLogLayer { log })
+            .init();
+    } else {
+        Registry::default().with(filter).with(fmt_layer).init();
+    }
+}
+
+struct UiLogLayer {
+    log: Arc<ProxyLog>,
+}
+
+impl<S> Layer<S> for UiLogLayer
+where
+    S: Subscriber,
+{
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let target = event.metadata().target();
+        let include = target.starts_with("pertisk_proxy")
+            || (target.starts_with("pingora")
+                && matches!(
+                    *event.metadata().level(),
+                    Level::WARN | Level::ERROR
+                ));
+        if !include {
+            return;
+        }
+
+        let level = match *event.metadata().level() {
+            Level::ERROR => LogLevel::Error,
+            Level::WARN => LogLevel::Warn,
+            Level::INFO => LogLevel::Info,
+            Level::DEBUG => LogLevel::Debug,
+            Level::TRACE => return,
+        };
+
+        let mut visitor = EventVisitor::default();
+        event.record(&mut visitor);
+
+        let message = format_event_message(event, &visitor);
+        let source = short_target(target);
+        self.log
+            .push_sync(ProxyLogEntry::tracing_event(level, &source, message));
+    }
+}
+
+#[derive(Default)]
+struct EventVisitor {
+    message: String,
+    fields: Vec<(String, String)>,
+}
+
+impl Visit for EventVisitor {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        let rendered = format!("{value:?}");
+        if field.name() == "message" {
+            self.message = trim_debug_quotes(&rendered);
+        } else {
+            self.fields.push((field.name().to_string(), rendered));
+        }
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "message" {
+            self.message = value.to_string();
+        } else {
+            self.fields
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+    }
+}
+
+fn format_event_message(event: &Event<'_>, visitor: &EventVisitor) -> String {
+    let mut parts = Vec::new();
+    if !visitor.message.is_empty() && visitor.message != "log" {
+        parts.push(visitor.message.clone());
+    } else if !event.metadata().name().is_empty() && event.metadata().name() != "log" {
+        parts.push(event.metadata().name().to_string());
+    }
+
+    for (key, value) in &visitor.fields {
+        if should_skip_log_field(key) {
+            continue;
+        }
+        parts.push(format!("{key}={value}"));
+    }
+
+    if parts.is_empty() {
+        event.metadata().target().to_string()
+    } else {
+        parts.join(" ")
+    }
+}
+
+fn should_skip_log_field(key: &str) -> bool {
+    matches!(
+        key,
+        "log.target" | "log.module_path" | "log.file" | "log.line" | "log.module"
+    )
+}
+
+fn trim_debug_quotes(value: &str) -> String {
+    value.trim_matches('"').to_string()
+}
+
+fn short_target(target: &str) -> String {
+    target
+        .strip_prefix("pertisk_proxy::")
+        .or_else(|| target.strip_prefix("pertisk_proxy"))
+        .unwrap_or(target)
+        .to_string()
 }
 
 fn env_filter(default_level: Level) -> EnvFilter {
@@ -95,5 +217,10 @@ mod tests {
             "info,pingora_core::services::listening=off,pingora_proxy=warn"
         );
         assert_eq!(build_filter_spec(Level::DEBUG), "debug");
+    }
+
+    #[test]
+    fn short_target_strips_crate_prefix() {
+        assert_eq!(short_target("pertisk_proxy::tls::sni"), "tls::sni");
     }
 }

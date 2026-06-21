@@ -6,13 +6,14 @@ pub mod acme;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use axum::{
     body::Body,
-    extract::{Path as AxumPath, Request, State},
+    extract::{Path as AxumPath, Query, Request, State},
     http::{header, HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Redirect, Response},
@@ -28,6 +29,7 @@ use tracing::{info, warn};
 
 use crate::config::ProxyConfig;
 use crate::db::{CertificateRow, Database, DnsProviderRow};
+use crate::log::{dedupe_consecutive_system_logs, ProxyLog, ProxyLogEntry};
 use crate::proxy::apply;
 use crate::proxy_config::{Config, TlsConfig, TlsSource};
 use crate::runtime::RuntimeConfig;
@@ -68,6 +70,8 @@ pub struct AdminState {
     pub db: Option<Arc<Database>>,
     pub certs_dir: PathBuf,
     pub http01_store: Arc<Http01ChallengeStore>,
+    pub proxy_log: Arc<ProxyLog>,
+    pub proxy_log_enabled: Arc<AtomicBool>,
     #[cfg(feature = "acme")]
     pub acme_manager: Option<Arc<AcmeManager>>,
 }
@@ -102,6 +106,7 @@ pub fn router(state: AdminState) -> Router {
 
     let protected = Router::new()
         .route("/api/management", get(get_management))
+        .route("/api/logs", get(get_logs))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/reload", post(reload_config))
         .route("/api/tls", get(get_tls))
@@ -358,19 +363,33 @@ async fn auth_check(
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
 struct ManagementInfo {
     mode: &'static str,
     version: &'static str,
     uptime_secs: u64,
     db_path: String,
+    management_addr: String,
     route_count: usize,
     site_count: usize,
+    backend_count: usize,
+    tls_count: usize,
     tls_host_count: usize,
     enable_h3: bool,
     auto_https: bool,
     runtime_mode: String,
     listeners: ListenerInfo,
     http3: crate::http3_options::Http3Options,
+    hostname: Option<String>,
+    os: Option<String>,
+    cpu_count: Option<u32>,
+    cpu_usage_percent: Option<f32>,
+    memory_total_bytes: Option<u64>,
+    memory_used_bytes: Option<u64>,
+    process_cpu_usage_percent: Option<f32>,
+    process_memory_bytes: Option<u64>,
+    ipv4_addrs: Vec<String>,
+    ipv6_addrs: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -383,13 +402,28 @@ struct ListenerInfo {
 async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo> {
     let server = &state.proxy_config.server;
     let cfg = state.runtime_config.read().await;
+    let (
+        hostname,
+        os,
+        cpu_count,
+        cpu_usage_percent,
+        memory_total_bytes,
+        memory_used_bytes,
+        process_cpu_usage_percent,
+        process_memory_bytes,
+        ipv4_addrs,
+        ipv6_addrs,
+    ) = gather_system_info();
     Json(ManagementInfo {
         mode: "proxy",
         version: VERSION,
         uptime_secs: state.started_at.elapsed().as_secs(),
         db_path: state.proxy_config.db_path.display().to_string(),
+        management_addr: cfg.management_addr.to_string(),
         route_count: state.router.route_count(),
         site_count: cfg.sites.len(),
+        backend_count: cfg.backends.len(),
+        tls_count: cfg.tls.len(),
         tls_host_count: state.cert_store.host_count(),
         enable_h3: server.enable_h3,
         auto_https: state.proxy_config.auto_https,
@@ -400,7 +434,160 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
             h3_udp: crate::h3::effective_udp_listen_display(&server.h3_udp_listen),
         },
         http3: cfg.http3.clone(),
+        hostname,
+        os,
+        cpu_count,
+        cpu_usage_percent,
+        memory_total_bytes,
+        memory_used_bytes,
+        process_cpu_usage_percent,
+        process_memory_bytes,
+        ipv4_addrs,
+        ipv6_addrs,
     })
+}
+
+fn gather_system_info() -> (
+    Option<String>,
+    Option<String>,
+    Option<u32>,
+    Option<f32>,
+    Option<u64>,
+    Option<u64>,
+    Option<f32>,
+    Option<u64>,
+    Vec<String>,
+    Vec<String>,
+) {
+    let mut hostname = None;
+    let os = if sysinfo::IS_SUPPORTED_SYSTEM {
+        sysinfo::System::name()
+            .or_else(|| sysinfo::System::long_os_version())
+            .or_else(|| Some(std::env::consts::OS.to_string()))
+    } else {
+        Some(std::env::consts::OS.to_string())
+    };
+    let mut cpu_count = None;
+    let mut cpu_usage_percent = None;
+    let mut memory_total_bytes = None;
+    let mut memory_used_bytes = None;
+    let mut process_cpu_usage_percent = None;
+    let mut process_memory_bytes = None;
+
+    if sysinfo::IS_SUPPORTED_SYSTEM {
+        let mut sys = sysinfo::System::new_all();
+        sys.refresh_memory();
+        sys.refresh_cpu_all();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
+        hostname = sysinfo::System::host_name();
+        cpu_count = Some(sys.cpus().len() as u32);
+        cpu_usage_percent = Some(sys.global_cpu_usage());
+        memory_total_bytes = Some(sys.total_memory());
+        memory_used_bytes = Some(sys.used_memory());
+
+        let pid = sysinfo::Pid::from_u32(std::process::id());
+        if let Some(process) = sys.process(pid) {
+            process_cpu_usage_percent = Some(process.cpu_usage());
+            process_memory_bytes = Some(process.memory());
+        }
+    }
+
+    fn is_private_or_docker_ipv4(ip: &std::net::Ipv4Addr) -> bool {
+        let o = ip.octets();
+        o[0] == 127
+            || (o[0] == 172 && o[1] >= 16 && o[1] <= 31)
+            || (o[0] == 192 && o[1] == 168)
+    }
+
+    let (mut ipv4_addrs, mut ipv6_addrs): (Vec<String>, Vec<String>) =
+        match local_ip_address::list_afinet_netifas() {
+            Ok(list) => {
+                let mut v4 = Vec::new();
+                let mut v6 = Vec::new();
+                for (_name, ip) in list {
+                    match ip {
+                        std::net::IpAddr::V4(a) => {
+                            if !is_private_or_docker_ipv4(&a) {
+                                v4.push(a.to_string());
+                            }
+                        }
+                        std::net::IpAddr::V6(a) => {
+                            let s = a.segments();
+                            if s[0] >= 0x2000 && s[0] <= 0x3fff {
+                                v6.push(a.to_string());
+                            }
+                        }
+                    }
+                }
+                (v4, v6)
+            }
+            Err(_) => (Vec::new(), Vec::new()),
+        };
+    ipv4_addrs.sort();
+    ipv6_addrs.sort();
+    ipv4_addrs.dedup();
+    ipv6_addrs.dedup();
+
+    (
+        hostname,
+        os,
+        cpu_count,
+        cpu_usage_percent,
+        memory_total_bytes,
+        memory_used_bytes,
+        process_cpu_usage_percent,
+        process_memory_bytes,
+        ipv4_addrs,
+        ipv6_addrs,
+    )
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+struct LogsQuery {
+    #[serde(rename = "type")]
+    log_type: Option<String>,
+    host: Option<String>,
+}
+
+async fn get_logs(
+    State(state): State<AdminState>,
+    Query(q): Query<LogsQuery>,
+) -> Json<Vec<ProxyLogEntry>> {
+    let mut entries = state.proxy_log.recent(500).await;
+    entries.retain(|e| e.entry_type != crate::log::LogEntryType::Request);
+
+    if let Some(ref t) = q.log_type {
+        match t.as_str() {
+            "system" => entries.retain(ProxyLogEntry::is_system),
+            "proxy" | "domain" | "http" => entries.retain(ProxyLogEntry::has_domain),
+            _ => {}
+        }
+    }
+
+    if let Some(ref host) = q.host {
+        let host_trim = host.trim().to_lowercase();
+        if !host_trim.is_empty() {
+            entries.retain(|e| {
+                e.host
+                    .as_ref()
+                    .map(|h| {
+                        let h = h.trim().to_lowercase();
+                        h == host_trim || h.ends_with(&format!(".{host_trim}"))
+                    })
+                    .unwrap_or(false)
+            });
+        }
+    }
+
+    if q.log_type
+        .as_deref()
+        .is_some_and(|t| t.eq_ignore_ascii_case("system"))
+    {
+        entries = dedupe_consecutive_system_logs(entries);
+    }
+
+    Json(entries)
 }
 
 #[derive(Serialize)]
@@ -521,6 +708,17 @@ async fn put_config(
         tracing::warn!(error = %err, "config save: failed to reload certificates from database");
     }
     *state.runtime_config.write().await = body.clone();
+    state
+        .proxy_log_enabled
+        .store(body.proxy_log, Ordering::Relaxed);
+    state
+        .proxy_log
+        .push(ProxyLogEntry::config_reload(format!(
+            "config saved ({} sites, {} routes)",
+            body.sites.len(),
+            state.router.route_count()
+        )))
+        .await;
     #[cfg(feature = "acme")]
     if let Some(acme) = state.acme_manager.clone() {
         let cfg = body.clone();
@@ -568,6 +766,17 @@ async fn reload_config(State(state): State<AdminState>) -> Result<Json<ReloadRes
         tracing::warn!(error = %err, "reload: failed to load certificates from database");
     }
     *state.runtime_config.write().await = cfg.clone();
+    state
+        .proxy_log_enabled
+        .store(cfg.proxy_log, Ordering::Relaxed);
+    state
+        .proxy_log
+        .push(ProxyLogEntry::config_reload(format!(
+            "config reloaded ({} sites, {} routes)",
+            cfg.sites.len(),
+            state.router.route_count()
+        )))
+        .await;
     #[cfg(feature = "acme")]
     if let Some(acme) = state.acme_manager.clone() {
         let db_c = db.clone();
@@ -1156,6 +1365,8 @@ pub fn build_state(
     #[cfg(feature = "acme")] acme_manager: Option<Arc<AcmeManager>>,
     runtime_config: Config,
     sessions: Option<Sessions>,
+    proxy_log: Arc<ProxyLog>,
+    proxy_log_enabled: Arc<AtomicBool>,
 ) -> AdminState {
     let env_password = admin_password();
     let auth_required = db.is_some() || env_password.is_some();
@@ -1183,6 +1394,8 @@ pub fn build_state(
         db,
         certs_dir,
         http01_store,
+        proxy_log,
+        proxy_log_enabled,
         #[cfg(feature = "acme")]
         acme_manager,
     }

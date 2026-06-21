@@ -4,6 +4,7 @@
 //! Admin UI is the primary way to add sites, import certificates, and configure DNS providers.
 //! For Kubernetes Ingress control, use the `pertisk-proxy-ingress` binary.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -13,6 +14,7 @@ use pertisk_proxy::config::ProxyConfig;
 use pertisk_proxy::db::Database;
 use pertisk_proxy::h3;
 use pertisk_proxy::h3::H3Config;
+use pertisk_proxy::log::{ProxyLog, ProxyLogEntry};
 use pertisk_proxy::logging;
 use pertisk_proxy::proxy::apply;
 use pertisk_proxy::proxy_config::Config;
@@ -25,7 +27,8 @@ use pertisk_proxy::Router;
 use pertisk_proxy::tls::AcmeManager;
 
 fn main() -> Result<()> {
-    logging::init();
+    let proxy_log = Arc::new(ProxyLog::new(10_000));
+    logging::init(Some(Arc::clone(&proxy_log)));
     let runtime_cfg = runtime::runtime_config_from_env(&runtime::proxy_runtime_env())?;
     let tokio_runtime = runtime::build_runtime(&runtime_cfg, "pertisk-proxy-worker")?;
 
@@ -52,9 +55,19 @@ fn main() -> Result<()> {
     let router = Router::new();
     let cert_store = Arc::new(CertStore::new());
     let http01_store = Arc::new(Http01ChallengeStore::new());
+    let proxy_log_enabled = Arc::new(AtomicBool::new(runtime_config.proxy_log));
 
     apply::apply_config(&router, &runtime_config)?;
     cert_store.reload_from_configs(&runtime_config.tls)?;
+
+    tokio_runtime.block_on(async {
+        proxy_log
+            .push(ProxyLogEntry::config_reload(format!(
+                "started pertisk-proxy {}",
+                env!("pertisk_proxy_VERSION")
+            )))
+            .await;
+    });
 
     tokio_runtime.block_on(async {
         if let Err(err) = pertisk_proxy::api::load_db_certs_into_store(
@@ -174,6 +187,8 @@ fn main() -> Result<()> {
             Some(acme_manager.clone()),
             runtime_config.clone(),
             Some(sessions),
+            Arc::clone(&proxy_log),
+            Arc::clone(&proxy_log_enabled),
         );
         let admin_addr = pertisk_proxy::api::management_addr();
         tokio_runtime.spawn(async move {
@@ -218,6 +233,8 @@ fn main() -> Result<()> {
         &runtime_cfg,
         Some(http01_store),
         pending_h3,
+        proxy_log,
+        proxy_log_enabled,
     )
 }
 

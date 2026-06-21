@@ -10,6 +10,7 @@ import {
   X,
   Globe,
   Server,
+  ScrollText,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/utils';
@@ -20,6 +21,7 @@ const NAV = [
   { to: '/sites', label: 'Sites', icon: Globe },
   { to: '/certificates', label: 'Certificates', icon: Shield },
   { to: '/dns-providers', label: 'DNS Providers', icon: Server },
+  { to: '/logs', label: 'Logs', icon: ScrollText },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
@@ -38,7 +40,6 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
         )}
       >
         <div className="flex h-16 items-center gap-2 border-b border-border px-4">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/20 text-primary font-bold">P</div>
           <div>
             <div className="font-semibold">Pertisk-Proxy</div>
             <div className="text-xs text-text-secondary">Management</div>

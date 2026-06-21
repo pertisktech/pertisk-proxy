@@ -3,7 +3,9 @@ pub mod forward;
 pub mod apply;
 pub mod grpc;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use pingora_core::listeners::ALPN;
@@ -15,6 +17,7 @@ use pingora_proxy::{FailToProxy, ProxyHttp, Session};
 
 use crate::deny;
 use crate::health;
+use crate::log::{ProxyLog, ProxyLogEntry};
 use crate::proxy::forward::resolve_forward;
 use crate::router::Router;
 use crate::tls::CertStore;
@@ -27,6 +30,8 @@ pub struct RequestCtx {
     pub is_grpc: bool,
     pub is_grpc_web: bool,
     pub is_long_lived_stream: bool,
+    pub log_started: Option<Instant>,
+    pub log_upstream: Option<String>,
 }
 
 impl From<crate::proxy::forward::MiddlewareAction> for RequestCtx {
@@ -38,6 +43,8 @@ impl From<crate::proxy::forward::MiddlewareAction> for RequestCtx {
             is_grpc: false,
             is_grpc_web: false,
             is_long_lived_stream: false,
+            log_started: None,
+            log_upstream: None,
         }
     }
 }
@@ -50,6 +57,8 @@ pub struct Gateway {
     enable_h3: bool,
     h3_port: u16,
     http01_store: Option<Arc<crate::tls::Http01ChallengeStore>>,
+    log: Arc<ProxyLog>,
+    proxy_log_enabled: Arc<AtomicBool>,
 }
 
 impl Gateway {
@@ -61,6 +70,8 @@ impl Gateway {
         enable_h3: bool,
         h3_port: u16,
         http01_store: Option<Arc<crate::tls::Http01ChallengeStore>>,
+        log: Arc<ProxyLog>,
+        proxy_log_enabled: Arc<AtomicBool>,
     ) -> Self {
         Self {
             router,
@@ -70,6 +81,8 @@ impl Gateway {
             enable_h3,
             h3_port,
             http01_store,
+            log,
+            proxy_log_enabled,
         }
     }
 }
@@ -98,6 +111,7 @@ impl ProxyHttp for Gateway {
     }
 
     async fn early_request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<()> {
+        ctx.log_started = Some(Instant::now());
         let req = session.req_header();
         let host = request_host(req);
         let (is_grpc, is_grpc_web) = grpc::classify_grpc_request(
@@ -268,6 +282,7 @@ impl ProxyHttp for Gateway {
             &host,
             ctx,
         ));
+        ctx.log_upstream = Some(format!("{}:{}", plan.peer_host, plan.peer_port));
         Ok(peer)
     }
 
@@ -394,6 +409,74 @@ impl ProxyHttp for Gateway {
         true
     }
 
+    async fn logging(&self, session: &mut Session, e: Option<&Error>, ctx: &mut Self::CTX) {
+        if !self.proxy_log_enabled.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let req = session.req_header();
+        let host = request_host(req);
+        if host.is_empty() {
+            return;
+        }
+        let path = req
+            .uri
+            .path_and_query()
+            .map(|pq| pq.as_str())
+            .unwrap_or(req.uri.path())
+            .to_string();
+        let method = req.method.as_str().to_string();
+        let protocol = protocol_short(downstream_protocol_label(session));
+        let upstream = ctx
+            .log_upstream
+            .clone()
+            .unwrap_or_else(|| "-".to_string());
+        let duration_ms = ctx
+            .log_started
+            .map(|s| s.elapsed().as_millis() as u64)
+            .unwrap_or(0);
+
+        if let Some(err) = e {
+            if self.suppress_error_log(session, ctx, err) {
+                return;
+            }
+            let _ = self
+                .log
+                .push(ProxyLogEntry::error_with_context(
+                    &host,
+                    &path,
+                    &upstream,
+                    err.to_string(),
+                ))
+                .await;
+            return;
+        }
+
+        let status = session
+            .response_written()
+            .map(|r| r.status.as_u16())
+            .unwrap_or(0);
+        let encoding = session
+            .response_written()
+            .and_then(|r| r.headers.get("content-encoding"))
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let _ = self
+            .log
+            .push(ProxyLogEntry::response(
+                &host,
+                &path,
+                &upstream,
+                status,
+                duration_ms,
+                Some(protocol),
+                encoding.as_deref(),
+                Some(&method),
+            ))
+            .await;
+    }
+
     async fn fail_to_proxy(
         &self,
         session: &mut Session,
@@ -461,6 +544,14 @@ fn downstream_protocol_label(session: &Session) -> &'static str {
         "h2"
     } else {
         "http/1.1"
+    }
+}
+
+fn protocol_short(label: &str) -> &str {
+    match label {
+        "h2" => "2",
+        "http/1.1" => "1.1",
+        other => other,
     }
 }
 

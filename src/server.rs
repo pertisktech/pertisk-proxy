@@ -11,6 +11,7 @@ use tracing::info;
 
 use crate::config::ServerConfig;
 use crate::h3::{tcp_bind_addrs, H3Config};
+use crate::log::ProxyLog;
 use crate::proxy::Gateway;
 use crate::runtime::RuntimeConfig;
 use crate::tls::{validate_cert_pair, CertStore, CertStoreSniCallback};
@@ -33,6 +34,8 @@ pub fn run(
     runtime_cfg: &RuntimeConfig,
     http01_store: Option<Arc<crate::tls::Http01ChallengeStore>>,
     pending_h3: Option<PendingH3>,
+    log: Arc<ProxyLog>,
+    proxy_log_enabled: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<()> {
     let https_enabled = https_should_listen(server_config, &cert_store);
     let sni_enabled = cert_store.host_count() > 0;
@@ -77,6 +80,8 @@ pub fn run(
         server_config.enable_h3,
         server_config.h3_port(),
         http01_store,
+        log,
+        proxy_log_enabled,
     );
     let mut proxy = http_proxy_service(&server.configuration, gateway);
     for addr in tcp_bind_addrs(&server_config.http_listen) {
