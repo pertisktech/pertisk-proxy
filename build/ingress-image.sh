@@ -136,7 +136,7 @@ fi
 
 echo "Done. Image: ${IMAGE}:${VERSION}"
 if [ -n "$PLATFORMS" ]; then
-  echo "Pushed multi-arch manifest ($(PLATFORMS)): ${IMAGE}:${VERSION}"
+  echo "Pushed multi-arch manifest (${PLATFORMS}): ${IMAGE}:${VERSION}"
 elif [ -n "$PUSH" ]; then
   echo "Pushed: ${IMAGE}:${VERSION}"
 else

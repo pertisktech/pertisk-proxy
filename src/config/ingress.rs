@@ -14,13 +14,8 @@ pub struct IngressConfig {
 impl IngressConfig {
     pub fn from_env() -> Result<Self> {
         let server = ServerConfig::from_env_ingress_defaults();
-        server.validate_tls()?;
-
-        if server.enable_h3
-            && (server.tls_cert_path.is_none() || server.tls_key_path.is_none())
-        {
-            anyhow::bail!("ENABLE_H3 requires TLS_CERT_PATH and TLS_KEY_PATH");
-        }
+        // TLS and HTTP/3 use certs reconciled from Kubernetes Secrets (CertStore).
+        // TLS_CERT_PATH / TLS_KEY_PATH are optional bootstrap fallbacks only.
 
         Ok(Self {
             server,

@@ -3,13 +3,13 @@
 # Install into namespace pertisk-proxy: helm upgrade --install pertisk-ingress . -n pertisk-proxy --create-namespace
 
 # -- Number of controller replicas (ignored when autoscaling.enabled; use DaemonSet or multiple replicas + LB for HA)
-replicaCount: 1
+replicaCount: 3
 
 # -- HorizontalPodAutoscaler
 autoscaling:
   enabled: false
-  minReplicas: 1
-  maxReplicas: 3
+  minReplicas: 3
+  maxReplicas: 10
   targetCPUUtilizationPercentage: 75
   # -- Memory utilization target (%). Scale when any pod's memory usage vs request exceeds this. Set to 0 to disable memory scaling.
   targetMemoryUtilizationPercentage: 75
@@ -308,6 +308,6 @@ gatewayClassResource:
 adminIngress:
   enabled: true
   # -- Hostname for the management UI (viewer-only dashboard)
-  host: admin.talos.thaidevops.co
+  host: admin.ingress.pertisk.com
   # -- Optional: Secret (type kubernetes.io/tls) in release namespace for HTTPS. Leave empty for HTTP only.
-  tlsSecretName: "admin-talos-tls"
+  tlsSecretName: "admin-ingress-tls"

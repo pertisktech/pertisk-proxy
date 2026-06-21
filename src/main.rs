@@ -27,6 +27,8 @@ use pertisk_proxy::Router;
 use pertisk_proxy::tls::AcmeManager;
 
 fn main() -> Result<()> {
+    pertisk_proxy::tls::init_crypto_provider();
+
     let proxy_log = Arc::new(ProxyLog::new(10_000));
     logging::init(Some(Arc::clone(&proxy_log)));
     let runtime_cfg = runtime::runtime_config_from_env(&runtime::proxy_runtime_env())?;

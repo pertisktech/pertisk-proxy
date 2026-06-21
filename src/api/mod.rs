@@ -486,6 +486,37 @@ struct ListenerInfo {
     h3_udp: String,
 }
 
+#[cfg(feature = "ingress")]
+fn management_ingress_fields(state: &AdminState) -> (Option<bool>, Option<String>, Option<String>, Option<LeaderElectionInfo>) {
+    (
+        if state.viewer_mode {
+            Some(state.gateway_api_enabled)
+        } else {
+            None
+        },
+        if state.viewer_mode {
+            state.ingress_class.clone()
+        } else {
+            None
+        },
+        if state.viewer_mode {
+            state.gateway_class.clone()
+        } else {
+            None
+        },
+        state.leader_election.as_ref().map(|le| LeaderElectionInfo {
+            enabled: le.enabled,
+            is_leader: le
+                .is_leader
+                .as_ref()
+                .map(|f| f.load(Ordering::Relaxed))
+                .unwrap_or(true),
+            namespace: le.namespace.clone(),
+            lease_name: le.lease_name.clone(),
+        }),
+    )
+}
+
 async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo> {
     let server = &state.proxy_config.server;
     let cfg = state.runtime_config.read().await;
@@ -501,6 +532,16 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
         ipv4_addrs,
         ipv6_addrs,
     ) = gather_system_info();
+    let (gateway_api_enabled, ingress_class, gateway_class, leader_election) = {
+        #[cfg(feature = "ingress")]
+        {
+            management_ingress_fields(&state)
+        }
+        #[cfg(not(feature = "ingress"))]
+        {
+            (None, None, None, None)
+        }
+    };
     Json(ManagementInfo {
         mode: if state.viewer_mode { "ingress" } else { "proxy" },
         version: VERSION,
@@ -535,11 +576,7 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
         process_memory_bytes,
         ipv4_addrs,
         ipv6_addrs,
-        gateway_api_enabled: if state.viewer_mode {
-            Some(state.gateway_api_enabled)
-        } else {
-            None
-        },
+        gateway_api_enabled,
         helm_enabled: if state.viewer_mode {
             Some(std::env::var("PERTISK_HELM_ENABLED")
                 .ok()
@@ -548,26 +585,9 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
         } else {
             None
         },
-        ingress_class: if state.viewer_mode {
-            state.ingress_class.clone()
-        } else {
-            None
-        },
-        gateway_class: if state.viewer_mode {
-            state.gateway_class.clone()
-        } else {
-            None
-        },
-        leader_election: state.leader_election.as_ref().map(|le| LeaderElectionInfo {
-            enabled: le.enabled,
-            is_leader: le
-                .is_leader
-                .as_ref()
-                .map(|f| f.load(Ordering::Relaxed))
-                .unwrap_or(true),
-            namespace: le.namespace.clone(),
-            lease_name: le.lease_name.clone(),
-        }),
+        ingress_class,
+        gateway_class,
+        leader_election,
     })
 }
 

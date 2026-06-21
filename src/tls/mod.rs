@@ -16,6 +16,11 @@ pub use sni::CertStoreSniCallback;
 pub use store::{CertPaths, CertStore};
 pub use validate::validate_cert_pair;
 
+/// Select ring as the process-wide rustls crypto provider (required for rustls 0.23+).
+pub fn init_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 pub use acme::{AcmeManager, Http01ChallengeStore};
 #[cfg(feature = "dns-challenge")]
 pub use dns_01::solver_for_provider;

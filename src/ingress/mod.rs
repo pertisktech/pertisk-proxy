@@ -79,10 +79,11 @@ pub fn run() -> anyhow::Result<()> {
     use crate::server::{self, PendingH3};
     use crate::tls::{CertStore, Http01ChallengeStore};
     use crate::Router;
-    use dashmap::DashMap;
     use kube::Client;
     use tokio::sync::RwLock;
     use tracing::info;
+
+    crate::tls::init_crypto_provider();
 
     let proxy_log = Arc::new(ProxyLog::new(10_000));
     logging::init(Some(Arc::clone(&proxy_log)));

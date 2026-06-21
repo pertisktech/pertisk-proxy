@@ -32,7 +32,7 @@ dns-challenge = [
     "dep:hex",
 ]
 # Quinn + rustls HTTP/3 (default; works with ACME/OpenSSL in the same binary).
-h3-quinn = ["dep:quinn", "dep:h3", "dep:h3-quinn", "dep:rustls", "dep:http-body-util"]
+h3-quinn = ["dep:quinn", "dep:h3", "dep:h3-quinn", "dep:http-body-util"]
 # Quiche/tokio-quiche HTTP/3 (optional; incompatible with acme in the same binary).
 h3-quiche = ["dep:quiche", "dep:tokio-quiche"]
 
@@ -74,7 +74,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.18", features = ["v4"], optional = true }
 x509-parser = "0.16.0"
 rustls-pemfile = "2.2.0"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 quinn = { version = "0.11", optional = true }
 h3 = { version = "0.0.8", optional = true }
 h3-quinn = { version = "0.0.10", optional = true }

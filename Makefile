@@ -46,10 +46,6 @@ REMOTE_PATH ?= /tmp
 PACKAGE_CLEAN ?= 1
 PACKAGE_BUILD ?= 1
 
-# Kubernetes RBAC apply (one-time, before ingress DEB/RPM deploy)
-KUBECONFIG ?=
-K8S_KUBECONFIG ?=
-
 build:
 	$(CARGO) build --release --bin pertisk-proxy --features admin
 
@@ -220,13 +216,7 @@ release-ingress:
 
 # One-time: IngressClass + ClusterRole for external systemd ingress controller
 apply-ingress-rbac:
-	@if [ -n "$(K8S_KUBECONFIG)" ]; then \
-		KUBECONFIG="$(K8S_KUBECONFIG)" kubectl apply -f deploy/kubernetes-rbac.yaml; \
-	elif [ -n "$(KUBECONFIG)" ]; then \
-		KUBECONFIG="$(KUBECONFIG)" kubectl apply -f deploy/kubernetes-rbac.yaml; \
-	else \
-		kubectl apply -f deploy/kubernetes-rbac.yaml; \
-	fi
+	kubectl apply -f deploy/kubernetes-rbac.yaml
 
 # --- Docker: ingress controller image (buildx) ---
 # make docker-ingress              — build local single-arch image
@@ -256,15 +246,13 @@ docker-ingress-multi: admin-dist
 		./build/ingress-image.sh "$(VERSION)"
 	@echo "Pushed multi-arch ($(INGRESS_BUILD_PLATFORMS)): $(HARBOR_INGRESS_IMAGE):$(VERSION)"
 
-# Helm: deploy ingress controller (namespace defaults to pertisk-proxy)
+# Helm: deploy ingress controller (uses current shell kube context, e.g. KubeLens terminal)
 HELM_RELEASE ?= pertisk-proxy-ingress
 HELM_NAMESPACE ?= pertisk-proxy
 HELM_INGRESS_VALUES ?= deploy/helm/pertisk-ingress/values.yaml
-HELM_KUBECONFIG_FLAG := $(if $(K8S_KUBECONFIG),--kubeconfig=$(K8S_KUBECONFIG),$(if $(KUBECONFIG),--kubeconfig=$(KUBECONFIG),))
-
 deploy-ingress-helm:
 	helm upgrade --install $(HELM_RELEASE) deploy/helm/pertisk-ingress \
-		$(HELM_KUBECONFIG_FLAG) -n $(HELM_NAMESPACE) --create-namespace \
+		-n $(HELM_NAMESPACE) --create-namespace \
 		-f $(HELM_INGRESS_VALUES) --set image.tag=$(VERSION)
 
 # Build multi-arch image, push, and deploy with matching tag

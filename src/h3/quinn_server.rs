@@ -31,8 +31,6 @@ fn env_u64(name: &str, default: u64) -> u64 {
 }
 
 fn build_rustls_config(cert_store: Arc<CertStore>) -> Result<rustls::ServerConfig> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
     if cert_store.host_count() > 0 {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let resolver = CertStoreResolver::new_arc(Arc::clone(&cert_store), provider.clone());
