@@ -77,11 +77,11 @@ host_rust_minor_version() {
 build_native() {
   local bin="$1"
   local features="${2:-}"
-  echo "Using native cargo build for $bin (linux/$ARCH)..."
+  echo "Using native cargo build for $bin (linux/$ARCH, version $VERSION)..."
   if [ -n "$features" ]; then
-    CARGO_BUILD_JOBS="$CARGO_JOBS" cargo build --release --locked --bin "$bin" --features "$features"
+    CARGO_BUILD_JOBS="$CARGO_JOBS" pertisk_proxy_VERSION="$VERSION" cargo build --release --locked --bin "$bin" --features "$features"
   else
-    CARGO_BUILD_JOBS="$CARGO_JOBS" cargo build --release --locked --bin "$bin"
+    CARGO_BUILD_JOBS="$CARGO_JOBS" pertisk_proxy_VERSION="$VERSION" cargo build --release --locked --bin "$bin"
   fi
   cp "target/release/$bin" "./${bin}-linux-${ARCH}"
 }
@@ -108,6 +108,7 @@ build_binaries_docker() {
       --cache-from "type=local,src=${CACHE_DIR}" \
       --cache-to "type=local,dest=${CACHE_DIR},mode=max" \
       --build-arg PACKAGE_TARGET="$TARGET" \
+      --build-arg VERSION="$VERSION" \
       --build-arg CARGO_BUILD_JOBS="$CARGO_JOBS" \
       --load -t "pertisk-proxy-build:$ARCH" .; then
       build_success=1
@@ -140,11 +141,16 @@ build_binaries_docker() {
 need_rebuild=0
 for bin in "${PACKAGE_BINARIES[@]}"; do
   artifact="${bin}-linux-${ARCH}"
+  version_stamp="${artifact}.version"
   if [ -f "$artifact" ] && ! is_valid_linux_binary "$artifact" "$ARCH"; then
     echo "Removing stale $artifact (not Linux/$ARCH)..."
-    rm -f "$artifact"
+    rm -f "$artifact" "$version_stamp"
   fi
   if [ ! -f "$artifact" ]; then
+    need_rebuild=1
+  elif [ ! -f "$version_stamp" ] || [ "$(cat "$version_stamp")" != "$VERSION" ]; then
+    echo "Rebuilding $artifact (version ${VERSION}, was $(cat "$version_stamp" 2>/dev/null || echo missing))..."
+    rm -f "$artifact" "$version_stamp"
     need_rebuild=1
   fi
 done
@@ -161,17 +167,25 @@ if [ "$need_rebuild" -eq 1 ]; then
     else
       for bin in "${PACKAGE_BINARIES[@]}"; do
         artifact="${bin}-linux-${ARCH}"
+        version_stamp="${artifact}.version"
         if [ ! -f "$artifact" ]; then
           case "$bin" in
             pertisk-proxy-ingress) build_native "$bin" ingress ;;
             *) build_native "$bin" ;;
           esac
+          echo "$VERSION" > "$version_stamp"
         fi
       done
     fi
   else
     build_binaries_docker
   fi
+  for bin in "${PACKAGE_BINARIES[@]}"; do
+    artifact="${bin}-linux-${ARCH}"
+    if [ -f "$artifact" ]; then
+      echo "$VERSION" > "${artifact}.version"
+    fi
+  done
 fi
 
 for bin in "${PACKAGE_BINARIES[@]}"; do

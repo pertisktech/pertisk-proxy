@@ -1,8 +1,9 @@
 //! gRPC and gRPC-Web detection and upstream header handling.
 //!
-//! Omni serves Connect/gRPC-Web on HTTP/1.1 at `/api/<Service>/<Method>` for both unary (`Get`)
-//! and server-streaming (`Watch`) RPCs. All `/api/` traffic is proxied on HTTP/1.1 with the path
-//! unchanged (same as pertisk-rproxy). Native gRPC (h2c) applies only to non-`/api/` paths.
+//! Omni serves Connect JSON and gRPC-Web on HTTP/1.1 at `/api/<Service>/<Method>`. Classification
+//! follows pertisk-rproxy (header-based). Connect JSON (`Connect-Protocol-Version`) is plain HTTP
+//! passthrough; only native `application/grpc` on `/api/` is forced to HTTP/1.1 gRPC-Web mode so
+//! the path is not stripped and h2c is not used.
 
 use http::{header, Method, Uri};
 use pingora_http::{RequestHeader, ResponseHeader};
@@ -33,17 +34,39 @@ pub fn is_grpc_rpc_path(path: &str) -> bool {
         && path.contains('/')
 }
 
-/// Classify gRPC traffic. All POST `/api/<Service>/<Method>` calls use HTTP/1.1 upstream
-/// with the `/api/` prefix intact.
+/// Classify gRPC traffic (aligned with pertisk-rproxy header detection).
 pub fn classify_grpc_request(
     headers: &http::HeaderMap,
     method: &Method,
     path: &str,
 ) -> (bool, bool) {
-    let api_rpc = *method == Method::POST && is_grpc_rpc_path(path);
-    let is_grpc_web = is_grpc_web_request(headers, method, path) || api_rpc;
+    let on_api_rpc = *method == Method::POST && is_grpc_rpc_path(path);
+    let mut is_grpc_web = is_grpc_web_request(headers, method, path);
+    // Omni unary `/api/` RPCs may send Content-Type: application/grpc; keep HTTP/1.1 + full path.
+    if on_api_rpc && is_grpc_request(headers) {
+        is_grpc_web = true;
+    }
     let is_grpc = is_grpc_request(headers) || is_grpc_web;
     (is_grpc, is_grpc_web)
+}
+
+/// Connect RPC (Omni UI uses Connect JSON over HTTP/1.1 for Watch/Get).
+pub fn is_connect_request(headers: &http::HeaderMap) -> bool {
+    if headers.contains_key("connect-protocol-version") {
+        return true;
+    }
+    headers
+        .get(header::CONTENT_TYPE.as_str())
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.starts_with("application/connect"))
+        .unwrap_or(false)
+}
+
+/// Long-lived `/api/` streams (Connect Watch, gRPC Watch, etc.).
+pub fn is_long_lived_api_stream(method: &Method, path: &str, headers: &http::HeaderMap) -> bool {
+    *method == Method::POST
+        && is_grpc_rpc_path(path)
+        && (is_grpc_server_streaming(path) || is_connect_request(headers))
 }
 
 /// gRPC method name from an RPC path (`/api/foo.Bar/Baz` → `Baz`).
@@ -91,6 +114,12 @@ pub fn is_grpc_web_request(headers: &http::HeaderMap, method: &Method, path: &st
 
 pub fn is_grpc_like_request(headers: &http::HeaderMap, method: &Method, path: &str) -> bool {
     is_grpc_request(headers) || is_grpc_web_request(headers, method, path)
+}
+
+/// HTTP/3 cannot proxy Omni `/api/` RPC streams (buffering + wrong semantics). Force HTTP/2.
+pub fn is_h3_incompatible_request(headers: &http::HeaderMap, method: &Method, path: &str) -> bool {
+    is_grpc_like_request(headers, method, path)
+        || (*method == Method::POST && is_grpc_rpc_path(path))
 }
 
 /// h2c upstream: native gRPC only (never for `/api/` gRPC-Web/Connect paths).
@@ -236,10 +265,31 @@ pub fn is_benign_downstream_disconnect(error: &pingora_error::Error) -> bool {
         let detail = format!("{error}");
         return detail.contains("stream no longer needed")
             || detail.contains("Client closed H2")
-            || detail.contains("CANCEL");
+            || detail.contains("CANCEL")
+            || detail.contains("connection reset");
     }
 
     false
+}
+
+/// Join HTTP/2 multiple Cookie headers for HTTP/1.1 upstream (Omni Auth0 sessions).
+pub fn merge_cookie_headers(upstream: &mut RequestHeader) {
+    let values: Vec<String> = upstream
+        .headers
+        .get_all(header::COOKIE.as_str())
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    if values.len() <= 1 {
+        return;
+    }
+    upstream.remove_header(header::COOKIE.as_str());
+    upstream
+        .insert_header(header::COOKIE.as_str(), values.join("; "))
+        .ok();
 }
 
 pub fn grpc_h2_ping_interval() -> std::time::Duration {
@@ -287,12 +337,15 @@ mod tests {
     }
 
     #[test]
-    fn api_rpc_uses_h1_passthrough_including_watch() {
-        let get = "/api/omni.resources.ResourceService/Get";
+    fn connect_json_watch_is_not_grpc_but_long_lived() {
         let watch = "/api/omni.resources.ResourceService/Watch";
-        assert!(!uses_h2c_upstream(true, true, get));
-        assert!(!uses_h2c_upstream(true, true, watch));
-        assert!(is_grpc_server_streaming(watch));
+        let mut headers = http::HeaderMap::new();
+        headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+        headers.insert("connect-protocol-version", "1".parse().unwrap());
+        let (is_grpc, is_grpc_web) = classify_grpc_request(&headers, &Method::POST, watch);
+        assert!(!is_grpc);
+        assert!(!is_grpc_web);
+        assert!(is_long_lived_api_stream(&Method::POST, watch, &headers));
     }
 
     #[test]

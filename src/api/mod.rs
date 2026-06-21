@@ -36,7 +36,7 @@ use crate::Router as ProxyRouter;
 #[cfg(feature = "acme")]
 use crate::tls::AcmeManager;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = env!("pertisk_proxy_VERSION");
 
 #[derive(Clone)]
 pub struct AdminState {

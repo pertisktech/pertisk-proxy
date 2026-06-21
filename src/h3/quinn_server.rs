@@ -182,14 +182,14 @@ async fn handle_request(
         return Ok(());
     }
 
-    if grpc::is_grpc_like_request(req.headers(), req.method(), req.uri().path()) {
+    if grpc::is_h3_incompatible_request(req.headers(), req.method(), req.uri().path()) {
         send_h3_response(
             &mut stream,
             plain_response(
                 http::StatusCode::MISDIRECTED_REQUEST,
-                b"gRPC requires HTTP/2 (Alt-Svc: clear)",
+                b"Omni /api/ RPC requires HTTP/2 (Alt-Svc: clear)",
             ),
-            Bytes::from_static(b"gRPC requires HTTP/2 (Alt-Svc: clear)"),
+            Bytes::from_static(b"Omni /api/ RPC requires HTTP/2 (Alt-Svc: clear)"),
         )
         .await?;
         return Ok(());

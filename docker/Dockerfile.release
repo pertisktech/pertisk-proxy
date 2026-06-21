@@ -13,6 +13,7 @@ ARG TARGETARCH
 ARG BUILDARCH
 ARG TARGETPLATFORM
 ARG PACKAGE_TARGET=all
+ARG VERSION=0.1.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -50,7 +51,7 @@ RUN set -eu; \
 
 WORKDIR /app
 
-COPY Cargo.toml Cargo.lock* ./
+COPY Cargo.toml Cargo.lock* build.rs ./
 RUN test -f Cargo.lock || cargo generate-lockfile
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-proxy-registry-${TARGETPLATFORM} \
@@ -61,7 +62,9 @@ COPY src ./src
 COPY config ./config
 
 ARG CARGO_BUILD_JOBS=1
+ARG VERSION=0.1.0
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
+ENV pertisk_proxy_VERSION=${VERSION}
 ENV RUST_MIN_STACK=16777216
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-proxy-registry-${TARGETPLATFORM} \

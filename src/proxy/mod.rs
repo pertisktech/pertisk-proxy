@@ -26,6 +26,7 @@ pub struct RequestCtx {
     pub response_headers: Vec<(String, String)>,
     pub is_grpc: bool,
     pub is_grpc_web: bool,
+    pub is_long_lived_stream: bool,
 }
 
 impl From<crate::proxy::forward::MiddlewareAction> for RequestCtx {
@@ -36,6 +37,7 @@ impl From<crate::proxy::forward::MiddlewareAction> for RequestCtx {
             response_headers: mw.response_headers,
             is_grpc: false,
             is_grpc_web: false,
+            is_long_lived_stream: false,
         }
     }
 }
@@ -99,12 +101,12 @@ impl ProxyHttp for Gateway {
         let req = session.req_header();
         let (is_grpc, is_grpc_web) =
             grpc::classify_grpc_request(&req.headers, &req.method, req.uri.path());
-        if !is_grpc {
-            return Ok(());
+        ctx.is_long_lived_stream =
+            grpc::is_long_lived_api_stream(&req.method, req.uri.path(), &req.headers);
+        if is_grpc {
+            ctx.is_grpc = true;
+            ctx.is_grpc_web = is_grpc_web;
         }
-
-        ctx.is_grpc = true;
-        ctx.is_grpc_web = is_grpc_web;
         Ok(())
     }
 
@@ -207,9 +209,11 @@ impl ProxyHttp for Gateway {
         if let Ok(plan) = resolve_forward(self.router.snapshot().as_ref(), &host, &path_q) {
             let is_grpc = ctx.is_grpc;
             let is_grpc_web = ctx.is_grpc_web;
+            let is_long_lived_stream = ctx.is_long_lived_stream;
             *ctx = plan.middleware.into();
             ctx.is_grpc = is_grpc;
             ctx.is_grpc_web = is_grpc_web;
+            ctx.is_long_lived_stream = is_long_lived_stream;
         }
 
         if ctx.is_grpc {
@@ -246,9 +250,11 @@ impl ProxyHttp for Gateway {
         {
             let is_grpc = ctx.is_grpc;
             let is_grpc_web = ctx.is_grpc_web;
+            let is_long_lived_stream = ctx.is_long_lived_stream;
             *ctx = plan.middleware.into();
             ctx.is_grpc = is_grpc;
             ctx.is_grpc_web = is_grpc_web;
+            ctx.is_long_lived_stream = is_long_lived_stream;
         }
 
         let peer = Box::new(configure_upstream_peer(
@@ -304,6 +310,8 @@ impl ProxyHttp for Gateway {
             upstream_request.insert_header(name, value).ok();
         }
 
+        grpc::merge_cookie_headers(upstream_request);
+
         if ctx.is_grpc {
             if !ctx.is_grpc_web {
                 grpc::rewrite_upstream_grpc_path(upstream_request)?;
@@ -321,9 +329,11 @@ impl ProxyHttp for Gateway {
         ctx: &mut Self::CTX,
     ) -> Result<()> {
         let path = session.req_header().uri.path();
-        if ctx.is_grpc && grpc::is_grpc_server_streaming(path) {
+        if ctx.is_long_lived_stream
+            || (ctx.is_grpc && grpc::is_grpc_server_streaming(path))
+        {
             grpc::prepare_streaming_response_headers(upstream_response);
-        } else if ctx.is_grpc || session.as_downstream().is_http2() {
+        } else if ctx.is_grpc || ctx.is_long_lived_stream || session.as_downstream().is_http2() {
             grpc::strip_hop_by_hop_response_headers(upstream_response);
         }
         Ok(())
@@ -340,8 +350,10 @@ impl ProxyHttp for Gateway {
             .insert_header("Server", format!("pertisk-proxy/{protocol}"))
             .ok();
 
-        if is_downstream_tls(session) && !ctx.is_grpc {
-            if self.enable_h3 {
+        if is_downstream_tls(session) {
+            if ctx.is_grpc || ctx.is_long_lived_stream {
+                upstream_response.insert_header("Alt-Svc", "clear").ok();
+            } else if self.enable_h3 {
                 let alt_svc = format!(
                     "h3=\":{}\"; ma=86400; persist=1, h3-29=\":{}\"; ma=86400; persist=1",
                     self.h3_port, self.h3_port
@@ -360,7 +372,7 @@ impl ProxyHttp for Gateway {
     }
 
     fn suppress_error_log(&self, session: &Session, ctx: &Self::CTX, error: &Error) -> bool {
-        if !ctx.is_grpc {
+        if !ctx.is_grpc && !ctx.is_long_lived_stream {
             return false;
         }
         if !grpc::is_benign_downstream_disconnect(error) {
@@ -379,7 +391,7 @@ impl ProxyHttp for Gateway {
         e: &Error,
         ctx: &mut Self::CTX,
     ) -> FailToProxy {
-        if ctx.is_grpc && grpc::is_benign_downstream_disconnect(e) {
+        if (ctx.is_grpc || ctx.is_long_lived_stream) && grpc::is_benign_downstream_disconnect(e) {
             return FailToProxy {
                 error_code: 0,
                 can_reuse_downstream: false,
@@ -423,7 +435,7 @@ fn configure_upstream_peer(
         peer.options.max_h2_streams = 128;
         peer.options.h2_ping_interval = Some(grpc::grpc_h2_ping_interval());
     }
-    if ctx.is_grpc {
+    if ctx.is_grpc || ctx.is_long_lived_stream {
         let timeout = grpc::grpc_upstream_timeout();
         if timeout != std::time::Duration::MAX {
             peer.options.read_timeout = Some(timeout);
