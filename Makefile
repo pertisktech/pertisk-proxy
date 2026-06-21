@@ -235,7 +235,7 @@ apply-ingress-rbac:
 # make deploy-ingress              — docker-ingress-multi + helm upgrade (full pipeline)
 INGRESS_BUILD_PLATFORMS ?= linux/amd64,linux/arm64
 HARBOR_INGRESS_IMAGE ?= harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress
-INGRESS_DOCKERFILE ?= Dockerfile
+INGRESS_DOCKERFILE ?= docker/Dockerfile.ingress
 
 docker-ingress: admin-dist
 	chmod +x build/ingress-image.sh

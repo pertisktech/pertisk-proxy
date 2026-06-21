@@ -16,7 +16,7 @@ cd "$REPO_ROOT"
 
 VERSION="${VERSION:-${1:-0.1.0}}"
 IMAGE="${HARBOR_INGRESS_IMAGE:-harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress}"
-DOCKERFILE="${INGRESS_DOCKERFILE:-Dockerfile}"
+DOCKERFILE="${INGRESS_DOCKERFILE:-docker/Dockerfile.ingress}"
 PLATFORMS="${PLATFORMS:-}"
 PUSH="${PUSH:-${BUILD_PUSH:-}}"
 BUILDER_NAME="${BUILDER_NAME:-pertisk-proxy-multiarch}"

@@ -8,11 +8,15 @@ COPY admin/ ./
 RUN pnpm build
 
 FROM rust:1-bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config libssl-dev perl cmake clang libclang-dev golang-go nasm \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 COPY --from=admin /admin/dist ./admin/dist
-RUN cargo build --release --bin pertisk-proxy-ingress --features ingress
+ENV RUST_MIN_STACK=16777216
+RUN cargo build --release --locked --bin pertisk-proxy-ingress --features ingress
 
 FROM debian:bookworm-slim
 RUN apt-get update \
