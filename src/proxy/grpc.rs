@@ -224,10 +224,17 @@ pub fn strip_hop_by_hop_response_headers(resp: &mut ResponseHeader) {
 pub fn prepare_streaming_response_headers(resp: &mut ResponseHeader) {
     strip_hop_by_hop_response_headers(resp);
     resp.remove_header(header::CONTENT_LENGTH.as_str());
+    resp.remove_header(header::CONTENT_ENCODING.as_str());
     resp.insert_header(header::CACHE_CONTROL.as_str(), "no-cache, no-transform")
         .ok();
     resp.insert_header("x-accel-buffering", "no").ok();
     resp.insert_header("Alt-Svc", "clear").ok();
+}
+
+/// Avoid gzip/chunked encoding mismatches on long-lived Connect/gRPC streams.
+pub fn prepare_upstream_streaming_request(upstream: &mut RequestHeader) {
+    upstream.insert_header(header::ACCEPT_ENCODING.as_str(), "identity")
+        .ok();
 }
 
 pub async fn respond_error(

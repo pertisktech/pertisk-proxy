@@ -316,6 +316,10 @@ impl ProxyHttp for Gateway {
 
         grpc::merge_cookie_headers(upstream_request);
 
+        if ctx.is_grpc || ctx.is_long_lived_stream {
+            grpc::prepare_upstream_streaming_request(upstream_request);
+        }
+
         if ctx.is_grpc {
             if !ctx.is_grpc_web {
                 grpc::rewrite_upstream_grpc_path(upstream_request)?;
@@ -333,9 +337,9 @@ impl ProxyHttp for Gateway {
         ctx: &mut Self::CTX,
     ) -> Result<()> {
         let path = session.req_header().uri.path();
-        if ctx.is_long_lived_stream
-            || (ctx.is_grpc && grpc::is_grpc_server_streaming(path))
-        {
+        let streaming = ctx.is_long_lived_stream
+            || (ctx.is_grpc && grpc::is_grpc_server_streaming(path));
+        if streaming && upstream_response.status.is_success() {
             grpc::prepare_streaming_response_headers(upstream_response);
         } else if ctx.is_grpc || ctx.is_long_lived_stream || session.as_downstream().is_http2() {
             grpc::strip_hop_by_hop_response_headers(upstream_response);
