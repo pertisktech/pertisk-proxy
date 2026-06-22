@@ -47,14 +47,35 @@ jobs:
           echo '{"credsStore":""}' > "$RUNNER_TEMP/.docker/config.json"
           echo "DOCKER_CONFIG=$RUNNER_TEMP/.docker" >> $GITHUB_ENV
 
+      - name: Detect native build platform
+        id: native_plat
+        run: |
+          case "$(uname -m)" in
+            x86_64|amd64)
+              echo "platform=linux/amd64" >> "$GITHUB_OUTPUT"
+              echo "arch=amd64" >> "$GITHUB_OUTPUT"
+              ;;
+            aarch64|arm64)
+              echo "platform=linux/arm64" >> "$GITHUB_OUTPUT"
+              echo "arch=arm64" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unsupported runner architecture: $(uname -m)"
+              exit 1
+              ;;
+          esac
+          echo "Runner UTC time: $(date -u '+%Y-%m-%d %H:%M:%S')"
+          timedatectl status 2>/dev/null | grep -E 'synchronized|System clock' || true
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          driver-opts: |
-            image=moby/buildkit:latest
-            network=host
+          # docker-container driver isolates network/clock; apt GPG fails on some runners.
+          # Cross-arch matrix jobs still use buildx; same-arch builds use host docker below.
+          driver: docker
 
       - name: Set up QEMU for multi-arch builds
+        if: matrix.goarch != steps.native_plat.outputs.arch
         uses: docker/setup-qemu-action@v3
 
       - name: Setup Node (for admin build)
@@ -73,41 +94,29 @@ jobs:
         env:
           CI: true
 
-      - name: Detect native build platform
-        id: native_plat
-        run: |
-          case "$(uname -m)" in
-            x86_64|amd64)
-              echo "platform=linux/amd64" >> "$GITHUB_OUTPUT"
-              echo "arch=amd64" >> "$GITHUB_OUTPUT"
-              ;;
-            aarch64|arm64)
-              echo "platform=linux/arm64" >> "$GITHUB_OUTPUT"
-              echo "arch=arm64" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "Unsupported runner architecture: $(uname -m)"
-              exit 1
-              ;;
-          esac
-
       - name: Build proxy binary (Docker, platform from matrix)
         run: |
           PLATFORM="linux/${{ matrix.goarch }}"
           IMG="${{ env.HARBOR_BUILD_IMAGE }}:proxy-${{ matrix.goarch }}"
-          docker buildx build \
-            --platform "$PLATFORM" \
-            --file docker/Dockerfile.release \
-            --build-arg BUILDPLATFORM="${{ steps.native_plat.outputs.platform }}" \
-            --build-arg BUILDARCH="${{ steps.native_plat.outputs.arch }}" \
-            --build-arg TARGETPLATFORM="$PLATFORM" \
-            --build-arg TARGETARCH="${{ matrix.goarch }}" \
-            --build-arg PACKAGE_TARGET=proxy \
-            --build-arg VERSION=${{ steps.version.outputs.VERSION }} \
-            --build-arg CARGO_BUILD_JOBS=$(nproc) \
-            --load \
-            -t "$IMG" \
+          COMMON_ARGS=(
+            --file docker/Dockerfile.release
+            --build-arg BUILDPLATFORM="${{ steps.native_plat.outputs.platform }}"
+            --build-arg BUILDARCH="${{ steps.native_plat.outputs.arch }}"
+            --build-arg TARGETPLATFORM="$PLATFORM"
+            --build-arg TARGETARCH="${{ matrix.goarch }}"
+            --build-arg PACKAGE_TARGET=proxy
+            --build-arg VERSION=${{ steps.version.outputs.VERSION }}
+            --build-arg CARGO_BUILD_JOBS=$(nproc)
+            -t "$IMG"
             .
+          )
+          if [ "${{ matrix.goarch }}" = "${{ steps.native_plat.outputs.arch }}" ]; then
+            DOCKER_BUILDKIT=1 docker build "${COMMON_ARGS[@]}"
+          else
+            docker buildx create --name pertisk-release-cross --driver docker-container --driver-opt network=host --use 2>/dev/null \
+              || docker buildx use pertisk-release-cross
+            docker buildx build --platform "$PLATFORM" --load "${COMMON_ARGS[@]}"
+          fi
           docker create --name extract "$IMG"
           docker cp extract:/app/out/pertisk-proxy ./${{ env.BINARY_NAME }}-linux-${{ matrix.goarch }}
           docker rm extract
@@ -118,19 +127,23 @@ jobs:
         run: |
           PLATFORM="linux/${{ matrix.goarch }}"
           IMG="${{ env.HARBOR_BUILD_IMAGE }}:ingress-${{ matrix.goarch }}"
-          docker buildx build \
-            --platform "$PLATFORM" \
-            --file docker/Dockerfile.release \
-            --build-arg BUILDPLATFORM="${{ steps.native_plat.outputs.platform }}" \
-            --build-arg BUILDARCH="${{ steps.native_plat.outputs.arch }}" \
-            --build-arg TARGETPLATFORM="$PLATFORM" \
-            --build-arg TARGETARCH="${{ matrix.goarch }}" \
-            --build-arg PACKAGE_TARGET=ingress \
-            --build-arg VERSION=${{ steps.version.outputs.VERSION }} \
-            --build-arg CARGO_BUILD_JOBS=$(nproc) \
-            --load \
-            -t "$IMG" \
+          COMMON_ARGS=(
+            --file docker/Dockerfile.release
+            --build-arg BUILDPLATFORM="${{ steps.native_plat.outputs.platform }}"
+            --build-arg BUILDARCH="${{ steps.native_plat.outputs.arch }}"
+            --build-arg TARGETPLATFORM="$PLATFORM"
+            --build-arg TARGETARCH="${{ matrix.goarch }}"
+            --build-arg PACKAGE_TARGET=ingress
+            --build-arg VERSION=${{ steps.version.outputs.VERSION }}
+            --build-arg CARGO_BUILD_JOBS=$(nproc)
+            -t "$IMG"
             .
+          )
+          if [ "${{ matrix.goarch }}" = "${{ steps.native_plat.outputs.arch }}" ]; then
+            DOCKER_BUILDKIT=1 docker build "${COMMON_ARGS[@]}"
+          else
+            docker buildx build --platform "$PLATFORM" --load "${COMMON_ARGS[@]}"
+          fi
           docker create --name extract-ingress "$IMG"
           docker cp extract-ingress:/app/out/pertisk-proxy-ingress ./pertisk-proxy-ingress-linux-${{ matrix.goarch }}
           docker rm extract-ingress

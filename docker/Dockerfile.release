@@ -16,18 +16,16 @@ ARG PACKAGE_TARGET=all
 ARG VERSION=0.1.0
 
 COPY docker/apt-bookworm-install.sh /usr/local/sbin/apt-bookworm-install
-RUN chmod +x /usr/local/sbin/apt-bookworm-install \
+# --network=host: buildkit container driver can have broken DNS/time vs host; apt GPG fails.
+RUN --network=host chmod +x /usr/local/sbin/apt-bookworm-install \
     && apt-bookworm-install \
     build-essential \
-    pkg-config \
-    libssl-dev \
-    perl \
     cmake \
     clang \
     libclang-dev \
     golang-go
 
-RUN set -eu; \
+RUN --network=host set -eu; \
     if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
       case "${TARGETARCH}" in \
         amd64) \
