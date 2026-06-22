@@ -72,21 +72,35 @@ pub fn tcp_bind_addrs(listen: &str) -> Vec<String> {
 }
 
 /// Effective listen address(es) for admin UI and logs.
-/// `0.0.0.0:port` is shown as `[::]:port` on Linux (single dual-stack socket).
-/// On macOS, both `0.0.0.0:port` and `[::]:port` are listed when applicable.
 pub fn effective_listen_display(listen: &str) -> String {
-    let addrs = tcp_bind_addrs(listen);
-    if addrs.len() == 1 {
-        addrs[0].clone()
+    let addrs: Vec<String> = if listen
+        .parse::<SocketAddr>()
+        .ok()
+        .is_some_and(|a| a.ip().is_unspecified() && a.is_ipv4())
+    {
+        h3_bind_candidates(listen)
+            .into_iter()
+            .map(|a| a.to_string())
+            .collect()
     } else {
-        addrs.join(", ")
-    }
+        tcp_bind_addrs(listen)
+    };
+    format_bind_addr_list(&addrs, listen)
 }
 
 /// Effective UDP listen address for admin UI.
 pub fn effective_udp_listen_display(listen: &str) -> String {
-    let addrs = h3_bind_addrs(listen);
-    if addrs.len() == 1 {
+    let addrs: Vec<String> = h3_bind_candidates(listen)
+        .into_iter()
+        .map(|a| a.to_string())
+        .collect();
+    format_bind_addr_list(&addrs, listen)
+}
+
+fn format_bind_addr_list(addrs: &[String], fallback: &str) -> String {
+    if addrs.is_empty() {
+        fallback.to_string()
+    } else if addrs.len() == 1 {
         addrs[0].clone()
     } else {
         addrs.join(", ")
@@ -134,14 +148,15 @@ mod tests {
             "0.0.0.0:443, [::]:443"
         );
         #[cfg(not(target_os = "macos"))]
-        assert_eq!(effective_listen_display("0.0.0.0:443"), "[::]:443");
-        #[cfg(target_os = "macos")]
         assert_eq!(
-            effective_udp_listen_display("0.0.0.0:443"),
-            "0.0.0.0:443, [::]:443"
+            effective_listen_display("0.0.0.0:443"),
+            "[::]:443, 0.0.0.0:443"
         );
         #[cfg(not(target_os = "macos"))]
-        assert_eq!(effective_udp_listen_display("0.0.0.0:443"), "[::]:443");
+        assert_eq!(
+            effective_udp_listen_display("0.0.0.0:443"),
+            "[::]:443, 0.0.0.0:443"
+        );
         assert_eq!(effective_listen_display("[::]:80"), "[::]:80");
     }
 
@@ -150,6 +165,8 @@ mod tests {
         assert_eq!(tcp_bind_addrs("not-an-addr"), vec!["not-an-addr"]);
         assert_eq!(h3_bind_addrs("not-an-addr"), vec!["not-an-addr"]);
         assert_eq!(h3_bind_addrs("127.0.0.1:443"), vec!["127.0.0.1:443"]);
+        assert!(h3_bind_candidates("not-an-addr").is_empty());
+        assert_eq!(h3_bind_candidates("127.0.0.1:8443").len(), 1);
         assert_eq!(effective_listen_display("not-an-addr"), "not-an-addr");
         assert_eq!(effective_udp_listen_display("not-an-addr"), "not-an-addr");
     }

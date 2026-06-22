@@ -671,6 +671,27 @@ backends:
     }
 
     #[test]
+    fn site_http3_alt_svc_true_omitted_when_serializing() {
+        let site = Site {
+            host: "h.example".into(),
+            routes: vec![],
+            backend: "api".into(),
+            security_headers: None,
+            ingress_namespace: None,
+            ingress_name: None,
+            k8s_resource_kind: None,
+            http3_alt_svc_enabled: true,
+        };
+        let value = serde_json::to_value(&site).unwrap();
+        assert!(
+            !value
+                .as_object()
+                .unwrap()
+                .contains_key("http3_alt_svc_enabled")
+        );
+    }
+
+    #[test]
     fn config_default_trait_impl() {
         let cfg: Config = Default::default();
         assert!(cfg.sites.is_empty());
@@ -883,6 +904,30 @@ mod tls_normalize_tests {
             },
             expires_at: None,
         }]));
+    }
+
+    #[test]
+    fn normalize_tls_disjoint_file_paths_do_not_merge() {
+        let mut tls = vec![
+            TlsConfig {
+                hosts: vec!["a.example.com".into()],
+                source: TlsSource::File {
+                    cert: "/a.pem".into(),
+                    key: "/a.key".into(),
+                },
+                expires_at: None,
+            },
+            TlsConfig {
+                hosts: vec!["b.example.com".into()],
+                source: TlsSource::File {
+                    cert: "/b.pem".into(),
+                    key: "/b.key".into(),
+                },
+                expires_at: None,
+            },
+        ];
+        normalize_tls_config(&mut tls);
+        assert_eq!(tls.len(), 2);
     }
 
     #[test]

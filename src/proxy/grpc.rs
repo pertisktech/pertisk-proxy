@@ -593,6 +593,29 @@ mod tests {
     }
 
     #[test]
+    fn prepare_streaming_response_sets_alt_svc_clear() {
+        let mut resp = ResponseHeader::build(http::StatusCode::OK, Some(3)).unwrap();
+        prepare_streaming_response_headers(&mut resp);
+        assert_eq!(
+            resp.headers.get("Alt-Svc").unwrap().to_str().unwrap(),
+            "clear"
+        );
+    }
+
+    #[test]
+    fn is_benign_h2_cancel_and_reset() {
+        use pingora_error::{Error, ErrorType};
+        let err = Error::new_down(ErrorType::H2Error).more_context("stream no longer needed");
+        assert!(is_benign_downstream_disconnect(&err));
+        let err = Error::new_down(ErrorType::H2Error).more_context("Client closed H2 CANCEL");
+        assert!(is_benign_downstream_disconnect(&err));
+        let err = Error::new_down(ErrorType::H2Error).more_context("connection reset by peer");
+        assert!(is_benign_downstream_disconnect(&err));
+        let err = Error::new_down(ErrorType::H2Error).more_context("protocol error");
+        assert!(!is_benign_downstream_disconnect(&err));
+    }
+
+    #[test]
     fn is_benign_downstream_disconnect_detects_closed() {
         use pingora_error::{Error, ErrorType};
         let err = Error::new_down(ErrorType::ConnectionClosed);

@@ -173,6 +173,17 @@ mod tests {
     }
 
     #[test]
+    fn validate_cert_pair_rejects_empty_cert_pem() {
+        let (_, key) = test_cert_pair(&["example.com"]);
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, b"").unwrap();
+        std::fs::write(&key_path, &key).unwrap();
+        assert!(validate_cert_pair(&cert_path, &key_path).is_err());
+    }
+
+    #[test]
     fn validate_cert_pair_pem_ok() {
         let (cert, key) = test_cert_pair(&["example.com"]);
         validate_cert_pair_pem(&cert, &key).unwrap();

@@ -335,6 +335,21 @@ mod tests {
     }
 
     #[test]
+    fn has_any_cert_reflects_loaded_material() {
+        let store = CertStore::new();
+        assert!(!store.has_any_cert());
+        store
+            .insert_paths_for_hosts(
+                &["any.example.com".into()],
+                CertPaths {
+                    cert: "/c.pem".into(),
+                    key: "/k.key".into(),
+                },
+            );
+        assert!(store.has_any_cert());
+    }
+
+    #[test]
     fn insert_pem_in_memory() {
         let (cert, key) = test_pem();
         let store = CertStore::new();
@@ -367,6 +382,29 @@ mod tests {
             )
             .unwrap();
         assert!(store.lookup_sni("disk.example.com").is_some());
+    }
+
+    #[test]
+    fn reload_from_configs_logs_file_tls() {
+        let (cert, key) = test_pem();
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, &cert).unwrap();
+        std::fs::write(&key_path, &key).unwrap();
+
+        let store = CertStore::new();
+        store
+            .reload_from_configs(&[TlsConfig {
+                hosts: vec!["logged.example.com".into()],
+                source: TlsSource::File {
+                    cert: cert_path,
+                    key: key_path,
+                },
+                expires_at: None,
+            }])
+            .unwrap();
+        assert!(store.has_cert_for_host("logged.example.com"));
     }
 
     #[test]
