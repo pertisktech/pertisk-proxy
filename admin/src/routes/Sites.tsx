@@ -107,9 +107,39 @@ export function Sites() {
       .finally(() => setLoading(false));
   }
 
+  function refreshQuiet() {
+    Promise.all([api.config(), api.dnsProviders.list().catch(() => [])])
+      .then(([c, dns]) => {
+        setConfig({ sites: c.sites || [], backends: c.backends || [], tls: c.tls || [] });
+        setDnsProviders(dns);
+      })
+      .catch(() => {});
+  }
+
+  const hasPendingAcme = useMemo(() => {
+    return sites.some((site) => {
+      const tls = resolveTlsForHost(site.host, tlsList);
+      return tls?.source?.type === 'acme' && !tls.expires_at?.trim();
+    });
+  }, [sites, tlsList]);
+
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    if (!hasPendingAcme) return;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled || document.visibilityState !== 'visible') return;
+      refreshQuiet();
+    };
+    const t = setInterval(tick, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [hasPendingAcme]);
 
   useEffect(() => {
     if (!siteModal || editingIndex === null || formSslMode !== 'generate' || formAcmeChallenge !== 'dns01') return;

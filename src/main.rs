@@ -12,7 +12,6 @@ use tracing::info;
 
 use pertisk_proxy::config::ProxyConfig;
 use pertisk_proxy::db::Database;
-use pertisk_proxy::h3;
 use pertisk_proxy::h3::H3Config;
 use pertisk_proxy::log::{ProxyLog, ProxyLogEntry};
 use pertisk_proxy::logging;
@@ -222,28 +221,18 @@ fn main() -> Result<()> {
     let acme_tls_pending = pertisk_proxy::proxy_config::tls_has_acme_config(&runtime_config.tls);
 
     let pending_h3 = if proxy_env.server.enable_h3 {
-        if cert_store.host_count() > 0
-            || cert_store.default_paths().is_some()
-            || acme_tls_pending
-        {
-            let configs = vec![{
-                let udp = proxy_env.server.h3_udp_listen.clone();
-                info!(udp = %udp, "HTTP/3 listener queued");
-                H3Config::new(udp)
-            }];
-            Some(PendingH3 {
-                router: Arc::clone(&router),
-                cert_store: Arc::clone(&cert_store),
-                configs,
-                runtime_cfg: runtime_cfg.clone(),
-                metrics: metrics.clone(),
-            })
-        } else {
-            tracing::warn!(
-                "ENABLE_H3 is set but no TLS certificates are available; HTTP/3 disabled"
-            );
-            None
-        }
+        let configs = vec![{
+            let udp = proxy_env.server.h3_udp_listen.clone();
+            info!(udp = %udp, "HTTP/3 listener queued");
+            H3Config::new(udp)
+        }];
+        Some(PendingH3 {
+            router: Arc::clone(&router),
+            cert_store: Arc::clone(&cert_store),
+            configs,
+            runtime_cfg: runtime_cfg.clone(),
+            metrics: metrics.clone(),
+        })
     } else {
         None
     };
@@ -254,6 +243,7 @@ fn main() -> Result<()> {
         cert_store,
         proxy_env.auto_https,
         acme_tls_pending,
+        true,
         &runtime_cfg,
         Some(http01_store),
         pending_h3,

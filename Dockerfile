@@ -8,9 +8,10 @@ COPY admin/ ./
 RUN pnpm build
 
 FROM rust:1-bookworm AS builder
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential pkg-config libssl-dev perl cmake clang libclang-dev golang-go nasm \
-    && rm -rf /var/lib/apt/lists/*
+COPY docker/apt-bookworm-install.sh /usr/local/sbin/apt-bookworm-install
+RUN chmod +x /usr/local/sbin/apt-bookworm-install \
+    && apt-bookworm-install \
+    build-essential pkg-config libssl-dev perl cmake clang libclang-dev golang-go nasm
 WORKDIR /app
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
@@ -19,9 +20,9 @@ ENV RUST_MIN_STACK=16777216
 RUN cargo build --release --locked --bin pertisk-proxy-ingress --features ingress
 
 FROM debian:bookworm-slim
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+COPY docker/apt-bookworm-install.sh /usr/local/sbin/apt-bookworm-install
+RUN chmod +x /usr/local/sbin/apt-bookworm-install \
+    && apt-bookworm-install ca-certificates
 COPY --from=builder /app/target/release/pertisk-proxy-ingress /usr/local/bin/pertisk-proxy-ingress
 COPY --from=admin /admin/dist /usr/share/pertisk-proxy/admin/dist
 USER 65532:65532

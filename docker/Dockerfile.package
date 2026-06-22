@@ -1,8 +1,8 @@
 # Linux environment for building .deb and .rpm (GNU tar, dpkg-compatible).
 # Used on macOS so packages install cleanly on Linux hosts.
 FROM ubuntu:22.04
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    ruby ruby-dev build-essential rpm \
-    && gem install --no-document fpm \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+COPY docker/apt-bookworm-install.sh /usr/local/sbin/apt-bookworm-install
+RUN chmod +x /usr/local/sbin/apt-bookworm-install \
+    && apt-bookworm-install ruby ruby-dev build-essential rpm \
+    && gem install --no-document fpm
 WORKDIR /work

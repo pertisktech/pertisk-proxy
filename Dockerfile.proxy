@@ -7,9 +7,9 @@ COPY src ./src
 RUN cargo build --release --bin pertisk-proxy --features admin,acme,dns-challenge,h3-quinn
 
 FROM debian:bookworm-slim
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
+COPY docker/apt-bookworm-install.sh /usr/local/sbin/apt-bookworm-install
+RUN chmod +x /usr/local/sbin/apt-bookworm-install \
+    && apt-bookworm-install ca-certificates \
     && mkdir -p /var/lib/pertisk-proxy/certs
 COPY --from=builder /app/target/release/pertisk-proxy /usr/local/bin/pertisk-proxy
 COPY build/pertisk-proxy.conf /etc/pertisk-proxy/pertisk-proxy.conf
