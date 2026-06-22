@@ -6,7 +6,8 @@ description = "Reverse proxy and Kubernetes Ingress controller with HTTP/1, HTTP
 license = "Apache-2.0"
 
 [features]
-default = ["admin", "acme", "dns-challenge", "h3-quinn"]
+default = ["admin", "acme", "dns-challenge", "h3-quinn", "prometheus"]
+prometheus = []
 admin = [
     "dep:axum",
     "dep:tower-http",

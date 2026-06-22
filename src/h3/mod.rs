@@ -31,6 +31,7 @@ pub async fn run(
     _config: H3Config,
     _cert_store: std::sync::Arc<crate::tls::CertStore>,
     _runtime_cfg: &crate::runtime::RuntimeConfig,
+    _metrics: crate::metrics::ProxyMetrics,
 ) -> anyhow::Result<()> {
     anyhow::bail!("HTTP/3 support not compiled in (enable h3-quinn or h3-quiche feature)")
 }

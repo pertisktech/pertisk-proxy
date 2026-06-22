@@ -144,6 +144,7 @@ pub fn run() -> anyhow::Result<()> {
             })
             .unwrap_or(false),
     ));
+    let metrics = crate::metrics::ProxyMetrics::new();
 
     let controller = IngressController::new(
         client.clone(),
@@ -191,6 +192,7 @@ pub fn run() -> anyhow::Result<()> {
         Arc::clone(&proxy_log),
         Arc::clone(&proxy_log_enabled),
         certs_dir,
+        metrics.clone(),
     );
 
     let management_addr = api::management_addr();
@@ -199,6 +201,22 @@ pub fn run() -> anyhow::Result<()> {
             tracing::error!(error = %err, "management API stopped");
         }
     });
+
+    if crate::metrics::metrics_enabled_from_env() {
+        let metrics_addr = crate::metrics::metrics_addr_from_env();
+        let metrics_for_server = metrics.clone();
+        tokio_runtime.spawn(async move {
+            if let Err(err) =
+                crate::metrics::start_metrics_server(metrics_addr, metrics_for_server).await
+            {
+                tracing::error!(error = %err, "metrics server stopped");
+            }
+        });
+        info!(
+            "Metrics server listening on http://{}/metrics",
+            metrics_addr
+        );
+    }
 
     tokio_runtime.spawn(async move {
         loop {
@@ -224,6 +242,7 @@ pub fn run() -> anyhow::Result<()> {
             cert_store: Arc::clone(&cert_store),
             configs: vec![H3Config::from_server(&ingress_env.server)?],
             runtime_cfg: runtime_cfg.clone(),
+            metrics: metrics.clone(),
         })
     } else {
         None
@@ -239,5 +258,6 @@ pub fn run() -> anyhow::Result<()> {
         pending_h3,
         proxy_log,
         proxy_log_enabled,
+        metrics,
     )
 }

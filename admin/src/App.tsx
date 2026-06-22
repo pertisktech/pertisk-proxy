@@ -13,6 +13,7 @@ import { K8sSites } from '@/routes/K8sSites';
 import { Gateways } from '@/routes/Gateways';
 import { DnsProviders } from '@/routes/DnsProviders';
 import { Logs } from '@/routes/Logs';
+import { Metrics } from '@/routes/Metrics';
 import { Settings } from '@/routes/Settings';
 import { api, type ManagementInfo } from '@/api/client';
 import { clearToken, getToken } from '@/auth';
@@ -112,6 +113,7 @@ export default function App() {
                 <Route path="certificates" element={<Certificates />} />
                 <Route path="dns-providers" element={<DnsProviders />} />
                 <Route path="logs" element={<Logs />} />
+                <Route path="metrics" element={<Metrics />} />
                 <Route path="settings" element={<Settings />} />
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />

@@ -33,6 +33,7 @@ use tracing::{info, warn};
 use crate::config::ProxyConfig;
 use crate::db::{CertificateRow, Database, DnsProviderRow};
 use crate::log::{dedupe_consecutive_system_logs, ProxyLog, ProxyLogEntry};
+use crate::metrics::ProxyMetrics;
 use crate::proxy::apply;
 use crate::proxy_config::{Config, TlsConfig, TlsSource};
 use crate::runtime::RuntimeConfig;
@@ -83,6 +84,7 @@ pub struct AdminState {
     pub http01_store: Arc<Http01ChallengeStore>,
     pub proxy_log: Arc<ProxyLog>,
     pub proxy_log_enabled: Arc<AtomicBool>,
+    pub metrics: ProxyMetrics,
     pub viewer_mode: bool,
     #[cfg(feature = "ingress")]
     pub kube_client: Option<kube::Client>,
@@ -128,6 +130,7 @@ pub fn router(state: AdminState) -> Router {
 
     let protected = Router::new()
         .route("/api/management", get(get_management))
+        .route("/api/metrics", get(get_metrics))
         .route("/api/logs", get(get_logs))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/reload", post(reload_config))
@@ -515,6 +518,75 @@ fn management_ingress_fields(state: &AdminState) -> (Option<bool>, Option<String
             lease_name: le.lease_name.clone(),
         }),
     )
+}
+
+#[derive(Serialize)]
+struct MetricsResponse {
+    uptime_secs: u64,
+    log_entries: u64,
+    http_requests_total: u64,
+    https_requests_total: u64,
+    grpc_requests_total: u64,
+    h2_requests_total: u64,
+    h3_requests_total: u64,
+    h3_vs_h2_ratio: f64,
+    active_connections: u64,
+    bytes_sent_total: u64,
+    bytes_received_total: u64,
+    upstream_errors_total: u64,
+    site_h2_requests_total: std::collections::HashMap<String, u64>,
+    site_h3_requests_total: std::collections::HashMap<String, u64>,
+    metrics_addr: String,
+}
+
+async fn get_metrics(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> Result<Json<MetricsResponse>, (StatusCode, Json<ApiError>)> {
+    if !is_authorized(&state, &headers).await {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiError {
+                error: "unauthorized".into(),
+            }),
+        ));
+    }
+
+    let m = &state.metrics;
+    let h3 = m.h3_requests_total.load(Ordering::Relaxed) as f64;
+    let h2 = m.h2_requests_total.load(Ordering::Relaxed) as f64;
+    let h3_vs_h2_ratio = if h2 > 0.0 {
+        h3 / h2
+    } else if h3 > 0.0 {
+        f64::INFINITY
+    } else {
+        0.0
+    };
+
+    let mut site_h2_requests_total = std::collections::HashMap::new();
+    let mut site_h3_requests_total = std::collections::HashMap::new();
+    for (host, (h2_count, h3_count)) in m.site_protocol_snapshot() {
+        site_h2_requests_total.insert(host.clone(), h2_count);
+        site_h3_requests_total.insert(host, h3_count);
+    }
+
+    Ok(Json(MetricsResponse {
+        uptime_secs: state.started_at.elapsed().as_secs(),
+        log_entries: state.proxy_log.len() as u64,
+        http_requests_total: m.http_requests_total.load(Ordering::Relaxed),
+        https_requests_total: m.https_requests_total.load(Ordering::Relaxed),
+        grpc_requests_total: m.grpc_requests_total.load(Ordering::Relaxed),
+        h2_requests_total: m.h2_requests_total.load(Ordering::Relaxed),
+        h3_requests_total: m.h3_requests_total.load(Ordering::Relaxed),
+        h3_vs_h2_ratio,
+        active_connections: m.active_connections.load(Ordering::Relaxed),
+        bytes_sent_total: m.bytes_sent_total.load(Ordering::Relaxed),
+        bytes_received_total: m.bytes_received_total.load(Ordering::Relaxed),
+        upstream_errors_total: m.upstream_errors_total.load(Ordering::Relaxed),
+        site_h2_requests_total,
+        site_h3_requests_total,
+        metrics_addr: crate::metrics::metrics_addr_from_env().to_string(),
+    }))
 }
 
 async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo> {
@@ -1524,6 +1596,7 @@ pub fn build_state(
     sessions: Option<Sessions>,
     proxy_log: Arc<ProxyLog>,
     proxy_log_enabled: Arc<AtomicBool>,
+    metrics: ProxyMetrics,
 ) -> AdminState {
     let env_password = admin_password();
     let auth_required = db.is_some() || env_password.is_some();
@@ -1553,6 +1626,7 @@ pub fn build_state(
         http01_store,
         proxy_log,
         proxy_log_enabled,
+        metrics,
         viewer_mode: false,
         #[cfg(feature = "ingress")]
         kube_client: None,
@@ -1586,6 +1660,7 @@ pub fn build_ingress_state(
     proxy_log: Arc<ProxyLog>,
     proxy_log_enabled: Arc<AtomicBool>,
     certs_dir: PathBuf,
+    metrics: ProxyMetrics,
 ) -> AdminState {
     let env_password = admin_password();
     let auth_required = env_password.is_some()
@@ -1619,6 +1694,7 @@ pub fn build_ingress_state(
         http01_store,
         proxy_log,
         proxy_log_enabled,
+        metrics,
         viewer_mode: true,
         kube_client,
         ingress_class,

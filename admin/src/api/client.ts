@@ -64,6 +64,24 @@ export type ManagementInfo = {
   } | null;
 };
 
+export type Metrics = {
+  log_entries: number;
+  uptime_secs: number;
+  http_requests_total: number;
+  https_requests_total: number;
+  grpc_requests_total: number;
+  h2_requests_total: number;
+  h3_requests_total: number;
+  h3_vs_h2_ratio: number;
+  site_h2_requests_total: Record<string, number>;
+  site_h3_requests_total: Record<string, number>;
+  active_connections: number;
+  bytes_sent_total: number;
+  bytes_received_total: number;
+  upstream_errors_total: number;
+  metrics_addr: string;
+};
+
 export type Site = {
   host: string;
   backend: string;
@@ -257,6 +275,7 @@ export const api = {
     }),
   authCheck: () => request<{ authenticated: boolean }>('/auth/check'),
   management: () => request<ManagementInfo>('/management'),
+  metrics: () => request<Metrics>('/metrics'),
   logs: (params?: { type?: 'system' | 'proxy' | 'http' | 'all'; host?: string }) => {
     const search = new URLSearchParams();
     if (params?.type && params.type !== 'all') search.set('type', params.type === 'http' ? 'proxy' : params.type);

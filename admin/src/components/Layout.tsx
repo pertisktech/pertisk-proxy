@@ -14,6 +14,7 @@ import {
   Network,
   GitBranch,
   DoorOpen,
+  LineChart,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { cn } from '@/utils';
@@ -30,6 +31,7 @@ function proxyNav(): NavItem[] {
     { to: '/certificates', label: 'Certificates', icon: Shield },
     { to: '/dns-providers', label: 'DNS Providers', icon: Server },
     { to: '/logs', label: 'Logs', icon: ScrollText },
+    { to: '/metrics', label: 'Metrics', icon: LineChart },
     { to: '/settings', label: 'Settings', icon: Settings },
   ];
 }
@@ -46,6 +48,7 @@ function ingressNav(gatewayApiEnabled: boolean): NavItem[] {
   items.push(
     { to: '/certificates', label: 'Certificates', icon: Shield },
     { to: '/logs', label: 'Logs', icon: ScrollText },
+    { to: '/metrics', label: 'Metrics', icon: LineChart },
     { to: '/settings', label: 'Settings', icon: Settings },
   );
   return items;

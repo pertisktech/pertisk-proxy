@@ -6,12 +6,15 @@ use pingora_core::listeners::TcpSocketOptions;
 use pingora_core::listeners::TlsAcceptCallbacks;
 use pingora_core::server::configuration::Opt;
 use pingora_core::server::Server;
+#[cfg(feature = "prometheus")]
+use pingora_core::services::listening::Service as ListeningService;
 use pingora_proxy::http_proxy_service;
 use tracing::info;
 
 use crate::config::ServerConfig;
 use crate::h3::{tcp_bind_addrs, H3Config};
 use crate::log::ProxyLog;
+use crate::metrics::ProxyMetrics;
 use crate::proxy::Gateway;
 use crate::runtime::RuntimeConfig;
 use crate::tls::{validate_cert_pair, CertStore, CertStoreSniCallback};
@@ -23,6 +26,7 @@ pub struct PendingH3 {
     pub cert_store: Arc<CertStore>,
     pub configs: Vec<H3Config>,
     pub runtime_cfg: RuntimeConfig,
+    pub metrics: ProxyMetrics,
 }
 
 /// Start the Pingora reverse proxy. HTTP/3 is started on the Tokio runtime after TCP/TLS bind.
@@ -36,6 +40,7 @@ pub fn run(
     pending_h3: Option<PendingH3>,
     log: Arc<ProxyLog>,
     proxy_log_enabled: Arc<std::sync::atomic::AtomicBool>,
+    metrics: ProxyMetrics,
 ) -> Result<()> {
     let https_enabled = https_should_listen(server_config, &cert_store);
     let sni_enabled = cert_store.host_count() > 0;
@@ -83,6 +88,7 @@ pub fn run(
         http01_store,
         log,
         proxy_log_enabled,
+        metrics.clone(),
     );
     let mut proxy = http_proxy_service(&server.configuration, gateway);
     for addr in tcp_bind_addrs(&server_config.http_listen) {
@@ -123,11 +129,22 @@ pub fn run(
 
     server.add_service(proxy);
 
+    #[cfg(feature = "prometheus")]
+    if pingora_prometheus_enabled() {
+        if let Some(addr) = pingora_prometheus_listen_addr() {
+            let mut prom = ListeningService::prometheus_http_service();
+            prom.add_tcp(&addr);
+            server.add_service(prom);
+            info!(addr = %addr, "Pingora Prometheus metrics listener started");
+        }
+    }
+
     if let Some(h3) = pending_h3 {
         for config in h3.configs {
             let router = Arc::clone(&h3.router);
             let cert_store = Arc::clone(&h3.cert_store);
             let runtime_cfg = h3.runtime_cfg.clone();
+            let metrics = h3.metrics.clone();
             let udp = config.udp_listen.clone();
             let udp_err = udp.clone();
             // Dedicated thread + runtime: sharing the main Tokio runtime with Pingora
@@ -148,7 +165,8 @@ pub fn run(
                         }
                     };
                     rt.block_on(async move {
-                        if let Err(err) = crate::h3::run(router, config, cert_store, &runtime_cfg).await
+                        if let Err(err) =
+                            crate::h3::run(router, config, cert_store, &runtime_cfg, metrics).await
                         {
                             tracing::error!(error = %err, udp = %udp, "HTTP/3 listener stopped");
                         }
@@ -207,4 +225,26 @@ fn build_tls_settings(
         tls_settings.enable_h2();
     }
     Ok(tls_settings)
+}
+
+#[cfg(feature = "prometheus")]
+fn pingora_prometheus_enabled() -> bool {
+    std::env::var("PERTISK_PINGORA_PROMETHEUS")
+        .ok()
+        .map(|v| {
+            !matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(feature = "prometheus")]
+fn pingora_prometheus_listen_addr() -> Option<String> {
+    std::env::var("PERTISK_PINGORA_METRICS_ADDR")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .or_else(|| Some("127.0.0.1:9091".to_string()))
 }

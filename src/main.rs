@@ -58,6 +58,7 @@ fn main() -> Result<()> {
     let cert_store = Arc::new(CertStore::new());
     let http01_store = Arc::new(Http01ChallengeStore::new());
     let proxy_log_enabled = Arc::new(AtomicBool::new(runtime_config.proxy_log));
+    let metrics = pertisk_proxy::ProxyMetrics::new();
 
     apply::apply_config(&router, &runtime_config)?;
     cert_store.reload_from_configs(&runtime_config.tls)?;
@@ -191,6 +192,7 @@ fn main() -> Result<()> {
             Some(sessions),
             Arc::clone(&proxy_log),
             Arc::clone(&proxy_log_enabled),
+            metrics.clone(),
         );
         let admin_addr = pertisk_proxy::api::management_addr();
         tokio_runtime.spawn(async move {
@@ -198,6 +200,23 @@ fn main() -> Result<()> {
                 tracing::error!(error = %err, "management API stopped");
             }
         });
+    }
+
+    #[cfg(feature = "admin")]
+    if pertisk_proxy::metrics::metrics_enabled_from_env() {
+        let metrics_addr = pertisk_proxy::metrics::metrics_addr_from_env();
+        let metrics_for_server = metrics.clone();
+        tokio_runtime.spawn(async move {
+            if let Err(err) =
+                pertisk_proxy::metrics::start_metrics_server(metrics_addr, metrics_for_server).await
+            {
+                tracing::error!(error = %err, "metrics server stopped");
+            }
+        });
+        info!(
+            "Metrics server listening on http://{}/metrics",
+            metrics_addr
+        );
     }
 
     let pending_h3 = if proxy_env.server.enable_h3 {
@@ -214,6 +233,7 @@ fn main() -> Result<()> {
                 cert_store: Arc::clone(&cert_store),
                 configs,
                 runtime_cfg: runtime_cfg.clone(),
+                metrics: metrics.clone(),
             })
         } else if !runtime_config.tls.iter().any(|t| t.source.is_acme()) {
             tracing::warn!(
@@ -237,6 +257,7 @@ fn main() -> Result<()> {
         pending_h3,
         proxy_log,
         proxy_log_enabled,
+        metrics,
     )
 }
 

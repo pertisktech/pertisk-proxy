@@ -14,6 +14,7 @@ use tracing::{info, warn};
 use crate::deny;
 use crate::health::{is_health_path, is_json_health_path, API_HEALTH_BODY};
 use crate::h3::config::H3Config;
+use crate::metrics::ProxyMetrics;
 use crate::proxy::forward::resolve_forward;
 use crate::proxy::grpc;
 use crate::router::Router;
@@ -87,6 +88,7 @@ pub async fn run(
     config: H3Config,
     cert_store: Arc<CertStore>,
     _runtime_cfg: &RuntimeConfig,
+    metrics: ProxyMetrics,
 ) -> Result<()> {
     while cert_store.host_count() == 0 && cert_store.default_paths().is_none() {
         tracing::info!(
@@ -140,11 +142,14 @@ pub async fn run(
             Some(connecting) => {
                 let router = Arc::clone(&router);
                 let client = client.clone();
+                let metrics = metrics.clone();
                 tokio::spawn(async move {
                     match connecting.await {
                         Ok(connection) => {
                             let h3_conn = h3_quinn::Connection::new(connection);
-                            if let Err(err) = serve_h3_connection(router, client, h3_conn).await {
+                            if let Err(err) =
+                                serve_h3_connection(router, client, h3_conn, metrics).await
+                            {
                                 if is_benign_h3_disconnect(&err) {
                                     tracing::debug!(error = %err, "HTTP/3 client closed connection");
                                 } else {
@@ -166,6 +171,7 @@ async fn serve_h3_connection(
     router: Arc<Router>,
     client: Client,
     conn: h3_quinn::Connection,
+    metrics: ProxyMetrics,
 ) -> Result<()> {
     let mut h3 = h3::server::Connection::new(conn)
         .await
@@ -175,10 +181,13 @@ async fn serve_h3_connection(
             Ok(Some(resolver)) => {
                 let router = Arc::clone(&router);
                 let client = client.clone();
+                let metrics = metrics.clone();
                 tokio::spawn(async move {
                     match resolver.resolve_request().await {
                         Ok((req, stream)) => {
-                            if let Err(err) = handle_request(router, client, req, stream).await {
+                            if let Err(err) =
+                                handle_request(router, client, req, stream, metrics).await
+                            {
                                 warn!(error = %err, "HTTP/3 request failed");
                             }
                         }
@@ -198,14 +207,28 @@ async fn handle_request(
     client: Client,
     req: http::Request<()>,
     mut stream: h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
+    metrics: ProxyMetrics,
 ) -> Result<()> {
-    if try_serve_health(&req, &mut stream).await? {
+    metrics.inc_active_connections();
+    let result = handle_request_inner(router, client, req, &mut stream, &metrics).await;
+    metrics.dec_active_connections();
+    result
+}
+
+async fn handle_request_inner(
+    router: Arc<Router>,
+    client: Client,
+    req: http::Request<()>,
+    stream: &mut h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
+    metrics: &ProxyMetrics,
+) -> Result<()> {
+    if try_serve_health(&req, stream).await? {
         return Ok(());
     }
 
     if grpc::is_h3_incompatible_request(req.headers(), req.method(), req.uri().path()) {
         send_h3_response(
-            &mut stream,
+            stream,
             plain_response(
                 http::StatusCode::MISDIRECTED_REQUEST,
                 b"Omni /api/ RPC requires HTTP/2 (Alt-Svc: clear)",
@@ -217,9 +240,17 @@ async fn handle_request(
     }
 
     let host = request_host(&req);
+    let is_grpc = grpc::is_grpc_request(req.headers());
+    let bytes_received = req
+        .headers()
+        .get(http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+
     if deny::enabled() && !host.is_empty() && !router.snapshot().has_host(&host) {
         send_h3_response(
-            &mut stream,
+            stream,
             plain_response(http::StatusCode::NOT_FOUND, b"unknown host"),
             Bytes::from_static(b"unknown host"),
         )
@@ -237,7 +268,7 @@ async fn handle_request(
         Ok(plan) => plan,
         Err(_) => {
             send_h3_response(
-                &mut stream,
+                stream,
                 plain_response(http::StatusCode::NOT_FOUND, b"no route"),
                 Bytes::from_static(b"no route"),
             )
@@ -257,7 +288,9 @@ async fn handle_request(
             req.method(),
             &http::Method::POST | &http::Method::PUT | &http::Method::PATCH
         );
-    let body = read_h3_request_body(&mut stream, expects_body).await?;
+    let body = read_h3_request_body(stream, expects_body).await?;
+    let body_len = body.len() as u64;
+    let bytes_received = bytes_received.saturating_add(body_len);
 
     let mut upstream_req = client.request(req.method().clone(), plan.upstream_url);
     for (name, value) in req.headers().iter() {
@@ -277,11 +310,12 @@ async fn handle_request(
         Err(err) => {
             let msg = err.to_string();
             send_h3_response(
-                &mut stream,
+                stream,
                 plain_response(http::StatusCode::BAD_GATEWAY, msg.as_bytes()),
                 Bytes::from(msg),
             )
             .await?;
+            record_h3_request(metrics, &host, bytes_received, 0, true, is_grpc);
             return Ok(());
         }
     };
@@ -311,8 +345,41 @@ async fn handle_request(
         .unwrap();
     let mut h3_resp = h3_resp;
     *h3_resp.headers_mut() = headers;
-    send_h3_response(&mut stream, h3_resp, body).await?;
+    send_h3_response(stream, h3_resp, body.clone()).await?;
+    record_h3_request(
+        metrics,
+        &host,
+        bytes_received,
+        body.len() as u64,
+        false,
+        is_grpc,
+    );
     Ok(())
+}
+
+fn record_h3_request(
+    metrics: &ProxyMetrics,
+    host: &str,
+    bytes_received: u64,
+    bytes_sent: u64,
+    upstream_error: bool,
+    is_grpc: bool,
+) {
+    if host.is_empty() {
+        return;
+    }
+    metrics.inc_h3_requests();
+    metrics.inc_https_requests();
+    metrics
+        .inc_site_protocol_requests(host, http::Version::HTTP_3);
+    if is_grpc {
+        metrics.inc_grpc_requests();
+    }
+    if upstream_error {
+        metrics.inc_upstream_errors();
+    }
+    metrics.add_bytes_received(bytes_received);
+    metrics.add_bytes_sent(bytes_sent);
 }
 
 async fn try_serve_health(

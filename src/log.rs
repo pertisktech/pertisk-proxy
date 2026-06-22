@@ -264,4 +264,8 @@ impl ProxyLog {
             vec![]
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.inner.lock().map(|g| g.entries.len()).unwrap_or(0)
+    }
 }

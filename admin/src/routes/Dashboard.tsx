@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, type K8sPodRow, type ManagementInfo, type ProxyConfig } from '@/api/client';
+import { Link } from 'react-router-dom';
+import { api, type K8sPodRow, type ManagementInfo, type Metrics, type ProxyConfig } from '@/api/client';
 import { Card, Stat } from '@/components/Card';
 
 function formatUptime(secs: number) {
@@ -53,6 +54,19 @@ function filterIngressPods(pods: K8sPodRow[], info: ManagementInfo): K8sPodRow[]
   });
 }
 
+function prometheusUrls(metricsAddr: string | undefined, hostname: string | null | undefined) {
+  const addr = metricsAddr?.trim() || '0.0.0.0:9090';
+  const fallbackHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+  const displayHost = hostname?.trim() || fallbackHost;
+  const lastColon = addr.lastIndexOf(':');
+  const bindHost = lastColon > 0 ? addr.slice(0, lastColon) : '0.0.0.0';
+  const port = lastColon > 0 ? addr.slice(lastColon + 1) : '9090';
+  const host =
+    bindHost === '0.0.0.0' || bindHost === '[::]' || bindHost === '::' ? displayHost : bindHost.replace(/^\[|\]$/g, '');
+  const base = `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
+  return { metrics: `${base}/metrics`, health: `${base}/health` };
+}
+
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
@@ -81,6 +95,7 @@ function UsageBar({ percent, tone }: { percent: number; tone: 'cpu' | 'memory' }
 export function Dashboard() {
   const [info, setInfo] = useState<ManagementInfo | null>(null);
   const [config, setConfig] = useState<ProxyConfig | null>(null);
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [k8sPods, setK8sPods] = useState<K8sPodRow[]>([]);
   const [k8sLoading, setK8sLoading] = useState(false);
   const [error, setError] = useState('');
@@ -90,10 +105,11 @@ export function Dashboard() {
 
     async function load() {
       try {
-        const [mgmt, cfg] = await Promise.all([api.management(), api.config()]);
+        const [mgmt, cfg, m] = await Promise.all([api.management(), api.config(), api.metrics()]);
         if (!cancelled) {
           setInfo(mgmt);
           setConfig(cfg);
+          setMetrics(m);
           setError('');
         }
       } catch (e) {
@@ -155,6 +171,16 @@ export function Dashboard() {
       : null;
   const processCpu = info.process_cpu_usage_percent ?? null;
 
+  const activeConnections = metrics?.active_connections ?? 0;
+  const siteH2Totals = metrics?.site_h2_requests_total ?? {};
+  const siteH3Totals = metrics?.site_h3_requests_total ?? {};
+  const allSites = new Set([...Object.keys(siteH2Totals), ...Object.keys(siteH3Totals)]);
+  const busiestSite = Array.from(allSites)
+    .map((host) => [host, (siteH2Totals[host] ?? 0) + (siteH3Totals[host] ?? 0)] as const)
+    .sort((a, b) => b[1] - a[1])
+    .find(([, count]) => count > 0);
+  const promUrls = prometheusUrls(metrics?.metrics_addr, info.hostname);
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -162,6 +188,30 @@ export function Dashboard() {
         <Stat label="Uptime" value={formatUptime(info.uptime_secs)} />
         <Stat label="Sites" value={info.site_count} />
         <Stat label="Routes" value={info.route_count} />
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat label="Active connections" value={activeConnections} />
+        <Stat label="HTTP/2 requests" value={(metrics?.h2_requests_total ?? 0).toLocaleString()} />
+        <Stat label="HTTP/3 requests" value={(metrics?.h3_requests_total ?? 0).toLocaleString()} />
+        <Stat
+          label="H3/H2 ratio"
+          value={
+            metrics?.h3_vs_h2_ratio != null && Number.isFinite(metrics.h3_vs_h2_ratio)
+              ? metrics.h3_vs_h2_ratio.toFixed(2)
+              : '—'
+          }
+        />
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat label="Bytes sent" value={formatBytes(metrics?.bytes_sent_total ?? 0)} />
+        <Stat label="Bytes received" value={formatBytes(metrics?.bytes_received_total ?? 0)} />
+        <Stat label="Upstream errors" value={(metrics?.upstream_errors_total ?? 0).toLocaleString()} />
+        <Stat
+          label="Busiest site"
+          value={busiestSite ? busiestSite[0] : 'No traffic yet'}
+        />
       </div>
 
       {!isIngress ? (
@@ -330,6 +380,53 @@ export function Dashboard() {
           ) : null}
         </Card>
       ) : null}
+
+      <Card>
+        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <h2 className="text-lg font-semibold">Prometheus metrics</h2>
+            <p className="text-sm text-text-secondary">Scrape endpoints and key series for monitoring</p>
+          </div>
+          <Link to="/metrics" className="text-sm text-primary hover:underline">
+            Open metrics dashboard →
+          </Link>
+        </div>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded-lg border border-border bg-surface-elevated p-4">
+            <div className="mb-3 text-sm font-medium text-text-secondary">Endpoints</div>
+            <dl className="space-y-2 text-sm">
+              <InfoRow label="Metrics" value={promUrls.metrics} />
+              <InfoRow label="Health" value={promUrls.health} />
+            </dl>
+            <p className="mt-3 text-xs text-text-secondary">
+              Set <code className="font-mono">PERTISK_METRICS_ADDR</code> to change the listen address (default port 9090).
+            </p>
+          </div>
+          <div className="rounded-lg border border-border bg-surface-elevated p-4">
+            <div className="mb-3 text-sm font-medium text-text-secondary">Key series</div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                'pertisk_http_requests_total',
+                'pertisk_https_requests_total',
+                'pertisk_h2_requests_total',
+                'pertisk_h3_requests_total',
+                'pertisk_grpc_requests_total',
+                'pertisk_upstream_errors_total',
+                'pertisk_active_connections',
+                'pertisk_bytes_sent_total',
+                'pertisk_bytes_received_total',
+              ].map((name) => (
+                <span key={name} className="rounded border border-border bg-bg px-2 py-1 font-mono text-xs">
+                  {name}
+                </span>
+              ))}
+            </div>
+            <p className="mt-3 text-xs text-text-secondary">
+              Scrape <code className="font-mono">/metrics</code> from your Prometheus job or ServiceMonitor.
+            </p>
+          </div>
+        </div>
+      </Card>
     </div>
   );
 }

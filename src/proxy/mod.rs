@@ -18,6 +18,7 @@ use pingora_proxy::{FailToProxy, ProxyHttp, Session};
 use crate::deny;
 use crate::health;
 use crate::log::{ProxyLog, ProxyLogEntry};
+use crate::metrics::ProxyMetrics;
 use crate::proxy::forward::resolve_forward;
 use crate::router::Router;
 use crate::tls::CertStore;
@@ -32,6 +33,7 @@ pub struct RequestCtx {
     pub is_long_lived_stream: bool,
     pub log_started: Option<Instant>,
     pub log_upstream: Option<String>,
+    pub metrics_counted: bool,
 }
 
 impl From<crate::proxy::forward::MiddlewareAction> for RequestCtx {
@@ -45,6 +47,7 @@ impl From<crate::proxy::forward::MiddlewareAction> for RequestCtx {
             is_long_lived_stream: false,
             log_started: None,
             log_upstream: None,
+            metrics_counted: false,
         }
     }
 }
@@ -59,6 +62,7 @@ pub struct Gateway {
     http01_store: Option<Arc<crate::tls::Http01ChallengeStore>>,
     log: Arc<ProxyLog>,
     proxy_log_enabled: Arc<AtomicBool>,
+    metrics: ProxyMetrics,
 }
 
 impl Gateway {
@@ -72,6 +76,7 @@ impl Gateway {
         http01_store: Option<Arc<crate::tls::Http01ChallengeStore>>,
         log: Arc<ProxyLog>,
         proxy_log_enabled: Arc<AtomicBool>,
+        metrics: ProxyMetrics,
     ) -> Self {
         Self {
             router,
@@ -83,6 +88,59 @@ impl Gateway {
             http01_store,
             log,
             proxy_log_enabled,
+            metrics,
+        }
+    }
+
+    fn record_request_metrics(
+        &self,
+        session: &Session,
+        ctx: &RequestCtx,
+        host: &str,
+        upstream_error: bool,
+    ) {
+        if host.is_empty() || health::is_health_path(session.req_header().uri.path()) {
+            return;
+        }
+
+        let tls = is_downstream_tls(session);
+        let h2 = session.as_downstream().is_http2();
+        if tls {
+            self.metrics.inc_https_requests();
+            if h2 {
+                self.metrics.inc_h2_requests();
+                self.metrics
+                    .inc_site_protocol_requests(host, http::Version::HTTP_2);
+            }
+        } else {
+            self.metrics.inc_http_requests();
+        }
+
+        if ctx.is_grpc {
+            self.metrics.inc_grpc_requests();
+        }
+
+        if upstream_error {
+            self.metrics.inc_upstream_errors();
+        }
+
+        if let Some(len) = session
+            .req_header()
+            .headers
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            self.metrics.add_bytes_received(len);
+        }
+
+        if let Some(len) = session
+            .response_written()
+            .and_then(|r| r.headers.get("content-length"))
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            self.metrics.add_bytes_sent(len);
         }
     }
 }
@@ -112,6 +170,8 @@ impl ProxyHttp for Gateway {
 
     async fn early_request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<()> {
         ctx.log_started = Some(Instant::now());
+        ctx.metrics_counted = true;
+        self.metrics.inc_active_connections();
         let req = session.req_header();
         let host = request_host(req);
         let (is_grpc, is_grpc_web) = grpc::classify_grpc_request(
@@ -415,12 +475,19 @@ impl ProxyHttp for Gateway {
     }
 
     async fn logging(&self, session: &mut Session, e: Option<&Error>, ctx: &mut Self::CTX) {
+        let host = request_host(session.req_header());
+        let upstream_error = e.is_some_and(|err| *err.esource() == ErrorSource::Upstream);
+        self.record_request_metrics(session, ctx, &host, upstream_error);
+        if ctx.metrics_counted {
+            self.metrics.dec_active_connections();
+            ctx.metrics_counted = false;
+        }
+
         if !self.proxy_log_enabled.load(Ordering::Relaxed) {
             return;
         }
 
         let req = session.req_header();
-        let host = request_host(req);
         if host.is_empty() {
             return;
         }
