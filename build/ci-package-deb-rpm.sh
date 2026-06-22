@@ -9,6 +9,8 @@ set -euo pipefail
 : "${PKG_DIR:=pkg}"
 
 PACKAGE_IMAGE="${PACKAGE_IMAGE:-pertisk-proxy-package}"
+REPO_URL="${GITHUB_REPOSITORY:+https://github.com/${GITHUB_REPOSITORY}}"
+REPO_URL="${REPO_URL:-https://github.com/pertisktech/pertisk-proxy}"
 
 run_fpm() {
   if command -v fpm >/dev/null 2>&1; then
@@ -30,7 +32,7 @@ common_args=(
   -n "$BINARY_NAME"
   -v "v${VERSION}"
   --description "Reverse proxy and Kubernetes Ingress controller with HTTP/3"
-  --url "https://github.com/pertisktech/pertisk-proxy"
+  --url "$REPO_URL"
   --maintainer "Pertisk Team"
   --license "Apache-2.0"
   --vendor "Pertisk"
@@ -57,3 +59,6 @@ run_fpm -t rpm -a "$rpm_arch" \
   --depends shadow-utils \
   --rpm-os linux \
   "${common_args[@]}"
+
+echo "=== Package artifacts ==="
+ls -la ./*.deb ./*.rpm 2>/dev/null || ls -la
