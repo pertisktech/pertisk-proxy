@@ -445,7 +445,7 @@ pub async fn spawn_auto_ssl_for_config(
                                 );
                             } else {
                                 tracing::info!(
-                                    "Auto-SSL: certificate obtained for {} (restart may be required if HTTPS was not listening yet)",
+                                    "Auto-SSL: certificate obtained for {}",
                                     host_label
                                 );
                             }

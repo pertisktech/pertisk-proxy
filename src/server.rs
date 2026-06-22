@@ -35,6 +35,7 @@ pub fn run(
     router: Arc<Router>,
     cert_store: Arc<CertStore>,
     auto_https: bool,
+    acme_tls_pending: bool,
     runtime_cfg: &RuntimeConfig,
     http01_store: Option<Arc<crate::tls::Http01ChallengeStore>>,
     pending_h3: Option<PendingH3>,
@@ -42,8 +43,8 @@ pub fn run(
     proxy_log_enabled: Arc<std::sync::atomic::AtomicBool>,
     metrics: ProxyMetrics,
 ) -> Result<()> {
-    let https_enabled = https_should_listen(server_config, &cert_store);
-    let sni_enabled = cert_store.host_count() > 0;
+    let https_enabled = https_should_listen(server_config, &cert_store, acme_tls_pending);
+    let sni_enabled = cert_store.host_count() > 0 || acme_tls_pending;
 
     info!(
         http = %server_config.http_listen,
@@ -116,6 +117,7 @@ pub fn run(
                 server_config,
                 Arc::clone(&cert_store),
                 server_config.enable_h2,
+                acme_tls_pending,
             )?;
             proxy.add_tls_with_settings(&addr, dual_stack_tcp_options(&addr), tls_settings);
             info!(
@@ -194,9 +196,14 @@ fn dual_stack_tcp_options(addr: &str) -> Option<TcpSocketOptions> {
         })
 }
 
-fn https_should_listen(server_config: &ServerConfig, cert_store: &CertStore) -> bool {
+fn https_should_listen(
+    server_config: &ServerConfig,
+    cert_store: &CertStore,
+    acme_tls_pending: bool,
+) -> bool {
     cert_store.host_count() > 0
         || cert_store.default_paths().is_some()
+        || acme_tls_pending
         || (server_config.tls_cert_path().is_ok() && server_config.tls_key_path().is_ok())
 }
 
@@ -204,8 +211,9 @@ fn build_tls_settings(
     server_config: &ServerConfig,
     cert_store: Arc<CertStore>,
     enable_h2: bool,
+    acme_tls_pending: bool,
 ) -> Result<TlsSettings> {
-    let mut tls_settings = if cert_store.host_count() > 0 {
+    let mut tls_settings = if cert_store.host_count() > 0 || acme_tls_pending {
         let callbacks: TlsAcceptCallbacks = Box::new(CertStoreSniCallback {
             store: cert_store,
         });

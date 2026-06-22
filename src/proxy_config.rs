@@ -238,6 +238,12 @@ pub struct TlsConfig {
     pub expires_at: Option<String>,
 }
 
+/// True when any TLS entry uses ACME (certificates may arrive after process start).
+pub fn tls_has_acme_config(tls: &[TlsConfig]) -> bool {
+    tls.iter()
+        .any(|t| matches!(t.source, TlsSource::Acme { .. }))
+}
+
 /// Top-level proxy configuration (file or hot-reloaded).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -859,6 +865,24 @@ mod tls_normalize_tests {
         normalize_tls_config(&mut tls);
         assert_eq!(tls.len(), 1);
         assert_eq!(tls[0].hosts, vec!["ok.example.com"]);
+    }
+
+    #[test]
+    fn tls_has_acme_config_detects_acme_entries() {
+        assert!(!tls_has_acme_config(&[]));
+        assert!(tls_has_acme_config(&[TlsConfig {
+            hosts: vec!["*.example.com".into()],
+            source: acme_source(),
+            expires_at: None,
+        }]));
+        assert!(!tls_has_acme_config(&[TlsConfig {
+            hosts: vec!["example.com".into()],
+            source: TlsSource::File {
+                cert: "/a.pem".into(),
+                key: "/a.key".into(),
+            },
+            expires_at: None,
+        }]));
     }
 
     #[test]

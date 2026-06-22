@@ -219,8 +219,13 @@ fn main() -> Result<()> {
         );
     }
 
+    let acme_tls_pending = pertisk_proxy::proxy_config::tls_has_acme_config(&runtime_config.tls);
+
     let pending_h3 = if proxy_env.server.enable_h3 {
-        if cert_store.host_count() > 0 || cert_store.default_paths().is_some() {
+        if cert_store.host_count() > 0
+            || cert_store.default_paths().is_some()
+            || acme_tls_pending
+        {
             let configs = h3::h3_bind_addrs(&proxy_env.server.h3_udp_listen)
                 .into_iter()
                 .map(|udp_addr| {
@@ -235,12 +240,10 @@ fn main() -> Result<()> {
                 runtime_cfg: runtime_cfg.clone(),
                 metrics: metrics.clone(),
             })
-        } else if !runtime_config.tls.iter().any(|t| t.source.is_acme()) {
+        } else {
             tracing::warn!(
                 "ENABLE_H3 is set but no TLS certificates are available; HTTP/3 disabled"
             );
-            None
-        } else {
             None
         }
     } else {
@@ -252,6 +255,7 @@ fn main() -> Result<()> {
         router,
         cert_store,
         proxy_env.auto_https,
+        acme_tls_pending,
         &runtime_cfg,
         Some(http01_store),
         pending_h3,

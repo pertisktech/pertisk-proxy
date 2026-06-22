@@ -253,6 +253,7 @@ pub fn run() -> anyhow::Result<()> {
         router,
         cert_store,
         false,
+        false,
         &runtime_cfg,
         None,
         pending_h3,
