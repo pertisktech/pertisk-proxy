@@ -29,7 +29,7 @@ run_fpm() {
     exit 1
   fi
 
-  docker build -q -f docker/Dockerfile.package -t "$PACKAGE_IMAGE" .
+  docker build --progress=plain -f docker/Dockerfile.package -t "$PACKAGE_IMAGE" .
   docker run --rm -u "$(id -u):$(id -g)" -v "$(pwd):/work" -w /work "$PACKAGE_IMAGE" fpm "$@"
 }
 
