@@ -12,6 +12,7 @@ ARG BINARY_FILE=pertisk-proxy-linux-amd64
 ARG BINARY_NAME=pertisk-proxy
 
 COPY ${BINARY_FILE} /usr/bin/${BINARY_NAME}
+COPY admin/dist /usr/share/pertisk-proxy/admin/dist
 COPY build/pertisk-proxy.conf /etc/pertisk-proxy/pertisk-proxy.conf
 
 ENV PERTISK_DB_PATH=/var/lib/pertisk-proxy/proxy.sqlite

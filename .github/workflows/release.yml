@@ -1,0 +1,627 @@
+# Release on push tag v* — build binaries (amd64 + arm64) and create GitHub Release.
+# Packages: DEB, RPM, tarball per arch; Docker images; Helm chart.
+
+name: Release Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  BINARY_NAME: pertisk-proxy
+  HARBOR_BUILD_IMAGE: harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy-build
+  HARBOR_PROXY_IMAGE: harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/proxy
+  HARBOR_INGRESS_IMAGE: harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress
+  HELM_CHART_REPO_URL: https://chart.cloud.pertisksoft.net
+
+jobs:
+  build:
+    name: Build ${{ matrix.goarch }}
+    runs-on: [self-hosted, linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            deb_arch: amd64
+            rpm_arch: x86_64
+          - goarch: arm64
+            deb_arch: arm64
+            rpm_arch: aarch64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Disable Docker keychain (macOS CI)
+        run: |
+          mkdir -p "$RUNNER_TEMP/.docker"
+          echo '{"credsStore":""}' > "$RUNNER_TEMP/.docker/config.json"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/.docker" >> $GITHUB_ENV
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+
+      - name: Set up QEMU for multi-arch builds
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Node (for admin build)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Build admin UI
+        run: |
+          cd admin && pnpm install --frozen-lockfile && pnpm run build
+        env:
+          CI: true
+
+      - name: Detect native build platform
+        id: native_plat
+        run: |
+          case "$(uname -m)" in
+            x86_64|amd64)
+              echo "platform=linux/amd64" >> "$GITHUB_OUTPUT"
+              echo "arch=amd64" >> "$GITHUB_OUTPUT"
+              ;;
+            aarch64|arm64)
+              echo "platform=linux/arm64" >> "$GITHUB_OUTPUT"
+              echo "arch=arm64" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unsupported runner architecture: $(uname -m)"
+              exit 1
+              ;;
+          esac
+
+      - name: Build proxy binary (Docker, platform from matrix)
+        run: |
+          PLATFORM="linux/${{ matrix.goarch }}"
+          IMG="${{ env.HARBOR_BUILD_IMAGE }}:proxy-${{ matrix.goarch }}"
+          docker buildx build \
+            --platform "$PLATFORM" \
+            --file docker/Dockerfile.release \
+            --build-arg BUILDPLATFORM="${{ steps.native_plat.outputs.platform }}" \
+            --build-arg BUILDARCH="${{ steps.native_plat.outputs.arch }}" \
+            --build-arg TARGETPLATFORM="$PLATFORM" \
+            --build-arg TARGETARCH="${{ matrix.goarch }}" \
+            --build-arg PACKAGE_TARGET=proxy \
+            --build-arg VERSION=${{ steps.version.outputs.VERSION }} \
+            --build-arg CARGO_BUILD_JOBS=$(nproc) \
+            --load \
+            -t "$IMG" \
+            .
+          docker create --name extract "$IMG"
+          docker cp extract:/app/out/pertisk-proxy ./${{ env.BINARY_NAME }}-linux-${{ matrix.goarch }}
+          docker rm extract
+          chmod +x ./${{ env.BINARY_NAME }}-linux-${{ matrix.goarch }}
+          echo "Built proxy binary for linux/${{ matrix.goarch }}"
+
+      - name: Build ingress binary (Docker, platform from matrix)
+        run: |
+          PLATFORM="linux/${{ matrix.goarch }}"
+          IMG="${{ env.HARBOR_BUILD_IMAGE }}:ingress-${{ matrix.goarch }}"
+          docker buildx build \
+            --platform "$PLATFORM" \
+            --file docker/Dockerfile.release \
+            --build-arg BUILDPLATFORM="${{ steps.native_plat.outputs.platform }}" \
+            --build-arg BUILDARCH="${{ steps.native_plat.outputs.arch }}" \
+            --build-arg TARGETPLATFORM="$PLATFORM" \
+            --build-arg TARGETARCH="${{ matrix.goarch }}" \
+            --build-arg PACKAGE_TARGET=ingress \
+            --build-arg VERSION=${{ steps.version.outputs.VERSION }} \
+            --build-arg CARGO_BUILD_JOBS=$(nproc) \
+            --load \
+            -t "$IMG" \
+            .
+          docker create --name extract-ingress "$IMG"
+          docker cp extract-ingress:/app/out/pertisk-proxy-ingress ./pertisk-proxy-ingress-linux-${{ matrix.goarch }}
+          docker rm extract-ingress
+          chmod +x ./pertisk-proxy-ingress-linux-${{ matrix.goarch }}
+          echo "Built ingress binary for linux/${{ matrix.goarch }}"
+
+      - name: Detect OS and install packaging tools
+        run: |
+          set -euo pipefail
+
+          if command -v fpm &>/dev/null && command -v ruby &>/dev/null && command -v gem &>/dev/null; then
+            echo "Packaging tools already installed: fpm=$(command -v fpm) ruby=$(command -v ruby)"
+            exit 0
+          fi
+
+          if [ "$(id -u)" -eq 0 ]; then
+            SUDO=""
+          elif sudo -n true 2>/dev/null; then
+            SUDO="sudo -n"
+          else
+            SUDO=""
+            echo "::error::Packaging tools missing (fpm/ruby/gem) and runner has no passwordless sudo."
+            exit 1
+          fi
+
+          if command -v dnf &> /dev/null; then
+            echo "OS_TYPE=rhel" >> $GITHUB_ENV
+            $SUDO dnf install -y rpm-build ruby ruby-devel rubygems gcc make
+          elif command -v yum &> /dev/null; then
+            echo "OS_TYPE=rhel" >> $GITHUB_ENV
+            $SUDO yum install -y rpm-build ruby ruby-devel rubygems gcc make
+          elif [ -f /etc/debian_version ] || command -v apt-get &> /dev/null; then
+            echo "OS_TYPE=debian" >> $GITHUB_ENV
+            $SUDO apt-get update
+            $SUDO apt-get install -y rpm ruby ruby-dev rubygems build-essential
+          else
+            echo "::error::Could not detect OS or package manager"
+            exit 1
+          fi
+
+          if ! command -v fpm &>/dev/null; then
+            $SUDO gem install --no-document fpm
+          fi
+
+          for tool in fpm ruby gem; do
+            if ! command -v "$tool" &>/dev/null; then
+              echo "::error::Required packaging tool missing: $tool"
+              exit 1
+            fi
+          done
+
+      - name: Create package directories
+        run: |
+          mkdir -p pkg/usr/bin
+          mkdir -p pkg/usr/share/pertisk-proxy/admin
+          mkdir -p pkg/etc/pertisk-proxy
+          mkdir -p pkg/etc/sysctl.d
+          mkdir -p pkg/var/lib/pertisk-proxy
+          mkdir -p pkg/var/log/pertisk-proxy
+          mkdir -p pkg/lib/systemd/system
+
+          cp ${{ env.BINARY_NAME }}-linux-${{ matrix.goarch }} pkg/usr/bin/${{ env.BINARY_NAME }}
+          chmod +x pkg/usr/bin/${{ env.BINARY_NAME }}
+          cp -r admin/dist pkg/usr/share/pertisk-proxy/admin/
+          cp build/pertisk-proxy.conf pkg/etc/pertisk-proxy/pertisk-proxy.conf
+
+      - name: Create systemd service files
+        run: |
+          cp build/pertisk-proxy.service pkg/lib/systemd/system/pertisk-proxy.service
+
+          cat > pkg/lib/systemd/system/pertisk-proxy-root.service << 'EOF'
+          [Unit]
+          Description=pertisk-proxy reverse proxy (root)
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=root
+          Group=root
+          WorkingDirectory=/var/lib/pertisk-proxy
+          EnvironmentFile=-/etc/pertisk-proxy/pertisk-proxy.conf
+          ExecStart=/usr/bin/pertisk-proxy
+          Restart=always
+          RestartSec=5
+          LimitNOFILE=65535
+          StandardOutput=append:/var/log/pertisk-proxy/pertisk-proxy.log
+          StandardError=append:/var/log/pertisk-proxy/pertisk-proxy.log
+          ProtectSystem=full
+          ProtectHome=true
+          ReadWritePaths=/var/lib/pertisk-proxy /var/log/pertisk-proxy
+          PrivateTmp=true
+          NoNewPrivileges=true
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+      - name: Create sysctl file
+        run: |
+          cat > pkg/etc/sysctl.d/99-pertisk-proxy.conf << 'EOF'
+          # pertisk-proxy UDP buffer sizes for QUIC/HTTP3
+          net.core.rmem_max=7500000
+          net.core.wmem_max=7500000
+          EOF
+
+      - name: Create pre/post install scripts
+        run: |
+          cat > preinstall.sh << 'EOF'
+          #!/bin/sh
+          set -e
+          if ! getent group pertisk-proxy >/dev/null 2>&1; then
+            groupadd --system pertisk-proxy
+          fi
+          if ! getent passwd pertisk-proxy >/dev/null 2>&1; then
+            useradd --system --gid pertisk-proxy --home-dir /var/lib/pertisk-proxy \
+              --shell /usr/sbin/nologin --comment "pertisk-proxy" pertisk-proxy
+          fi
+          EOF
+
+          cat > postinstall.sh << 'EOF'
+          #!/bin/sh
+          set -e
+          chown -R pertisk-proxy:pertisk-proxy /var/lib/pertisk-proxy
+          chown -R pertisk-proxy:pertisk-proxy /var/log/pertisk-proxy
+          chown -R pertisk-proxy:pertisk-proxy /usr/share/pertisk-proxy
+          chmod 750 /var/lib/pertisk-proxy /var/log/pertisk-proxy
+          if command -v setcap >/dev/null 2>&1; then
+            if setcap 'cap_net_bind_service=+ep' /usr/bin/pertisk-proxy 2>/dev/null; then
+              echo "Granted network binding capability to pertisk-proxy binary"
+            fi
+          fi
+          if [ -f /etc/sysctl.d/99-pertisk-proxy.conf ]; then
+            sysctl -p /etc/sysctl.d/99-pertisk-proxy.conf 2>/dev/null || true
+          fi
+          if command -v systemctl >/dev/null 2>&1; then
+            systemctl daemon-reload
+            echo "pertisk-proxy installed. Start with: sudo systemctl start pertisk-proxy"
+          fi
+          EOF
+
+          cat > preremove.sh << 'EOF'
+          #!/bin/sh
+          set -e
+          if command -v systemctl >/dev/null 2>&1; then
+            systemctl is-active --quiet pertisk-proxy && systemctl stop pertisk-proxy || true
+            systemctl is-enabled --quiet pertisk-proxy 2>/dev/null && systemctl disable pertisk-proxy || true
+          fi
+          EOF
+
+          chmod +x preinstall.sh postinstall.sh preremove.sh
+
+      - name: Build DEB package
+        run: |
+          fpm -s dir -t deb \
+            -n ${{ env.BINARY_NAME }} \
+            -v v${{ steps.version.outputs.VERSION }} \
+            -a ${{ matrix.deb_arch }} \
+            --description "Reverse proxy and Kubernetes Ingress controller with HTTP/3" \
+            --url "https://github.com/${{ github.repository }}" \
+            --maintainer "Pertisk Team" \
+            --license "Apache-2.0" \
+            --vendor "Pertisk" \
+            --category "net" \
+            --depends libcap2-bin \
+            --before-install preinstall.sh \
+            --after-install postinstall.sh \
+            --before-remove preremove.sh \
+            --config-files /etc/pertisk-proxy/pertisk-proxy.conf \
+            --directories /var/lib/pertisk-proxy \
+            --directories /var/log/pertisk-proxy \
+            --deb-systemd-enable \
+            --deb-no-default-config-files \
+            -C pkg \
+            .
+
+      - name: Build RPM package
+        run: |
+          fpm -s dir -t rpm \
+            -n ${{ env.BINARY_NAME }} \
+            -v v${{ steps.version.outputs.VERSION }} \
+            -a ${{ matrix.rpm_arch }} \
+            --description "Reverse proxy and Kubernetes Ingress controller with HTTP/3" \
+            --url "https://github.com/${{ github.repository }}" \
+            --maintainer "Pertisk Team" \
+            --license "Apache-2.0" \
+            --vendor "Pertisk" \
+            --category "System Environment/Daemons" \
+            --depends libcap \
+            --depends shadow-utils \
+            --before-install preinstall.sh \
+            --after-install postinstall.sh \
+            --before-remove preremove.sh \
+            --config-files /etc/pertisk-proxy/pertisk-proxy.conf \
+            --directories /var/lib/pertisk-proxy \
+            --directories /var/log/pertisk-proxy \
+            --rpm-os linux \
+            -C pkg \
+            .
+
+      - name: Create tarball
+        run: |
+          mkdir -p tarball/usr/bin tarball/admin
+          cp pkg/usr/bin/${{ env.BINARY_NAME }} tarball/usr/bin/
+          cp -r pkg/usr/share/pertisk-proxy/admin/dist tarball/admin/
+          tar -czvf ${{ env.BINARY_NAME }}-v${{ steps.version.outputs.VERSION }}-linux-${{ matrix.goarch }}.tar.gz -C tarball usr admin
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-${{ matrix.goarch }}
+          path: |
+            ${{ env.BINARY_NAME }}-linux-${{ matrix.goarch }}
+            pertisk-proxy-ingress-linux-${{ matrix.goarch }}
+            admin/dist/
+            *.deb
+            *.rpm
+            *.tar.gz
+          retention-days: 1
+
+  docker-build:
+    name: Docker images (${{ matrix.goarch }})
+    needs: build
+    runs-on: [self-hosted, linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-linux-${{ matrix.goarch }}
+          path: .
+
+      - name: Configure Docker
+        run: |
+          DOCKER_TEMP_DIR="$RUNNER_TEMP/.docker"
+          mkdir -p "$DOCKER_TEMP_DIR"
+          echo '{"auths":{},"credsStore":"","credHelpers":{}}' > "$DOCKER_TEMP_DIR/config.json"
+          echo "DOCKER_CONFIG=$DOCKER_TEMP_DIR" >> $GITHUB_ENV
+
+      - name: Login to Harbor Registry
+        run: |
+          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
+          AUTH=$(echo -n "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" | base64)
+          REGISTRY="harbor.tools.thaidevops.co"
+          mkdir -p "$DOCKER_CONFIG"
+          echo "{\"auths\":{\"$REGISTRY\":{\"auth\":\"$AUTH\"}},\"credsStore\":\"\",\"credHelpers\":{}}" > "$DOCKER_CONFIG/config.json"
+
+      - name: Build and push Docker images (${{ matrix.goarch }})
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          ARCH="${{ matrix.goarch }}"
+          PROXY="${{ env.HARBOR_PROXY_IMAGE }}"
+          INGRESS="${{ env.HARBOR_INGRESS_IMAGE }}"
+
+          docker build -f docker/Dockerfile.binary \
+            --build-arg BINARY_FILE=${{ env.BINARY_NAME }}-linux-${ARCH} \
+            -t "${PROXY}:v${VERSION}-${ARCH}" \
+            -t "${PROXY}:${ARCH}" \
+            . &
+          PROXY_PID=$!
+
+          docker build -f docker/Dockerfile.ingress.binary \
+            --build-arg BINARY_FILE=pertisk-proxy-ingress-linux-${ARCH} \
+            -t "${INGRESS}:v${VERSION}-${ARCH}" \
+            -t "${INGRESS}:${ARCH}" \
+            . &
+          INGRESS_PID=$!
+
+          wait "$PROXY_PID" "$INGRESS_PID"
+
+          docker push "${PROXY}:v${VERSION}-${ARCH}" &
+          docker push "${PROXY}:${ARCH}" &
+          docker push "${INGRESS}:v${VERSION}-${ARCH}" &
+          docker push "${INGRESS}:${ARCH}" &
+          wait
+
+  docker-manifest:
+    name: Docker multi-arch manifests
+    needs: docker-build
+    runs-on: [self-hosted, linux]
+    steps:
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Configure Docker
+        run: |
+          DOCKER_TEMP_DIR="$RUNNER_TEMP/.docker"
+          mkdir -p "$DOCKER_TEMP_DIR"
+          echo '{"auths":{},"credsStore":"","credHelpers":{}}' > "$DOCKER_TEMP_DIR/config.json"
+          echo "DOCKER_CONFIG=$DOCKER_TEMP_DIR" >> $GITHUB_ENV
+
+      - name: Login to Harbor Registry
+        run: |
+          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
+          AUTH=$(echo -n "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" | base64)
+          REGISTRY="harbor.tools.thaidevops.co"
+          mkdir -p "$DOCKER_CONFIG"
+          echo "{\"auths\":{\"$REGISTRY\":{\"auth\":\"$AUTH\"}},\"credsStore\":\"\",\"credHelpers\":{}}" > "$DOCKER_CONFIG/config.json"
+
+      - name: Create multi-arch proxy manifest
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          PROXY="${{ env.HARBOR_PROXY_IMAGE }}"
+          docker buildx imagetools create \
+            -t "${PROXY}:v${VERSION}" \
+            -t "${PROXY}:latest" \
+            "${PROXY}:v${VERSION}-amd64" \
+            "${PROXY}:v${VERSION}-arm64"
+
+      - name: Create multi-arch ingress manifest
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          INGRESS="${{ env.HARBOR_INGRESS_IMAGE }}"
+          docker buildx imagetools create \
+            -t "${INGRESS}:v${VERSION}" \
+            -t "${INGRESS}:latest" \
+            "${INGRESS}:v${VERSION}-amd64" \
+            "${INGRESS}:v${VERSION}-arm64"
+
+      - name: Summary
+        run: |
+          echo "## Docker Images Built and Pushed" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** v${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Proxy (standalone)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:v${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Ingress (Kubernetes controller)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:v${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Platforms:** linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
+
+  helm-publish:
+    name: Publish Helm chart
+    needs: docker-manifest
+    runs-on: [self-hosted, linux]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Install Helm
+        run: |
+          set -euo pipefail
+          if command -v helm >/dev/null 2>&1; then
+            helm version
+            exit 0
+          fi
+          HELM_VERSION="${HELM_VERSION:-3.21.1}"
+          HELM_INSTALL_DIR="${HOME}/.local/bin"
+          mkdir -p "$HELM_INSTALL_DIR"
+          case "$(uname -m)" in
+            x86_64|amd64) HELM_ARCH=amd64 ;;
+            aarch64|arm64) HELM_ARCH=arm64 ;;
+            *)
+              echo "unsupported architecture for helm: $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "$TMP"' EXIT
+          curl -fsSL "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${HELM_ARCH}.tar.gz" -o "$TMP/helm.tgz"
+          tar -xzf "$TMP/helm.tgz" -C "$TMP"
+          install -m 755 "$TMP/linux-${HELM_ARCH}/helm" "$HELM_INSTALL_DIR/helm"
+          echo "$HELM_INSTALL_DIR" >> "$GITHUB_PATH"
+          helm version
+
+      - name: Publish pertisk-ingress chart
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          HELM_CHART_REPO_URL: ${{ env.HELM_CHART_REPO_URL }}
+          HELM_CHART_TOKEN: ${{ secrets.HELM_CHART_TOKEN }}
+          HELM_USER: ${{ secrets.HELM_USER }}
+          HELM_PASSWORD: ${{ secrets.HELM_PASSWORD }}
+        run: chmod +x build/publish-helm-ingress.sh && ./build/publish-helm-ingress.sh
+
+      - name: Summary
+        run: |
+          echo "## Helm Chart Published" >> $GITHUB_STEP_SUMMARY
+          echo "**Chart:** pertisk-ingress ${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** ${{ env.HELM_CHART_REPO_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.HARBOR_INGRESS_IMAGE }}:v${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: [self-hosted, linux]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd packages
+          sha256sum *.deb *.rpm *.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release v${{ steps.version.outputs.VERSION }}
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          generate_release_notes: true
+          files: |
+            packages/*.deb
+            packages/*.rpm
+            packages/*.tar.gz
+            packages/SHA256SUMS.txt
+          body: |
+            ## Installation
+
+            ### Debian/Ubuntu (amd64)
+            ```bash
+            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/pertisk-proxy_v${{ steps.version.outputs.VERSION }}_amd64.deb
+            sudo dpkg -i pertisk-proxy_v${{ steps.version.outputs.VERSION }}_amd64.deb
+            ```
+
+            ### Debian/Ubuntu (arm64)
+            ```bash
+            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/pertisk-proxy_v${{ steps.version.outputs.VERSION }}_arm64.deb
+            sudo dpkg -i pertisk-proxy_v${{ steps.version.outputs.VERSION }}_arm64.deb
+            ```
+
+            ### Binary tarball
+            ```bash
+            tar -xzf pertisk-proxy-v${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz
+            PERTISK_DB_PATH=./data/proxy.sqlite ./usr/bin/pertisk-proxy
+            ```
+
+            ## Post Installation
+            ```bash
+            getcap /usr/bin/pertisk-proxy
+            sudo systemctl start pertisk-proxy
+            sudo systemctl enable pertisk-proxy
+            ```
+
+            ## Docker (Harbor)
+
+            ### Proxy (standalone)
+            ```bash
+            docker pull ${{ env.HARBOR_PROXY_IMAGE }}:v${{ steps.version.outputs.VERSION }}
+            ```
+
+            ### Ingress (Kubernetes controller)
+            ```bash
+            docker pull ${{ env.HARBOR_INGRESS_IMAGE }}:v${{ steps.version.outputs.VERSION }}
+            ```
+
+            ### Helm (pertisk-ingress)
+            ```bash
+            helm repo add pertisk ${{ env.HELM_CHART_REPO_URL }}
+            helm repo update
+            helm upgrade --install pertisk-proxy-ingress pertisk/pertisk-ingress \
+              --version ${{ steps.version.outputs.VERSION }} -n pertisk-proxy --create-namespace
+            ```
+
+            ## Verify checksums
+            ```bash
+            sha256sum -c SHA256SUMS.txt
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

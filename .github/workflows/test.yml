@@ -1,0 +1,56 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  unit-tests:
+    name: Unit tests
+    runs-on: [self-hosted, linux]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run library unit tests
+        run: cargo test --lib --features ingress
+
+  coverage:
+    name: Coverage (95% gate)
+    runs-on: [self-hosted, linux]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install tarpaulin
+        run: |
+          set -euo pipefail
+          if command -v cargo-tarpaulin >/dev/null; then
+            cargo tarpaulin --version
+            exit 0
+          fi
+
+          TARPAULIN_VERSION=0.35.4
+          case "$(uname -m)" in
+            x86_64) TARGET=x86_64-unknown-linux-gnu ;;
+            aarch64|arm64) TARGET=aarch64-unknown-linux-gnu ;;
+            *)
+              echo "Unsupported runner architecture for tarpaulin: $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+
+          URL="https://github.com/xd009642/tarpaulin/releases/download/${TARPAULIN_VERSION}/cargo-tarpaulin-${TARGET}.tar.gz"
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "$TMP"' EXIT
+          curl -fsSL "$URL" -o "$TMP/tarpaulin.tar.gz"
+          tar -xzf "$TMP/tarpaulin.tar.gz" -C "$TMP"
+          mkdir -p "$HOME/.cargo/bin"
+          install -m 755 "$TMP/cargo-tarpaulin" "$HOME/.cargo/bin/cargo-tarpaulin"
+          cargo tarpaulin --version
+
+      - name: Check line coverage
+        run: cargo tarpaulin --config tarpaulin.toml --lib --features ingress
