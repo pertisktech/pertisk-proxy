@@ -531,8 +531,8 @@ jobs:
         run: |
           set -euo pipefail
           cd packages
-          shopt -s nullglob
-          files=( *.deb *.rpm *.tar.gz )
+          shopt -s globstar nullglob
+          files=( **/*.deb **/*.rpm **/*.tar.gz )
           if [ "${#files[@]}" -eq 0 ]; then
             echo "::error::No release assets found in packages/"
             exit 1
@@ -540,101 +540,33 @@ jobs:
           sha256sum "${files[@]}" > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      - name: Generate release notes
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          HARBOR_PROXY_IMAGE: ${{ env.HARBOR_PROXY_IMAGE }}
+          HARBOR_INGRESS_IMAGE: ${{ env.HARBOR_INGRESS_IMAGE }}
+          HELM_CHART_REPO_URL: ${{ env.HELM_CHART_REPO_URL }}
+          PACKAGES_DIR: packages
+        run: |
+          chmod +x build/ci-release-body.sh
+          ./build/ci-release-body.sh > packages/RELEASE_BODY.md
+          echo "=== Release body preview ==="
+          head -n 80 packages/RELEASE_BODY.md
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           name: Release v${{ steps.version.outputs.VERSION }}
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
-          generate_release_notes: true
+          generate_release_notes: false
           fail_on_unmatched_files: true
+          body_path: packages/RELEASE_BODY.md
           files: |
             packages/**/*.deb
             packages/**/*.rpm
             packages/**/*.tar.gz
             packages/SHA256SUMS.txt
-          body: |
-            ## Installation
-
-            ### Debian/Ubuntu (x86_64 / amd64)
-            ```bash
-            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/pertisk-proxy_${{ steps.version.outputs.VERSION }}-1_amd64.deb
-            sudo dpkg -i pertisk-proxy_${{ steps.version.outputs.VERSION }}-1_amd64.deb
-            ```
-
-            ### Debian/Ubuntu (arm64)
-            ```bash
-            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/pertisk-proxy_${{ steps.version.outputs.VERSION }}-1_arm64.deb
-            sudo dpkg -i pertisk-proxy_${{ steps.version.outputs.VERSION }}-1_arm64.deb
-            ```
-
-            ### RHEL/CentOS/Fedora (x86_64)
-            ```bash
-            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/pertisk-proxy-${{ steps.version.outputs.VERSION }}-1.x86_64.rpm
-            sudo rpm -i pertisk-proxy-${{ steps.version.outputs.VERSION }}-1.x86_64.rpm
-            ```
-
-            ### RHEL/CentOS/Fedora (aarch64)
-            ```bash
-            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/pertisk-proxy-${{ steps.version.outputs.VERSION }}-1.aarch64.rpm
-            sudo rpm -i pertisk-proxy-${{ steps.version.outputs.VERSION }}-1.aarch64.rpm
-            ```
-
-            ### Binary (manual / tarball)
-            Download the tarball for your architecture and run from the extracted directory so `admin/dist` is found:
-            ```bash
-            tar -xzf pertisk-proxy-v${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz
-            PERTISK_DB_PATH=./data/proxy.sqlite ./usr/bin/pertisk-proxy
-            ```
-
-            ## Post Installation
-            ```bash
-            # Verify capabilities (port binding)
-            getcap /usr/bin/pertisk-proxy
-            # Should show: cap_net_bind_service=ep
-
-            sudo systemctl start pertisk-proxy
-            sudo systemctl enable pertisk-proxy
-            sudo systemctl status pertisk-proxy
-            ```
-
-            ### Running as root (optional)
-            Two systemd units are provided:
-            - `pertisk-proxy.service` (default, runs as user `pertisk-proxy` with cap_net_bind_service)
-            - `pertisk-proxy-root.service` (runs as root)
-
-            To use the root unit:
-            ```bash
-            sudo systemctl disable --now pertisk-proxy || true
-            sudo systemctl enable --now pertisk-proxy-root
-            ```
-
-            ## HTTP/3 (QUIC)
-            UDP buffer settings are applied from `/etc/sysctl.d/99-pertisk-proxy.conf`. Reload with `sudo sysctl -p /etc/sysctl.d/99-pertisk-proxy.conf` if needed.
-
-            ## Docker (Harbor)
-
-            ### Proxy (standalone)
-            ```bash
-            docker pull ${{ env.HARBOR_PROXY_IMAGE }}:v${{ steps.version.outputs.VERSION }}
-            ```
-
-            ### Ingress (Kubernetes controller)
-            ```bash
-            docker pull ${{ env.HARBOR_INGRESS_IMAGE }}:v${{ steps.version.outputs.VERSION }}
-            ```
-
-            ### Helm (pertisk-ingress)
-            ```bash
-            helm repo add pertisk ${{ env.HELM_CHART_REPO_URL }}
-            helm repo update
-            helm upgrade --install pertisk-proxy-ingress pertisk/pertisk-ingress \
-              --version ${{ steps.version.outputs.VERSION }} -n pertisk-proxy --create-namespace
-            ```
-
-            ## Verify checksums
-            ```bash
-            sha256sum -c SHA256SUMS.txt
-            ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
