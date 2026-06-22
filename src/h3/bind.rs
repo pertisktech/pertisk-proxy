@@ -103,4 +103,13 @@ mod tests {
         assert_eq!(effective_udp_listen_display("0.0.0.0:443"), "[::]:443");
         assert_eq!(effective_listen_display("[::]:80"), "[::]:80");
     }
+
+    #[test]
+    fn invalid_listen_passthrough() {
+        assert_eq!(tcp_bind_addrs("not-an-addr"), vec!["not-an-addr"]);
+        assert_eq!(h3_bind_addrs("not-an-addr"), vec!["not-an-addr"]);
+        assert_eq!(h3_bind_addrs("127.0.0.1:443"), vec!["127.0.0.1:443"]);
+        assert_eq!(effective_listen_display("not-an-addr"), "not-an-addr");
+        assert_eq!(effective_udp_listen_display("not-an-addr"), "not-an-addr");
+    }
 }

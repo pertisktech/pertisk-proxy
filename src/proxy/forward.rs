@@ -139,7 +139,80 @@ mod tests {
             }],
         )]));
 
-        let plan = resolve_forward(&table, "app.example.com", "/api/health").unwrap();
-        assert_eq!(plan.upstream_url, "http://127.0.0.1:8080/health");
+        let plan = resolve_forward(&table, "app.example.com", "/api/health?x=1").unwrap();
+        assert_eq!(plan.upstream_url, "http://127.0.0.1:8080/health?x=1");
+    }
+
+    #[test]
+    fn resolve_forward_without_middleware_keeps_path() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "app.example.com".into(),
+            vec![Route {
+                path: "/api".into(),
+                path_type: PathMatchType::Prefix,
+                backend: Backend {
+                    address: "http://127.0.0.1:8080".into(),
+                    port: 8080,
+                },
+                middlewares: vec![],
+            }],
+        )]));
+        let plan = resolve_forward(&table, "app.example.com", "/api/status").unwrap();
+        assert_eq!(plan.upstream_url, "http://127.0.0.1:8080/api/status");
+    }
+
+    #[test]
+    fn apply_middlewares_collects_headers() {
+        let mut headers = HashMap::new();
+        headers.insert("X-Test".into(), "1".into());
+        let action = apply_middlewares(&[
+            Middleware::StripPrefix {
+                prefix: "/api".into(),
+            },
+            Middleware::RequestHeaders {
+                headers: headers.clone(),
+            },
+            Middleware::ResponseHeaders { headers },
+        ]);
+        assert_eq!(action.strip_prefix.as_deref(), Some("/api"));
+        assert_eq!(action.request_headers.len(), 1);
+        assert_eq!(action.response_headers.len(), 1);
+    }
+
+    #[test]
+    fn build_upstream_url_adds_scheme() {
+        assert_eq!(
+            build_upstream_url("127.0.0.1:8080", "/health"),
+            "http://127.0.0.1:8080/health"
+        );
+        assert_eq!(
+            build_upstream_url("https://upstream:443", "/v1"),
+            "https://upstream:443/v1"
+        );
+    }
+
+    #[test]
+    fn parse_backend_peer_splits_host_port() {
+        assert_eq!(
+            parse_backend_peer("10.0.0.1:9090", 8080).unwrap(),
+            ("10.0.0.1".into(), 9090)
+        );
+        assert_eq!(
+            parse_backend_peer("upstream.local", 8080).unwrap(),
+            ("upstream.local".into(), 8080)
+        );
+        assert!(parse_backend_peer("bad:port", 80).is_err());
+    }
+
+    #[test]
+    fn strip_prefix_empty_becomes_root() {
+        assert_eq!(strip_path_prefix("/api", "/api"), "/");
+        assert_eq!(strip_path_prefix("/api?x=1", "/api"), "/?x=1");
+    }
+
+    #[test]
+    fn resolve_forward_missing_route_errors() {
+        let table = RouteTable::default();
+        assert!(resolve_forward(&table, "missing.example", "/").is_err());
     }
 }

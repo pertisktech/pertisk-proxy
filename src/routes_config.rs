@@ -167,4 +167,81 @@ http3:
         assert_eq!(spec.http3.enable_0rtt, Some(true));
         assert_eq!(spec.http3.congestion_control.as_deref(), Some("bbr"));
     }
+
+    #[test]
+    fn load_from_str_json() {
+        let json = r#"{"routes":[{"host":"app.example.com","path":"/","upstream":"http://backend:8080"}]}"#;
+        let loaded = load_from_str(json).unwrap();
+        assert!(loaded.table.match_route("app.example.com", "/").is_some());
+    }
+
+    #[test]
+    fn validate_yaml_rejects_bad_upstream() {
+        let yaml = r#"
+routes:
+  - host: app.example.com
+    path: /
+    upstream: ":"
+"#;
+        assert!(validate_yaml(yaml).is_err());
+    }
+
+    #[test]
+    fn validate_yaml_accepts_good_routes() {
+        let yaml = r#"
+routes:
+  - host: app.example.com
+    path: /
+    upstream: http://backend:8080
+"#;
+        validate_yaml(yaml).unwrap();
+    }
+
+    #[test]
+    fn multiple_hosts_and_wildcard_default() {
+        let yaml = r#"
+routes:
+  - hosts: [a.example.com, b.example.com]
+    path: /v1
+    path_type: exact
+    upstream: backend:9000
+  - path: /
+    upstream: http://catchall:80
+"#;
+        let loaded = load_from_str(yaml).unwrap();
+        assert!(loaded.table.match_route("a.example.com", "/v1").is_some());
+        assert!(loaded.table.match_route("b.example.com", "/v1").is_some());
+        assert!(loaded.table.match_route("other.example.com", "/").is_some());
+    }
+
+    #[test]
+    fn implementation_specific_path_type() {
+        let yaml = r#"
+routes:
+  - host: app.example.com
+    path: /api
+    path_type: implementation_specific
+    upstream: http://backend:8080
+"#;
+        let loaded = load_from_str(yaml).unwrap();
+        assert!(loaded.table.match_route("app.example.com", "/api/extra").is_some());
+    }
+
+    #[test]
+    fn load_from_file_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("routes.yaml");
+        std::fs::write(
+            &path,
+            r#"
+routes:
+  - host: file.example.com
+    path: /
+    upstream: http://backend:8080
+"#,
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        assert!(loaded.table.match_route("file.example.com", "/").is_some());
+    }
 }

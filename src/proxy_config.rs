@@ -653,6 +653,7 @@ sites:
   - host: test.example
     backend: api
     routes: []
+    http3_alt_svc_enabled: false
 backends:
   - name: api
     upstreams:
@@ -660,7 +661,7 @@ backends:
 "#;
         let cfg = Config::from_yaml(yaml).unwrap();
         assert!(cfg.proxy_log);
-        assert!(cfg.sites[0].http3_alt_svc_enabled);
+        assert!(!cfg.sites[0].http3_alt_svc_enabled);
     }
 
     #[test]
@@ -686,5 +687,200 @@ backends:
         let s = upstream_ports_summary(&config);
         assert_eq!(s.upstreams.len(), 1);
         assert!(s.upstreams[0].sites.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tls_normalize_tests {
+    use super::*;
+
+    fn acme_source() -> TlsSource {
+        TlsSource::Acme {
+            email: Some("admin@example.com".into()),
+            challenge: "http01".into(),
+            dns_provider: None,
+            dns_provider_type: None,
+            dns_credentials: None,
+        }
+    }
+
+    #[test]
+    fn wildcard_covers_single_label() {
+        assert!(wildcard_covers_host("*.example.com", "app.example.com"));
+        assert!(!wildcard_covers_host("*.example.com", "a.b.example.com"));
+        assert!(!wildcard_covers_host("*.example.com", "example.com"));
+        assert!(wildcard_covers_host("example.com", "example.com"));
+        assert!(!wildcard_covers_host("", "example.com"));
+    }
+
+    #[test]
+    fn normalize_tls_merges_overlapping_acme_hosts() {
+        let mut tls = vec![
+            TlsConfig {
+                hosts: vec!["a.example.com".into()],
+                source: acme_source(),
+                expires_at: Some("2026-01-01".into()),
+            },
+            TlsConfig {
+                hosts: vec!["a.example.com".into()],
+                source: acme_source(),
+                expires_at: None,
+            },
+        ];
+        normalize_tls_config(&mut tls);
+        assert_eq!(tls.len(), 1);
+        assert_eq!(tls[0].hosts.len(), 1);
+        assert!(tls[0].expires_at.is_none());
+    }
+
+    #[test]
+    fn normalize_tls_merges_wildcard_acme_entries() {
+        let mut tls = vec![
+            TlsConfig {
+                hosts: vec!["*.example.com".into()],
+                source: acme_source(),
+                expires_at: None,
+            },
+            TlsConfig {
+                hosts: vec!["*.example.com".into()],
+                source: acme_source(),
+                expires_at: None,
+            },
+        ];
+        normalize_tls_config(&mut tls);
+        assert_eq!(tls.len(), 1);
+    }
+
+    #[test]
+    fn normalize_tls_dedupes_hosts_case_insensitively() {
+        let mut tls = vec![
+            TlsConfig {
+                hosts: vec!["A.example.com".into()],
+                source: acme_source(),
+                expires_at: None,
+            },
+            TlsConfig {
+                hosts: vec!["a.example.com".into()],
+                source: acme_source(),
+                expires_at: None,
+            },
+        ];
+        normalize_tls_config(&mut tls);
+        assert_eq!(tls.len(), 1);
+        assert_eq!(tls[0].hosts.len(), 1);
+    }
+
+    #[test]
+    fn normalize_tls_merges_file_entries_with_different_paths() {
+        let mut tls = vec![
+            TlsConfig {
+                hosts: vec!["a.example.com".into()],
+                source: TlsSource::File {
+                    cert: "/a.pem".into(),
+                    key: "/a.key".into(),
+                },
+                expires_at: None,
+            },
+            TlsConfig {
+                hosts: vec!["b.example.com".into()],
+                source: TlsSource::File {
+                    cert: "/b.pem".into(),
+                    key: "/b.key".into(),
+                },
+                expires_at: None,
+            },
+        ];
+        normalize_tls_config(&mut tls);
+        assert_eq!(tls.len(), 2);
+    }
+
+    #[test]
+    fn normalize_tls_merges_same_file_cert_hosts() {
+        let mut tls = vec![
+            TlsConfig {
+                hosts: vec!["a.example.com".into()],
+                source: TlsSource::File {
+                    cert: "/shared.pem".into(),
+                    key: "/shared.key".into(),
+                },
+                expires_at: None,
+            },
+            TlsConfig {
+                hosts: vec!["b.example.com".into()],
+                source: TlsSource::File {
+                    cert: "/shared.pem".into(),
+                    key: "/shared.key".into(),
+                },
+                expires_at: None,
+            },
+        ];
+        normalize_tls_config(&mut tls);
+        assert_eq!(tls.len(), 1);
+        assert_eq!(tls[0].hosts.len(), 2);
+    }
+
+    #[test]
+    fn normalize_tls_skips_disjoint_acme() {
+        let http = acme_source();
+        let mut dns = acme_source();
+        if let TlsSource::Acme { challenge, .. } = &mut dns {
+            *challenge = "dns01".into();
+        }
+        let mut tls = vec![
+            TlsConfig {
+                hosts: vec!["a.example.com".into()],
+                source: http,
+                expires_at: None,
+            },
+            TlsConfig {
+                hosts: vec!["a.example.com".into()],
+                source: dns,
+                expires_at: None,
+            },
+        ];
+        normalize_tls_config(&mut tls);
+        assert_eq!(tls.len(), 2);
+    }
+
+    #[test]
+    fn normalize_tls_skips_empty_host_names() {
+        let mut tls = vec![
+            TlsConfig {
+                hosts: vec!["ok.example.com".into()],
+                source: acme_source(),
+                expires_at: None,
+            },
+            TlsConfig {
+                hosts: vec!["".into(), "   ".into(), "ok.example.com".into()],
+                source: acme_source(),
+                expires_at: None,
+            },
+        ];
+        normalize_tls_config(&mut tls);
+        assert_eq!(tls.len(), 1);
+        assert_eq!(tls[0].hosts, vec!["ok.example.com"]);
+    }
+
+    #[test]
+    fn acme_sources_equivalent_rejects_mixed_types() {
+        let file = TlsSource::File {
+            cert: "/a.pem".into(),
+            key: "/a.key".into(),
+        };
+        let acme = acme_source();
+        let mut tls = vec![
+            TlsConfig {
+                hosts: vec!["x.example.com".into()],
+                source: file,
+                expires_at: None,
+            },
+            TlsConfig {
+                hosts: vec!["x.example.com".into()],
+                source: acme,
+                expires_at: None,
+            },
+        ];
+        normalize_tls_config(&mut tls);
+        assert_eq!(tls.len(), 2);
     }
 }

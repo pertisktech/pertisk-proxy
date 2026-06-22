@@ -409,4 +409,436 @@ mod tests {
         assert!(table.has_host("other.example.com"));
         assert!(!table.has_host(""));
     }
+
+    #[test]
+    fn exact_path_matching() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "app.example.com".into(),
+            vec![Route {
+                path: "/api".into(),
+                path_type: PathMatchType::Exact,
+                backend: Backend {
+                    address: "api:8080".into(),
+                    port: 8080,
+                },
+                middlewares: vec![],
+            }],
+        )]));
+        assert!(table.match_route("app.example.com", "/api").is_some());
+        assert!(table.match_route("app.example.com", "/api/v1").is_none());
+    }
+
+    #[test]
+    fn catch_all_wildcard_host() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "*".into(),
+            vec![Route {
+                path: "/".into(),
+                path_type: PathMatchType::Prefix,
+                backend: Backend {
+                    address: "catch:80".into(),
+                    port: 80,
+                },
+                middlewares: vec![],
+            }],
+        )]));
+        assert!(table.match_route("unknown.host", "/any").is_some());
+    }
+
+    #[test]
+    fn longest_prefix_wins() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "app.example.com".into(),
+            vec![
+                Route {
+                    path: "/api".into(),
+                    path_type: PathMatchType::Prefix,
+                    backend: Backend {
+                        address: "short:8080".into(),
+                        port: 8080,
+                    },
+                    middlewares: vec![],
+                },
+                Route {
+                    path: "/api/v2".into(),
+                    path_type: PathMatchType::Prefix,
+                    backend: Backend {
+                        address: "long:8080".into(),
+                        port: 8080,
+                    },
+                    middlewares: vec![],
+                },
+            ],
+        )]));
+        assert_eq!(
+            table.match_route("app.example.com", "/api/v2/x").unwrap().address,
+            "long:8080"
+        );
+    }
+
+    #[test]
+    fn parse_upstream_variants() {
+        assert!(parse_upstream("").is_none());
+        assert!(parse_upstream("  ").is_none());
+        let b = parse_upstream("backend:9090;").unwrap();
+        assert_eq!(b.port, 9090);
+        let b = parse_upstream("https://example.com").unwrap();
+        assert_eq!(b.port, 443);
+        let b = parse_upstream("example.com").unwrap();
+        assert_eq!(b.address, "example.com:80");
+        let b = parse_upstream("10.0.0.1:8080").unwrap();
+        assert_eq!(b.port, 8080);
+    }
+
+    #[test]
+    fn route_table_counts_and_iter() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "a.example.com".into(),
+            vec![Route {
+                path: "/".into(),
+                path_type: PathMatchType::Prefix,
+                backend: Backend {
+                    address: "a:80".into(),
+                    port: 80,
+                },
+                middlewares: vec![],
+            }],
+        )]));
+        assert_eq!(table.route_count(), 1);
+        assert_eq!(table.all_routes().count(), 1);
+    }
+
+    #[test]
+    fn router_replace_and_snapshot() {
+        let router = Router::new();
+        assert_eq!(router.route_count(), 0);
+        let table = RouteTable::from_routes(HashMap::from([(
+            "x.example.com".into(),
+            vec![Route {
+                path: "/".into(),
+                path_type: PathMatchType::Prefix,
+                backend: Backend {
+                    address: "x:80".into(),
+                    port: 80,
+                },
+                middlewares: vec![],
+            }],
+        )]));
+        router.replace(table);
+        assert_eq!(router.route_count(), 1);
+        assert!(router.snapshot().has_host("x.example.com"));
+        router.replace_http3(crate::http3_options::Http3Options {
+            max_streams_bidi: Some(100),
+            ..Default::default()
+        });
+        assert_eq!(router.http3_options().max_streams_bidi, Some(100));
+    }
+
+    #[test]
+    fn ingress_matches_class_filter() {
+        use k8s_openapi::api::networking::v1::{Ingress, IngressSpec};
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+        let ingress = Ingress {
+            metadata: ObjectMeta::default(),
+            spec: Some(IngressSpec {
+                ingress_class_name: Some("nginx".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(ingress_matches_class(&ingress, None));
+        assert!(ingress_matches_class(&ingress, Some("nginx")));
+        assert!(!ingress_matches_class(&ingress, Some("traefik")));
+    }
+
+    #[test]
+    fn build_route_table_from_ingress() {
+        use k8s_openapi::api::networking::v1::{
+            HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend, IngressRule,
+            IngressServiceBackend, IngressSpec, ServiceBackendPort,
+        };
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+        let ingress = Ingress {
+            metadata: ObjectMeta {
+                name: Some("api".into()),
+                namespace: Some("prod".into()),
+                ..Default::default()
+            },
+            spec: Some(IngressSpec {
+                rules: Some(vec![IngressRule {
+                    host: Some("app.example.com".into()),
+                    http: Some(HTTPIngressRuleValue {
+                        paths: vec![HTTPIngressPath {
+                            path: Some("/api".into()),
+                            path_type: "Prefix".into(),
+                            backend: IngressBackend {
+                                service: Some(IngressServiceBackend {
+                                    name: "api".into(),
+                                    port: Some(ServiceBackendPort {
+                                        number: Some(8080),
+                                        ..Default::default()
+                                    }),
+                                }),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }],
+                    }),
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let table = build_route_table_from_ingresses([ingress]);
+        let backend = table.match_route("app.example.com", "/api/v1").unwrap();
+        assert_eq!(backend.address, "api.prod.svc.cluster.local:8080");
+        assert_eq!(backend.port, 8080);
+    }
+
+    #[test]
+    fn prefix_with_trailing_slash() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "app.example.com".into(),
+            vec![Route {
+                path: "/api/".into(),
+                path_type: PathMatchType::Prefix,
+                backend: Backend {
+                    address: "api:8080".into(),
+                    port: 8080,
+                },
+                middlewares: vec![],
+            }],
+        )]));
+        assert!(table.match_route("app.example.com", "/api/v1").is_some());
+    }
+
+    #[test]
+    fn router_default_and_replace_all() {
+        let router = Router::default();
+        assert_eq!(router.route_count(), 0);
+        let table = RouteTable::from_routes(HashMap::from([(
+            "all.example.com".into(),
+            vec![Route {
+                path: "/".into(),
+                path_type: PathMatchType::Prefix,
+                backend: Backend {
+                    address: "all:80".into(),
+                    port: 80,
+                },
+                middlewares: vec![],
+            }],
+        )]));
+        router.replace_all(
+            table,
+            crate::http3_options::Http3Options {
+                enable_0rtt: Some(true),
+                ..Default::default()
+            },
+        );
+        assert_eq!(router.route_count(), 1);
+        assert_eq!(router.http3_options().enable_0rtt, Some(true));
+    }
+
+    #[test]
+    fn ingress_default_backend_catchall() {
+        use k8s_openapi::api::networking::v1::{
+            Ingress, IngressBackend, IngressServiceBackend, IngressSpec, ServiceBackendPort,
+        };
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+        let ingress = Ingress {
+            metadata: ObjectMeta {
+                namespace: Some("ns".into()),
+                ..Default::default()
+            },
+            spec: Some(IngressSpec {
+                default_backend: Some(IngressBackend {
+                    service: Some(IngressServiceBackend {
+                        name: "default".into(),
+                        port: Some(ServiceBackendPort {
+                            number: Some(80),
+                            ..Default::default()
+                        }),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let table = build_route_table_from_ingresses([ingress]);
+        assert!(table.match_route("any.host", "/").is_some());
+    }
+
+    #[test]
+    fn ingress_without_http_paths_skipped() {
+        use k8s_openapi::api::networking::v1::{Ingress, IngressRule, IngressSpec};
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+        let ingress = Ingress {
+            metadata: ObjectMeta::default(),
+            spec: Some(IngressSpec {
+                rules: Some(vec![IngressRule {
+                    host: Some("bare.example.com".into()),
+                    http: None,
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let table = build_route_table_from_ingresses([ingress]);
+        assert_eq!(table.route_count(), 0);
+    }
+
+    #[test]
+    fn implementation_specific_path_type() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "app.example.com".into(),
+            vec![Route {
+                path: "/custom".into(),
+                path_type: PathMatchType::ImplementationSpecific,
+                backend: Backend {
+                    address: "custom:80".into(),
+                    port: 80,
+                },
+                middlewares: vec![],
+            }],
+        )]));
+        assert!(table.match_route("app.example.com", "/custom/path").is_some());
+    }
+
+    #[test]
+    fn ingress_exact_path_type() {
+        use k8s_openapi::api::networking::v1::{
+            HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend, IngressRule,
+            IngressServiceBackend, IngressSpec, ServiceBackendPort,
+        };
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+        let ingress = Ingress {
+            metadata: ObjectMeta {
+                namespace: Some("dev".into()),
+                ..Default::default()
+            },
+            spec: Some(IngressSpec {
+                rules: Some(vec![IngressRule {
+                    host: Some("exact.example.com".into()),
+                    http: Some(HTTPIngressRuleValue {
+                        paths: vec![HTTPIngressPath {
+                            path: Some("/exact".into()),
+                            path_type: "Exact".into(),
+                            backend: IngressBackend {
+                                service: Some(IngressServiceBackend {
+                                    name: "svc".into(),
+                                    port: Some(ServiceBackendPort {
+                                        number: Some(9000),
+                                        ..Default::default()
+                                    }),
+                                }),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }],
+                    }),
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let table = build_route_table_from_ingresses([ingress]);
+        assert!(table.match_route("exact.example.com", "/exact").is_some());
+        assert!(table.match_route("exact.example.com", "/exact/more").is_none());
+    }
+
+    #[test]
+    fn ingress_without_spec_is_noop() {
+        use k8s_openapi::api::networking::v1::Ingress;
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+        let ingress = Ingress {
+            metadata: ObjectMeta::default(),
+            spec: None,
+            ..Default::default()
+        };
+        let table = build_route_table_from_ingresses([ingress]);
+        assert_eq!(table.route_count(), 0);
+    }
+
+    #[test]
+    fn ingress_skips_paths_without_service_backend() {
+        use k8s_openapi::api::networking::v1::{
+            HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend, IngressRule,
+            IngressSpec,
+        };
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+        let ingress = Ingress {
+            metadata: ObjectMeta::default(),
+            spec: Some(IngressSpec {
+                rules: Some(vec![IngressRule {
+                    host: Some("skip.example.com".into()),
+                    http: Some(HTTPIngressRuleValue {
+                        paths: vec![HTTPIngressPath {
+                            path: Some("/".into()),
+                            path_type: "Prefix".into(),
+                            backend: IngressBackend {
+                                service: None,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }],
+                    }),
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let table = build_route_table_from_ingresses([ingress]);
+        assert_eq!(table.route_count(), 0);
+    }
+
+    #[test]
+    fn ingress_implementation_specific_path_type() {
+        use k8s_openapi::api::networking::v1::{
+            HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend, IngressRule,
+            IngressServiceBackend, IngressSpec, ServiceBackendPort,
+        };
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+        let ingress = Ingress {
+            metadata: ObjectMeta {
+                namespace: Some("dev".into()),
+                ..Default::default()
+            },
+            spec: Some(IngressSpec {
+                rules: Some(vec![IngressRule {
+                    host: Some("impl.example.com".into()),
+                    http: Some(HTTPIngressRuleValue {
+                        paths: vec![HTTPIngressPath {
+                            path: None,
+                            path_type: "ImplementationSpecific".into(),
+                            backend: IngressBackend {
+                                service: Some(IngressServiceBackend {
+                                    name: "svc".into(),
+                                    port: Some(ServiceBackendPort {
+                                        number: Some(80),
+                                        ..Default::default()
+                                    }),
+                                }),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }],
+                    }),
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let table = build_route_table_from_ingresses([ingress]);
+        assert!(table.match_route("impl.example.com", "/anything").is_some());
+    }
 }

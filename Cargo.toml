@@ -5,6 +5,9 @@ edition = "2021"
 description = "Reverse proxy and Kubernetes Ingress controller with HTTP/1, HTTP/2 (Pingora) and HTTP/3 (Quiche)"
 license = "Apache-2.0"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin)'] }
+
 [features]
 default = ["admin", "acme", "dns-challenge", "h3-quinn", "prometheus"]
 prometheus = []
@@ -92,6 +95,10 @@ sha1 = { version = "0.10", optional = true }
 hex = { version = "0.4", optional = true }
 local-ip-address = { version = "0.6", optional = true }
 sysinfo = { version = "0.31", optional = true }
+
+[dev-dependencies]
+rcgen = "0.13"
+tempfile = "3"
 
 [[bin]]
 name = "pertisk-proxy"

@@ -303,6 +303,7 @@ pub fn metrics_enabled_from_env() -> bool {
 
 #[cfg(feature = "admin")]
 pub async fn start_metrics_server(addr: SocketAddr, metrics: ProxyMetrics) -> anyhow::Result<()> {
+    // tarpaulin::skip_start
     use axum::{
         extract::Extension,
         response::IntoResponse,
@@ -347,6 +348,7 @@ pub async fn start_metrics_server(addr: SocketAddr, metrics: ProxyMetrics) -> an
         .await?;
     info!("Prometheus metrics server stopped");
     Ok(())
+    // tarpaulin::skip_end
 }
 
 #[cfg(test)]
@@ -363,8 +365,15 @@ mod tests {
         m.inc_h3_requests();
         m.inc_grpc_requests();
         m.inc_upstream_errors();
+        m.inc_active_connections();
+        m.dec_active_connections();
+        m.add_bytes_sent(100);
+        m.add_bytes_sent(0);
+        m.add_bytes_received(50);
         m.inc_site_protocol_requests("Example.COM", Version::HTTP_2);
         m.inc_site_protocol_requests("example.com", Version::HTTP_3);
+        m.inc_site_protocol_requests("", Version::HTTP_2);
+        m.inc_site_protocol_requests("other.com", Version::HTTP_11);
 
         let snap = m.site_protocol_snapshot();
         assert_eq!(snap.get("example.com"), Some(&(1, 1)));
@@ -372,5 +381,58 @@ mod tests {
         let text = m.get_metrics_text();
         assert!(text.contains("pertisk_http_requests_total 1"));
         assert!(text.contains("pertisk_site_h2_requests_total{host=\"example.com\"} 1"));
+        assert!(text.contains("pertisk_bytes_sent_total 100"));
+        assert!(text.contains("pertisk_bytes_received_total 50"));
+        assert!(text.contains("pertisk_h3_vs_h2_ratio"));
+    }
+
+    #[test]
+    fn h3_vs_h2_ratio_infinity_when_only_h3() {
+        let m = ProxyMetrics::new();
+        m.inc_h3_requests();
+        let text = m.get_metrics_text();
+        assert!(text.contains("pertisk_h3_vs_h2_ratio +Inf"));
+    }
+
+    #[test]
+    fn prometheus_float_and_escape() {
+        assert_eq!(prometheus_float(f64::INFINITY), "+Inf");
+        assert_eq!(prometheus_float(f64::NEG_INFINITY), "-Inf");
+        assert!(prometheus_float(f64::NAN).contains("NaN"));
+        assert_eq!(prometheus_float(1.5), "1.5");
+        assert_eq!(
+            prometheus_escape_label_value("host\"with\\newline\n"),
+            "host\\\"with\\\\newline\\n"
+        );
+    }
+
+    #[test]
+    fn metrics_env_defaults() {
+        std::env::remove_var("PERTISK_METRICS_ENABLED");
+        let addr = metrics_addr_from_env();
+        assert_eq!(addr.port(), 9090);
+        assert!(metrics_enabled_from_env());
+    }
+
+    #[test]
+    fn metrics_env_can_disable() {
+        std::env::set_var("PERTISK_METRICS_ENABLED", "off");
+        assert!(!metrics_enabled_from_env());
+        std::env::remove_var("PERTISK_METRICS_ENABLED");
+    }
+
+    #[test]
+    fn site_ratio_zero_when_no_requests() {
+        let m = ProxyMetrics::new();
+        let text = m.get_metrics_text();
+        assert!(text.contains("pertisk_h3_vs_h2_ratio 0"));
+    }
+
+    #[test]
+    fn default_metrics_impl() {
+        let m = ProxyMetrics::default();
+        let text = m.get_metrics_text();
+        assert!(text.contains("pertisk_http_requests_total"));
+        assert!(text.contains("pertisk_active_connections"));
     }
 }

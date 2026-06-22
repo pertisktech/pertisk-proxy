@@ -269,6 +269,15 @@ fn normalize_host(host: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rcgen::{CertificateParams, KeyPair};
+    use crate::tls::config::{TlsConfig, TlsSource};
+
+    fn test_pem() -> (Vec<u8>, Vec<u8>) {
+        let key_pair = KeyPair::generate().unwrap();
+        let params = CertificateParams::new(vec!["example.com".to_string()]).unwrap();
+        let cert = params.self_signed(&key_pair).unwrap();
+        (cert.pem().into_bytes(), key_pair.serialize_pem().into_bytes())
+    }
 
     #[test]
     fn lookup_sni_does_not_use_unrelated_default() {
@@ -295,7 +304,143 @@ mod tests {
             })
         );
         assert!(store.lookup_sni("unknown.example.com").is_none());
-        // get() still falls back to default for clients without a matching SNI entry.
         assert!(store.get("unknown.example.com").is_some());
+    }
+
+    #[test]
+    fn store_basic_operations() {
+        let store = CertStore::new();
+        assert!(store.is_empty());
+        assert_eq!(store.host_count(), 0);
+
+        store.insert_paths_for_hosts(
+            &["app.example.com".into()],
+            CertPaths {
+                cert: "/c.pem".into(),
+                key: "/k.key".into(),
+            },
+        );
+        assert!(!store.is_empty());
+        assert_eq!(store.host_count(), 1);
+        assert!(store.has_cert_for_host("app.example.com"));
+        assert_eq!(store.default_paths().unwrap().cert, PathBuf::from("/c.pem"));
+
+        store.remove_for_hosts(&["app.example.com".into()]);
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn insert_pem_in_memory() {
+        let (cert, key) = test_pem();
+        let store = CertStore::new();
+        store
+            .insert_pem_in_memory_for_hosts(
+                &["mem.example.com".into()],
+                &cert,
+                &key,
+            )
+            .unwrap();
+        let stored = store.lookup_sni("mem.example.com").unwrap();
+        let (c, k) = stored.read_pem().unwrap();
+        assert_eq!(c, cert);
+        assert_eq!(k, key);
+        assert!(store.default_cert().is_some());
+    }
+
+    #[test]
+    fn insert_pem_to_disk() {
+        let (cert, key) = test_pem();
+        let store = CertStore::new();
+        let dir = tempfile::tempdir().unwrap();
+        store
+            .insert_pem_for_hosts(
+                &["disk.example.com".into()],
+                &cert,
+                &key,
+                dir.path(),
+                "site-1",
+            )
+            .unwrap();
+        assert!(store.lookup_sni("disk.example.com").is_some());
+    }
+
+    #[test]
+    fn reload_from_configs_skips_empty_hosts() {
+        let (cert, key) = test_pem();
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, &cert).unwrap();
+        std::fs::write(&key_path, &key).unwrap();
+
+        let store = CertStore::new();
+        store
+            .reload_from_configs(&[
+                TlsConfig {
+                    hosts: vec![],
+                    source: TlsSource::File {
+                        cert: cert_path.clone(),
+                        key: key_path.clone(),
+                    },
+                    expires_at: None,
+                },
+                TlsConfig {
+                    hosts: vec!["tls.example.com".into()],
+                    source: TlsSource::File {
+                        cert: cert_path,
+                        key: key_path,
+                    },
+                    expires_at: None,
+                },
+                TlsConfig {
+                    hosts: vec!["acme.example.com".into()],
+                    source: TlsSource::Acme {
+                        email: None,
+                        challenge: "http01".into(),
+                        dns_provider: None,
+                        dns_provider_type: None,
+                        dns_credentials: None,
+                    },
+                    expires_at: None,
+                },
+                TlsConfig {
+                    hosts: vec!["k8s.example.com".into()],
+                    source: TlsSource::Kubernetes,
+                    expires_at: None,
+                },
+            ])
+            .unwrap();
+        assert!(store.has_cert_for_host("tls.example.com"));
+        assert!(!store.has_cert_for_host("acme.example.com"));
+    }
+
+    #[test]
+    fn set_global_fallback_and_read_file_pem() {
+        let (cert, key) = test_pem();
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, &cert).unwrap();
+        std::fs::write(&key_path, &key).unwrap();
+
+        let store = CertStore::new();
+        store
+            .set_global_fallback(cert_path.clone(), key_path.clone())
+            .unwrap();
+        let stored = store.default_cert().unwrap();
+        let (c, k) = stored.read_pem().unwrap();
+        assert_eq!(c, cert);
+        assert_eq!(k, key);
+    }
+
+    #[test]
+    fn default_paths_none_for_in_memory_pem() {
+        let (cert, key) = test_pem();
+        let store = CertStore::new();
+        store
+            .insert_pem_in_memory_for_hosts(&["pem.example.com".into()], &cert, &key)
+            .unwrap();
+        assert!(store.default_paths().is_none());
+        assert!(store.default_cert().is_some());
     }
 }

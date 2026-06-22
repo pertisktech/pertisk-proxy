@@ -140,6 +140,24 @@ fn host_matches_cert_name(host: &str, cert_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rcgen::{CertificateParams, KeyPair, SanType};
+    use std::path::Path;
+
+    fn test_cert_pair(hosts: &[&str]) -> (Vec<u8>, Vec<u8>) {
+        let key_pair = KeyPair::generate().unwrap();
+        let names: Vec<String> = hosts.iter().map(|h| (*h).to_string()).collect();
+        let mut params = CertificateParams::new(names).unwrap();
+        for host in hosts {
+            if host.starts_with("*.") {
+                let base = host.strip_prefix("*.").unwrap();
+                params
+                    .subject_alt_names
+                    .push(SanType::DnsName(format!("*.{base}").try_into().unwrap()));
+            }
+        }
+        let cert = params.self_signed(&key_pair).unwrap();
+        (cert.pem().into_bytes(), key_pair.serialize_pem().into_bytes())
+    }
 
     #[test]
     fn wildcard_matching() {
@@ -151,5 +169,59 @@ mod tests {
             "admin.amd.thaidevops.co",
             "*.amd.pertisk.com"
         ));
+        assert!(host_matches_cert_name("example.com", "example.com"));
+    }
+
+    #[test]
+    fn validate_cert_pair_pem_ok() {
+        let (cert, key) = test_cert_pair(&["example.com"]);
+        validate_cert_pair_pem(&cert, &key).unwrap();
+    }
+
+    #[test]
+    fn validate_cert_pair_pem_rejects_empty_cert() {
+        let (_, key) = test_cert_pair(&["example.com"]);
+        assert!(validate_cert_pair_pem(b"not a cert", &key).is_err());
+        assert!(validate_cert_pair_pem(b"", &key).is_err());
+    }
+
+    #[test]
+    fn validate_cert_pair_files() {
+        let (cert, key) = test_cert_pair(&["example.com"]);
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, &cert).unwrap();
+        std::fs::write(&key_path, &key).unwrap();
+        validate_cert_pair(&cert_path, &key_path).unwrap();
+        assert!(validate_cert_pair(Path::new("/missing.pem"), &key_path).is_err());
+        assert!(validate_cert_pair(&cert_path, Path::new("/missing.key")).is_err());
+    }
+
+    #[test]
+    fn warn_host_cert_mismatch_pem_logs_mismatch() {
+        let (cert, _) = test_cert_pair(&["example.com"]);
+        warn_host_cert_mismatch_pem(&cert, &["other.com".into()]).unwrap();
+        warn_host_cert_mismatch_pem(&cert, &["example.com".into()]).unwrap();
+    }
+
+    #[test]
+    fn warn_host_cert_mismatch_file() {
+        let (cert, key) = test_cert_pair(&["example.com"]);
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, &cert).unwrap();
+        std::fs::write(&key_path, &key).unwrap();
+        warn_host_cert_mismatch(&cert_path, &["example.com".into()]).unwrap();
+        warn_host_cert_mismatch(&cert_path, &["wrong.example.com".into()]).unwrap();
+    }
+
+    #[test]
+    fn leaf_cert_names_extracts_san() {
+        let (cert, key) = test_cert_pair(&["*.example.com", "example.com"]);
+        let _ = key;
+        let names = leaf_cert_names(&cert).unwrap();
+        assert!(names.iter().any(|n| n.contains("example.com")));
     }
 }
