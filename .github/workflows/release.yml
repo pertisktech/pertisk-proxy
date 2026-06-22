@@ -253,13 +253,16 @@ jobs:
           deb_arch: ${{ matrix.deb_arch }}
           rpm_arch: ${{ matrix.rpm_arch }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          FORCE_DOCKER_FPM: "1"
         run: chmod +x build/ci-package-deb-rpm.sh && ./build/ci-package-deb-rpm.sh
 
-      - name: List built packages
+      - name: Verify packages before upload
         run: |
-          echo "=== Built packages (linux/${{ matrix.goarch }}) ==="
-          ls -la *.deb *.rpm 2>/dev/null || true
-          ls -la
+          set -euo pipefail
+          echo "=== release/ contents (linux/${{ matrix.goarch }}) ==="
+          ls -la release/
+          test "$(find release -maxdepth 1 -name '*.deb' | wc -l)" -ge 1
+          test "$(find release -maxdepth 1 -name '*.rpm' | wc -l)" -ge 1
 
       - name: Create tarball
         run: |
@@ -272,12 +275,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-linux-${{ matrix.goarch }}
+          if-no-files-found: error
           path: |
             ${{ env.BINARY_NAME }}-linux-${{ matrix.goarch }}
             pertisk-proxy-ingress-linux-${{ matrix.goarch }}
             admin/dist/
-            *.deb
-            *.rpm
+            release/*.deb
+            release/*.rpm
             *.tar.gz
           retention-days: 1
 
@@ -506,20 +510,34 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: release-linux-*
           path: packages
           merge-multiple: true
 
       - name: List packages
         run: |
+          set -euo pipefail
           echo "=== Listing packages directory ==="
-          ls -laR packages/ || echo "packages directory not found"
-          echo "=== DEB/RPM/tarball files ==="
-          find packages -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.tar.gz' \) -print
+          find packages -type f | sort
+          deb_count=$(find packages -name '*.deb' | wc -l | tr -d ' ')
+          rpm_count=$(find packages -name '*.rpm' | wc -l | tr -d ' ')
+          echo "deb=${deb_count} rpm=${rpm_count}"
+          if [ "$rpm_count" -lt 2 ]; then
+            echo "::error::Expected at least 2 RPM files (amd64 + arm64), found ${rpm_count}"
+            exit 1
+          fi
 
       - name: Generate checksums
         run: |
+          set -euo pipefail
           cd packages
-          sha256sum *.deb *.rpm *.tar.gz > SHA256SUMS.txt
+          shopt -s nullglob
+          files=( *.deb *.rpm *.tar.gz )
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No release assets found in packages/"
+            exit 1
+          fi
+          sha256sum "${files[@]}" > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create Release
@@ -529,36 +547,37 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
-            packages/*.deb
-            packages/*.rpm
-            packages/*.tar.gz
+            packages/**/*.deb
+            packages/**/*.rpm
+            packages/**/*.tar.gz
             packages/SHA256SUMS.txt
           body: |
             ## Installation
 
             ### Debian/Ubuntu (x86_64 / amd64)
             ```bash
-            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/pertisk-proxy_v${{ steps.version.outputs.VERSION }}_amd64.deb
-            sudo dpkg -i pertisk-proxy_v${{ steps.version.outputs.VERSION }}_amd64.deb
+            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/pertisk-proxy_${{ steps.version.outputs.VERSION }}-1_amd64.deb
+            sudo dpkg -i pertisk-proxy_${{ steps.version.outputs.VERSION }}-1_amd64.deb
             ```
 
             ### Debian/Ubuntu (arm64)
             ```bash
-            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/pertisk-proxy_v${{ steps.version.outputs.VERSION }}_arm64.deb
-            sudo dpkg -i pertisk-proxy_v${{ steps.version.outputs.VERSION }}_arm64.deb
+            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/pertisk-proxy_${{ steps.version.outputs.VERSION }}-1_arm64.deb
+            sudo dpkg -i pertisk-proxy_${{ steps.version.outputs.VERSION }}-1_arm64.deb
             ```
 
             ### RHEL/CentOS/Fedora (x86_64)
             ```bash
-            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/pertisk-proxy-v${{ steps.version.outputs.VERSION }}-1.x86_64.rpm
-            sudo rpm -i pertisk-proxy-v${{ steps.version.outputs.VERSION }}-1.x86_64.rpm
+            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/pertisk-proxy-${{ steps.version.outputs.VERSION }}-1.x86_64.rpm
+            sudo rpm -i pertisk-proxy-${{ steps.version.outputs.VERSION }}-1.x86_64.rpm
             ```
 
             ### RHEL/CentOS/Fedora (aarch64)
             ```bash
-            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/pertisk-proxy-v${{ steps.version.outputs.VERSION }}-1.aarch64.rpm
-            sudo rpm -i pertisk-proxy-v${{ steps.version.outputs.VERSION }}-1.aarch64.rpm
+            wget https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.VERSION }}/pertisk-proxy-${{ steps.version.outputs.VERSION }}-1.aarch64.rpm
+            sudo rpm -i pertisk-proxy-${{ steps.version.outputs.VERSION }}-1.aarch64.rpm
             ```
 
             ### Binary (manual / tarball)
