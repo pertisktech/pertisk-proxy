@@ -137,51 +137,6 @@ jobs:
           chmod +x ./pertisk-proxy-ingress-linux-${{ matrix.goarch }}
           echo "Built ingress binary for linux/${{ matrix.goarch }}"
 
-      - name: Detect OS and install packaging tools
-        run: |
-          set -euo pipefail
-
-          if command -v fpm &>/dev/null && command -v ruby &>/dev/null && command -v gem &>/dev/null; then
-            echo "Packaging tools already installed: fpm=$(command -v fpm) ruby=$(command -v ruby)"
-            exit 0
-          fi
-
-          if [ "$(id -u)" -eq 0 ]; then
-            SUDO=""
-          elif sudo -n true 2>/dev/null; then
-            SUDO="sudo -n"
-          else
-            SUDO=""
-            echo "::error::Packaging tools missing (fpm/ruby/gem) and runner has no passwordless sudo."
-            exit 1
-          fi
-
-          if command -v dnf &> /dev/null; then
-            echo "OS_TYPE=rhel" >> $GITHUB_ENV
-            $SUDO dnf install -y rpm-build ruby ruby-devel rubygems gcc make
-          elif command -v yum &> /dev/null; then
-            echo "OS_TYPE=rhel" >> $GITHUB_ENV
-            $SUDO yum install -y rpm-build ruby ruby-devel rubygems gcc make
-          elif [ -f /etc/debian_version ] || command -v apt-get &> /dev/null; then
-            echo "OS_TYPE=debian" >> $GITHUB_ENV
-            $SUDO apt-get update
-            $SUDO apt-get install -y rpm ruby ruby-dev rubygems build-essential
-          else
-            echo "::error::Could not detect OS or package manager"
-            exit 1
-          fi
-
-          if ! command -v fpm &>/dev/null; then
-            $SUDO gem install --no-document fpm
-          fi
-
-          for tool in fpm ruby gem; do
-            if ! command -v "$tool" &>/dev/null; then
-              echo "::error::Required packaging tool missing: $tool"
-              exit 1
-            fi
-          done
-
       - name: Create package directories
         run: |
           mkdir -p pkg/usr/bin
@@ -282,53 +237,13 @@ jobs:
 
           chmod +x preinstall.sh postinstall.sh preremove.sh
 
-      - name: Build DEB package
-        run: |
-          fpm -s dir -t deb \
-            -n ${{ env.BINARY_NAME }} \
-            -v v${{ steps.version.outputs.VERSION }} \
-            -a ${{ matrix.deb_arch }} \
-            --description "Reverse proxy and Kubernetes Ingress controller with HTTP/3" \
-            --url "https://github.com/${{ github.repository }}" \
-            --maintainer "Pertisk Team" \
-            --license "Apache-2.0" \
-            --vendor "Pertisk" \
-            --category "net" \
-            --depends libcap2-bin \
-            --before-install preinstall.sh \
-            --after-install postinstall.sh \
-            --before-remove preremove.sh \
-            --config-files /etc/pertisk-proxy/pertisk-proxy.conf \
-            --directories /var/lib/pertisk-proxy \
-            --directories /var/log/pertisk-proxy \
-            --deb-systemd-enable \
-            --deb-no-default-config-files \
-            -C pkg \
-            .
-
-      - name: Build RPM package
-        run: |
-          fpm -s dir -t rpm \
-            -n ${{ env.BINARY_NAME }} \
-            -v v${{ steps.version.outputs.VERSION }} \
-            -a ${{ matrix.rpm_arch }} \
-            --description "Reverse proxy and Kubernetes Ingress controller with HTTP/3" \
-            --url "https://github.com/${{ github.repository }}" \
-            --maintainer "Pertisk Team" \
-            --license "Apache-2.0" \
-            --vendor "Pertisk" \
-            --category "System Environment/Daemons" \
-            --depends libcap \
-            --depends shadow-utils \
-            --before-install preinstall.sh \
-            --after-install postinstall.sh \
-            --before-remove preremove.sh \
-            --config-files /etc/pertisk-proxy/pertisk-proxy.conf \
-            --directories /var/lib/pertisk-proxy \
-            --directories /var/log/pertisk-proxy \
-            --rpm-os linux \
-            -C pkg \
-            .
+      - name: Build DEB and RPM packages
+        env:
+          BINARY_NAME: ${{ env.BINARY_NAME }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          deb_arch: ${{ matrix.deb_arch }}
+          rpm_arch: ${{ matrix.rpm_arch }}
+        run: chmod +x build/ci-package-deb-rpm.sh && ./build/ci-package-deb-rpm.sh
 
       - name: Create tarball
         run: |
