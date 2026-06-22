@@ -1,0 +1,122 @@
+# PertiskIngress defines host, paths, backend reference, and optional TLS.
+# It references PertiskBackend via spec.backendRef.name (same namespace).
+# TLS uses Kubernetes Secret (type kubernetes.io/tls) via spec.tls.secretName.
+# API group: proxy.pertisk.tech
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: pertiskingresses.proxy.pertisk.tech
+  labels:
+    app.kubernetes.io/name: pertisk-ingress
+    app.kubernetes.io/component: crd
+spec:
+  group: proxy.pertisk.tech
+  names:
+    kind: PertiskIngress
+    listKind: PertiskIngressList
+    plural: pertiskingresses
+    singular: pertiskingress
+    shortNames:
+      - pingress
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: PertiskIngress defines routes (host + paths) and references a PertiskBackend and optional TLS Secret.
+          properties:
+            spec:
+              type: object
+              description: Specification of the ingress.
+              properties:
+                host:
+                  type: string
+                  description: Hostname to match (e.g. "example.com" or "*" for all).
+                  default: "*"
+                routes:
+                  type: array
+                  description: Path-based routes.
+                  items:
+                    type: object
+                    required: [path]
+                    properties:
+                      path:
+                        type: string
+                        description: Path pattern (e.g. "/api", "/").
+                      pathType:
+                        type: string
+                        enum: [Exact, Prefix, ImplementationSpecific]
+                        default: Prefix
+                        description: Path match type.
+                      rewrite:
+                        type: string
+                        description: Optional rewrite path when forwarding to upstream.
+                backendRef:
+                  type: object
+                  description: Reference to a PertiskBackend in the same namespace.
+                  required: [name]
+                  properties:
+                    name:
+                      type: string
+                      description: Name of the PertiskBackend.
+                ingressClassName:
+                  type: string
+                  description: Optional; filter by controller (e.g. pertisk-rproxy).
+                tls:
+                  type: object
+                  description: Optional TLS; references a Secret (kubernetes.io/tls) in the same namespace.
+                  properties:
+                    secretName:
+                      type: string
+                      description: Name of the Secret containing tls.crt and tls.key.
+                    hosts:
+                      type: array
+                      description: Hostnames for this certificate.
+                      items:
+                        type: string
+              required: [backendRef]
+            status:
+              type: object
+              description: Observed status (optional).
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type: { type: string }
+                      status: { type: string }
+                      lastTransitionTime: { type: string }
+                      reason: { type: string }
+                      message: { type: string }
+      additionalPrinterColumns:
+        - name: Host
+          type: string
+          jsonPath: .spec.host
+        - name: Backend
+          type: string
+          jsonPath: .spec.backendRef.name
+        - name: Class
+          type: string
+          jsonPath: .spec.ingressClassName
+          description: Ingress class filter
+        - name: Paths
+          type: string
+          jsonPath: .spec.routes[*].path
+          description: Route paths
+        - name: TLS
+          type: string
+          jsonPath: .spec.tls.secretName
+          description: TLS secret name
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+          description: Ready condition status
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

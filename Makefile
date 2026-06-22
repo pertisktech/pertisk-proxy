@@ -3,7 +3,7 @@
 	package-proxy package-ingress release release-amd release-arm \
 	deploy-package deploy-package-ingress deploy-remote \
 	deploy-deb deploy-deb-ingress deploy-rpm deploy-rpm-ingress apply-ingress-rbac \
-	deploy-ingress-helm deploy-ingress uninstall-legacy-ingress-helm \
+	deploy-ingress-helm deploy-ingress deploy-cloud uninstall-legacy-ingress-helm \
 	docker-ingress docker-ingress-push docker-ingress-multi \
 	install-admin admin-dist fix-perms dev dev-vite dev-serve dev-admin dev-stop
 
@@ -250,6 +250,8 @@ docker-ingress-multi: admin-dist
 HELM_RELEASE ?= pertisk-proxy-ingress
 HELM_NAMESPACE ?= pertisk-proxy
 HELM_INGRESS_VALUES ?= deploy/helm/pertisk-ingress/values.yaml
+# Cloud deploy (deploy-cloud): single platform by default; override for multi-arch push.
+DEPLOY_PLATFORMS ?= linux/amd64
 deploy-ingress-helm:
 	helm upgrade --install $(HELM_RELEASE) deploy/helm/pertisk-ingress \
 		-n $(HELM_NAMESPACE) --create-namespace \
@@ -258,6 +260,14 @@ deploy-ingress-helm:
 # Build multi-arch image, push, and deploy with matching tag
 deploy-ingress: docker-ingress-multi deploy-ingress-helm
 	@echo "Done. $(HELM_RELEASE) deployed with $(HARBOR_INGRESS_IMAGE):$(VERSION)"
+
+# Cloud deploy (Hetzner floating-IP LB + IngressClass mode). See deploy/cloud.sh.
+# make deploy-cloud VERSION=1.0.0
+# REPLICA_COUNT=1 VERSION=1.0.0 make deploy-cloud   # pin QUIC for HTTP/3 benchmarks
+deploy-cloud:
+	chmod +x deploy/cloud.sh
+	VERSION="$(VERSION)" NAMESPACE="$(HELM_NAMESPACE)" RELEASE_NAME="$(HELM_RELEASE)" \
+		DEPLOY_PLATFORMS="$(DEPLOY_PLATFORMS)" ./deploy/cloud.sh
 
 # Remove legacy pertisk-rproxy ingress release (ClusterRole name collision with release "pertisk-ingress")
 uninstall-legacy-ingress-helm:

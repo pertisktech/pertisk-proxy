@@ -21,6 +21,17 @@ make deploy-ingress-helm VERSION=0.1.0
 make deploy-ingress VERSION=0.1.0
 ```
 
+**Cloud (Hetzner floating-IP LB)** — build, push, apply CRDs, helm with cloud values + floating-IP service annotations:
+
+```bash
+make deploy-cloud VERSION=0.1.0
+# HTTP/3 benchmark (single replica): REPLICA_COUNT=1 make deploy-cloud VERSION=0.1.0
+```
+
+Or run the script directly: `VERSION=0.1.0 ./deploy/cloud.sh`
+
+Cloud overrides: `ADMIN_HOST`, `FLOATING_IP_HOME_LOCATION`, `AUTH_SIGNING_SECRET`, `NAMESPACE`, `RELEASE_NAME` (see `deploy/cloud.sh`).
+
 **Docker only:**
 
 ```bash
