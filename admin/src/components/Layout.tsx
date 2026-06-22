@@ -15,6 +15,8 @@ import {
   GitBranch,
   DoorOpen,
   LineChart,
+  PanelLeftClose,
+  PanelLeft,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { cn } from '@/utils';
@@ -22,7 +24,13 @@ import { useTheme } from '@/context/ThemeContext';
 import { useGatewayApiEnabled, useManagementInfo } from '@/context/ManagementContext';
 import { useMode } from '@/context/ModeContext';
 
+const SIDEBAR_COLLAPSED_KEY = 'pertisk_sidebar_collapsed';
+
 type NavItem = { to: string; label: string; icon: typeof Globe; end?: boolean };
+
+function getStoredSidebarCollapsed(): boolean {
+  return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
+}
 
 function proxyNav(): NavItem[] {
   return [
@@ -61,6 +69,7 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
   const gatewayApiEnabled = useGatewayApiEnabled();
   const management = useManagementInfo();
   const [open, setOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(getStoredSidebarCollapsed);
 
   const nav = mode === 'ingress' ? ingressNav(gatewayApiEnabled) : proxyNav();
   const title = nav.find((n) => (n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)))?.label ?? 'Admin';
@@ -72,43 +81,61 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
     }
   }, [mode, location.pathname]);
 
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
+  }, [collapsed]);
+
   return (
     <div className="flex min-h-screen bg-bg text-text">
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-border bg-sidebar transition-transform lg:static lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-border bg-sidebar transition-all duration-200 lg:static lg:translate-x-0',
+          collapsed && 'lg:w-16',
           open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
         )}
       >
-        <div className="flex h-16 items-center gap-2 border-b border-border px-4">
-          <div>
-            <div className="font-semibold">Pertisk-Proxy</div>
+        <div className="relative flex h-16 shrink-0 items-center justify-center border-b border-border px-10">
+          <div className={cn('text-center', collapsed && 'lg:hidden')}>
+            <div className="font-semibold leading-tight">Pertisk-Proxy</div>
             <div className="text-xs text-text-secondary">{modeLabel}</div>
           </div>
+          <button
+            type="button"
+            onClick={() => setCollapsed((v) => !v)}
+            className={cn(
+              'hidden rounded-md p-1.5 text-text-secondary hover:bg-hover hover:text-text lg:block',
+              !collapsed && 'absolute right-2 top-1/2 -translate-y-1/2',
+            )}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {collapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
+          </button>
         </div>
-        <nav className="flex-1 space-y-1 p-3">
+        <nav className={cn('flex-1 space-y-1 p-3', collapsed && 'lg:px-2')}>
           {nav.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
               end={end}
+              title={collapsed ? label : undefined}
               onClick={() => setOpen(false)}
               className={({ isActive }) =>
                 cn(
                   'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+                  collapsed && 'lg:justify-center lg:gap-0 lg:px-2',
                   isActive
                     ? 'bg-hover font-semibold text-primary'
                     : 'text-text-secondary hover:bg-hover hover:text-text',
                 )
               }
             >
-              <Icon size={18} />
-              {label}
+              <Icon size={18} className="shrink-0" />
+              <span className={cn('truncate', collapsed && 'lg:hidden')}>{label}</span>
             </NavLink>
           ))}
         </nav>
         {mode === 'ingress' && management?.ingress_class && (
-          <div className="border-t border-border px-4 py-3 text-xs text-text-secondary">
+          <div className={cn('border-t border-border px-4 py-3 text-xs text-text-secondary', collapsed && 'lg:hidden')}>
             Class: {management.ingress_class}
             {gatewayApiEnabled && management.gateway_class ? ` · GW: ${management.gateway_class}` : null}
           </div>
