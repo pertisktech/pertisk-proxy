@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # Cross-compile pertisk-proxy binaries for Linux (amd64 or arm64 via buildx).
 # Usage: docker buildx build --platform linux/amd64 -f docker/Dockerfile.release .
 

@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # Build pertisk-proxy-ingress (Kubernetes Ingress + Gateway API controller).
 
 ARG TARGETPLATFORM=linux/amd64
