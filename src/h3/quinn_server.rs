@@ -13,6 +13,7 @@ use tracing::{info, warn};
 
 use crate::deny;
 use crate::health::{is_health_path, is_json_health_path, API_HEALTH_BODY};
+use crate::h3::bind::h3_bind_candidates;
 use crate::h3::config::H3Config;
 use crate::metrics::ProxyMetrics;
 use crate::proxy::forward::resolve_forward;
@@ -83,25 +84,7 @@ fn build_rustls_config_from_paths(cert_path: &str, key_path: &str) -> Result<rus
     Ok(config)
 }
 
-pub async fn run(
-    router: Arc<Router>,
-    config: H3Config,
-    cert_store: Arc<CertStore>,
-    _runtime_cfg: &RuntimeConfig,
-    metrics: ProxyMetrics,
-) -> Result<()> {
-    while cert_store.host_count() == 0 && cert_store.default_paths().is_none() {
-        tracing::info!(
-            udp = %config.udp_listen,
-            "HTTP/3 waiting for TLS certificates from ingress reconcile"
-        );
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
-
-    let addr: std::net::SocketAddr = config
-        .udp_listen
-        .parse()
-        .with_context(|| format!("invalid H3 UDP address {}", config.udp_listen))?;
+fn build_quinn_server_config(cert_store: Arc<CertStore>) -> Result<quinn::ServerConfig> {
     let rustls_config = build_rustls_config(cert_store)?;
     let quic_crypto =
         quinn::crypto::rustls::QuicServerConfig::try_from(Arc::new(rustls_config))
@@ -127,9 +110,66 @@ pub async fn run(
         transport.keep_alive_interval(Some(Duration::from_secs(keepalive_secs)));
     }
     server_config.transport_config(Arc::new(transport));
+    Ok(server_config)
+}
 
-    let endpoint = Endpoint::server(server_config, addr).with_context(|| format!("bind UDP {addr}"))?;
-    info!(%addr, "HTTP/3 (QUIC/Quinn) listening");
+fn bind_quinn_endpoint(
+    cert_store: Arc<CertStore>,
+    listen: &str,
+) -> Result<(Endpoint, std::net::SocketAddr)> {
+    let candidates = h3_bind_candidates(listen);
+    if candidates.is_empty() {
+        anyhow::bail!("invalid HTTP/3 UDP listen address {:?}", listen);
+    }
+
+    let mut last_err: Option<anyhow::Error> = None;
+    for addr in candidates {
+        let server_config = build_quinn_server_config(Arc::clone(&cert_store))?;
+        match Endpoint::server(server_config, addr) {
+            Ok(endpoint) => return Ok((endpoint, addr)),
+            Err(e) => {
+                let addr_in_use = matches!(e.raw_os_error(), Some(48 | 98));
+                let is_unspecified_v4 = addr.ip().is_unspecified() && addr.is_ipv4();
+                if addr_in_use && is_unspecified_v4 {
+                    tracing::info!(
+                        %addr,
+                        error = %e,
+                        "HTTP/3 skipped redundant UDP bind (already covered by dual-stack listener)"
+                    );
+                    continue;
+                }
+                warn!(
+                    %addr,
+                    error = %e,
+                    os_error = ?e.raw_os_error(),
+                    "HTTP/3 UDP bind failed, trying next address"
+                );
+                last_err = Some(e.into());
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no HTTP/3 UDP bind candidates for {listen}")))
+        .with_context(|| format!("bind HTTP/3 UDP for {listen}"))
+}
+
+pub async fn run(
+    router: Arc<Router>,
+    config: H3Config,
+    cert_store: Arc<CertStore>,
+    _runtime_cfg: &RuntimeConfig,
+    metrics: ProxyMetrics,
+) -> Result<()> {
+    while !cert_store.has_any_cert() {
+        tracing::info!(
+            udp = %config.udp_listen,
+            "HTTP/3 waiting for TLS certificates from ingress reconcile"
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+
+    let (endpoint, bound_addr) = bind_quinn_endpoint(Arc::clone(&cert_store), &config.udp_listen)?;
+    info!(%bound_addr, "HTTP/3 (QUIC/Quinn) listening");
 
     let client = Client::builder()
         .pool_max_idle_per_host(64)

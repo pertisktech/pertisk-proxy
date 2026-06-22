@@ -142,8 +142,8 @@ fn env_filter(default_level: Level) -> EnvFilter {
         .unwrap_or_else(|_| EnvFilter::new(build_filter_spec(default_level)))
 }
 
-/// Suppresses Pingora TLS handshake noise from LAN probes (e.g. router at 192.168.1.1).
-/// Set `PERTISK_LOG_TLS_HANDSHAKE=1` to show those errors.
+/// Suppresses Pingora listener noise (TLS/H2 handshake probes, scanners, early client close).
+/// Set `PERTISK_LOG_TLS_HANDSHAKE=1` to show TLS listener errors from pingora.
 fn build_filter_spec(level: Level) -> String {
     let base = level_to_filter_str(level);
     if env_bool("PERTISK_LOG_TLS_HANDSHAKE", false) {
@@ -152,7 +152,7 @@ fn build_filter_spec(level: Level) -> String {
     if matches!(level, Level::TRACE | Level::DEBUG) {
         return base.to_string();
     }
-    format!("{base},pingora_core::services::listening=off,pingora_proxy=warn")
+    format!("{base},pingora_core::services::listening=off,pingora_core::apps=off,pingora_proxy=warn")
 }
 
 fn env_bool(key: &str, default: bool) -> bool {
@@ -214,7 +214,7 @@ mod tests {
     fn build_filter_spec_quiets_pingora_at_info() {
         assert_eq!(
             build_filter_spec(Level::INFO),
-            "info,pingora_core::services::listening=off,pingora_proxy=warn"
+            "info,pingora_core::services::listening=off,pingora_core::apps=off,pingora_proxy=warn"
         );
         assert_eq!(build_filter_spec(Level::DEBUG), "debug");
     }

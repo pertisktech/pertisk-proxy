@@ -76,7 +76,7 @@ pub fn run() -> anyhow::Result<()> {
     use crate::logging;
     use crate::proxy_config::Config;
     use crate::runtime;
-    use crate::server::{self, PendingH3};
+    use crate::server;
     use crate::tls::{CertStore, Http01ChallengeStore};
     use crate::Router;
     use kube::Client;
@@ -236,17 +236,40 @@ pub fn run() -> anyhow::Result<()> {
             .ok();
     }
 
-    let pending_h3 = if ingress_env.server.enable_h3 {
-        Some(PendingH3 {
-            router: Arc::clone(&router),
-            cert_store: Arc::clone(&cert_store),
-            configs: vec![H3Config::from_server(&ingress_env.server)?],
-            runtime_cfg: runtime_cfg.clone(),
-            metrics: metrics.clone(),
-        })
-    } else {
-        None
-    };
+    if ingress_env.server.enable_h3 {
+        let h3_listen = ingress_env.server.h3_udp_listen.clone();
+        let router_h3 = Arc::clone(&router);
+        let cert_store_h3 = Arc::clone(&cert_store);
+        let runtime_cfg_h3 = runtime_cfg.clone();
+        let metrics_h3 = metrics.clone();
+        tokio_runtime.spawn(async move {
+            let mut logged_wait = false;
+            loop {
+                if cert_store_h3.has_any_cert() {
+                    let config = H3Config::new(h3_listen.clone());
+                    if let Err(err) = h3::run(
+                        Arc::clone(&router_h3),
+                        config,
+                        Arc::clone(&cert_store_h3),
+                        &runtime_cfg_h3,
+                        metrics_h3.clone(),
+                    )
+                    .await
+                    {
+                        tracing::error!(error = %err, udp = %h3_listen, "HTTP/3 listener stopped");
+                    }
+                    break;
+                }
+                if !logged_wait {
+                    tracing::warn!(
+                        "HTTP/3 delayed: no certificates in store yet (waiting for Ingress TLS secrets)"
+                    );
+                    logged_wait = true;
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        });
+    }
 
     server::run(
         &ingress_env.server,
@@ -256,7 +279,7 @@ pub fn run() -> anyhow::Result<()> {
         false,
         &runtime_cfg,
         None,
-        pending_h3,
+        None,
         proxy_log,
         proxy_log_enabled,
         metrics,

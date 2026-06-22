@@ -102,7 +102,7 @@ watchNamespace: ""
 httpAddr: "0.0.0.0:8080"
 httpsAddr: "0.0.0.0:8443"
 managementAddr: "0.0.0.0:9080"
-# -- HTTP/3 (QUIC) port; set to same as HTTPS or separate (e.g. "0.0.0.0:8443")
+# -- HTTP/3 (QUIC) UDP bind inside the container (0.0.0.0:8443 → dual-stack listeners)
 http3Addr: "0.0.0.0:8443"
 
 # -- Runtime worker tuning for ingress process (Tokio runtime)

@@ -159,6 +159,11 @@ impl CertStore {
         self.lookup_sni(host).is_some()
     }
 
+    /// True when any certificate is loaded (per-host or global default).
+    pub fn has_any_cert(&self) -> bool {
+        self.host_count() > 0 || self.default_paths().is_some()
+    }
+
     /// Exact hostname or wildcard match only (no global default fallback).
     pub fn lookup_sni(&self, host: &str) -> Option<StoredCert> {
         let g = self.inner.read().ok()?;

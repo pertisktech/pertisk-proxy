@@ -18,9 +18,9 @@ pub struct ServerConfig {
 impl ServerConfig {
     pub fn from_env_proxy_defaults() -> Self {
         Self {
-            http_listen: env_or("LISTEN_HTTP", "[::]:80"),
-            https_listen: env_or("LISTEN_HTTPS", "[::]:443"),
-            h3_udp_listen: env_or("LISTEN_H3_UDP", "[::]:443"),
+            http_listen: env_listen("LISTEN_HTTP", "PERTISK_HTTP_ADDR", "[::]:80"),
+            https_listen: env_listen("LISTEN_HTTPS", "PERTISK_HTTPS_ADDR", "[::]:443"),
+            h3_udp_listen: env_listen("LISTEN_H3_UDP", "PERTISK_HTTP3_ADDR", "[::]:443"),
             enable_h3: crate::config::common::resolve_enable_h3(env_bool("ENABLE_H3", false)),
             enable_h2: env_bool("PERTISK_ENABLE_H2", true),
             tls_cert_path: std::env::var("TLS_CERT_PATH").ok().map(PathBuf::from),
@@ -30,9 +30,9 @@ impl ServerConfig {
 
     pub fn from_env_ingress_defaults() -> Self {
         Self {
-            http_listen: env_or("LISTEN_HTTP", "0.0.0.0:8080"),
-            https_listen: env_or("LISTEN_HTTPS", "0.0.0.0:8443"),
-            h3_udp_listen: env_or("LISTEN_H3_UDP", "[::]:8443"),
+            http_listen: env_listen("LISTEN_HTTP", "PERTISK_HTTP_ADDR", "0.0.0.0:8080"),
+            https_listen: env_listen("LISTEN_HTTPS", "PERTISK_HTTPS_ADDR", "0.0.0.0:8443"),
+            h3_udp_listen: env_listen("LISTEN_H3_UDP", "PERTISK_HTTP3_ADDR", "[::]:8443"),
             enable_h3: crate::config::common::resolve_enable_h3(env_bool("ENABLE_H3", true)),
             enable_h2: env_bool("PERTISK_ENABLE_H2", true),
             tls_cert_path: std::env::var("TLS_CERT_PATH").ok().map(PathBuf::from),
@@ -83,6 +83,13 @@ impl ServerConfig {
 
 pub fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.into())
+}
+
+/// Read listen address from `LISTEN_*` or legacy `PERTISK_*_ADDR` (Helm chart).
+pub fn env_listen(listen_key: &str, pertisk_key: &str, default: &str) -> String {
+    std::env::var(listen_key)
+        .or_else(|_| std::env::var(pertisk_key))
+        .unwrap_or_else(|_| default.into())
 }
 
 pub fn env_bool(key: &str, default: bool) -> bool {

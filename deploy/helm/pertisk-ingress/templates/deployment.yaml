@@ -87,6 +87,10 @@ spec:
               value: {{ .Values.http3Addr | quote }}
             - name: PERTISK_HTTP3_ADVERTISED_PORT
               value: {{ default 443 .Values.service.http3Port | quote }}
+            {{- if .Values.service.http3Port }}
+            - name: ENABLE_H3
+              value: "true"
+            {{- end }}
             {{- if .Values.http3 }}
             - name: PERTISK_HTTP3_MAX_STREAMS
               value: {{ .Values.http3.maxStreams | quote }}

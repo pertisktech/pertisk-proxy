@@ -439,18 +439,10 @@ impl ProxyHttp for Gateway {
             .insert_header("X-App-Name", crate::app_name())
             .ok();
 
-        if is_downstream_tls(session) {
-            if ctx.is_grpc || ctx.is_long_lived_stream || grpc::is_machine_api_host(&host) {
-                upstream_response.insert_header("Alt-Svc", "clear").ok();
-            } else if self.enable_h3 {
-                let alt_svc = format!(
-                    "h3=\":{}\"; ma=86400; persist=1, h3-29=\":{}\"; ma=86400; persist=1",
-                    self.h3_port, self.h3_port
-                );
-                upstream_response.insert_header("Alt-Svc", alt_svc.as_str()).ok();
-            } else {
-                upstream_response.insert_header("Alt-Svc", "clear").ok();
-            }
+        if let Some(alt_svc) = alt_svc_header_value(self.enable_h3, self.h3_port, &host, ctx) {
+            upstream_response.insert_header("Alt-Svc", alt_svc.as_str()).ok();
+        } else if is_downstream_tls(session) {
+            upstream_response.insert_header("Alt-Svc", "clear").ok();
         }
 
         for (name, value) in ctx.response_headers.clone() {
@@ -658,4 +650,51 @@ fn is_plain_http(session: &Session) -> bool {
         session.req_header().uri.scheme_str(),
         Some("https") | Some("wss")
     )
+}
+
+/// Alt-Svc for HTTP/3 discovery (RFC 7838). Advertised on both HTTP and HTTPS responses.
+fn alt_svc_header_value(
+    enable_h3: bool,
+    h3_port: u16,
+    host: &str,
+    ctx: &RequestCtx,
+) -> Option<String> {
+    if ctx.is_grpc || ctx.is_long_lived_stream || grpc::is_machine_api_host(host) {
+        return Some("clear".into());
+    }
+    if enable_h3 {
+        return Some(format!(
+            "h3=\":{h3_port}\"; ma=86400; persist=1, h3-29=\":{h3_port}\"; ma=86400; persist=1"
+        ));
+    }
+    None
+}
+
+#[cfg(test)]
+mod alt_svc_tests {
+    use super::*;
+
+    #[test]
+    fn alt_svc_advertises_h3_when_enabled() {
+        let ctx = RequestCtx::default();
+        let v = alt_svc_header_value(true, 443, "example.com", &ctx).unwrap();
+        assert!(v.contains("h3=\":443\""));
+        assert!(v.contains("h3-29=\":443\""));
+    }
+
+    #[test]
+    fn alt_svc_clear_for_grpc() {
+        let mut ctx = RequestCtx::default();
+        ctx.is_grpc = true;
+        assert_eq!(
+            alt_svc_header_value(true, 443, "example.com", &ctx).as_deref(),
+            Some("clear")
+        );
+    }
+
+    #[test]
+    fn alt_svc_omitted_when_h3_disabled() {
+        let ctx = RequestCtx::default();
+        assert!(alt_svc_header_value(false, 443, "example.com", &ctx).is_none());
+    }
 }

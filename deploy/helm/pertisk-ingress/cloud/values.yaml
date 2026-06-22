@@ -10,6 +10,8 @@
 # Use externalTrafficPolicy: Local + sessionAffinity. For k6 HTTP/3 benchmarks
 # pin one replica: REPLICA_COUNT=1 VERSION=x.y.z make deploy-cloud
 
+http3Addr: "0.0.0.0:8443"
+
 service:
   externalTrafficPolicy: Cluster
   sessionAffinity: ClientIP

@@ -29,23 +29,41 @@ fn dual_stack_tcp_bind_addrs(listen: &str) -> Vec<String> {
     }
 }
 
-/// UDP (QUIC) bind address. One dual-stack `[::]:port` socket handles both families.
-fn dual_stack_udp_bind_addr(listen: &str) -> Vec<String> {
+/// Ordered UDP bind candidates for HTTP/3 (try until one succeeds).
+pub fn h3_bind_candidates(listen: &str) -> Vec<SocketAddr> {
     let Ok(addr) = listen.parse::<SocketAddr>() else {
-        return vec![listen.to_string()];
+        return Vec::new();
     };
 
     if !addr.ip().is_unspecified() {
-        return vec![listen.to_string()];
+        return vec![addr];
     }
 
     let port = addr.port();
-    vec![format!("[{}]:{port}", std::net::Ipv6Addr::UNSPECIFIED)]
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, port)),
+            SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port)),
+        ]
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        vec![
+            SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port)),
+            SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, port)),
+        ]
+    }
+}
+
+/// UDP (QUIC) primary bind address for logs / queueing (one listener per port).
+fn dual_stack_udp_bind_addrs(listen: &str) -> Vec<String> {
+    dual_stack_tcp_bind_addrs(listen)
 }
 
 /// UDP bind addresses for HTTP/3 (QUIC).
 pub fn h3_bind_addrs(listen: &str) -> Vec<String> {
-    dual_stack_udp_bind_addr(listen)
+    dual_stack_udp_bind_addrs(listen)
 }
 
 /// TCP bind addresses for HTTP/1 and HTTP/2.
@@ -65,12 +83,14 @@ pub fn effective_listen_display(listen: &str) -> String {
     }
 }
 
-/// Effective UDP listen address for admin UI (always one dual-stack socket).
+/// Effective UDP listen address for admin UI.
 pub fn effective_udp_listen_display(listen: &str) -> String {
-    h3_bind_addrs(listen)
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| listen.to_string())
+    let addrs = h3_bind_addrs(listen);
+    if addrs.len() == 1 {
+        addrs[0].clone()
+    } else {
+        addrs.join(", ")
+    }
 }
 
 #[cfg(test)]
@@ -81,12 +101,27 @@ mod tests {
     fn dual_stack_from_ipv4_unspecified() {
         #[cfg(target_os = "macos")]
         assert_eq!(
-            tcp_bind_addrs("0.0.0.0:443"),
+            h3_bind_addrs("0.0.0.0:443"),
             vec!["0.0.0.0:443", "[::]:443"]
         );
         #[cfg(not(target_os = "macos"))]
-        assert_eq!(tcp_bind_addrs("0.0.0.0:443"), vec!["[::]:443"]);
         assert_eq!(h3_bind_addrs("0.0.0.0:443"), vec!["[::]:443"]);
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            h3_bind_candidates("0.0.0.0:443")
+                .iter()
+                .map(|a| a.to_string())
+                .collect::<Vec<_>>(),
+            vec!["0.0.0.0:443".to_string(), "[::]:443".to_string()]
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            h3_bind_candidates("0.0.0.0:443")
+                .iter()
+                .map(|a| a.to_string())
+                .collect::<Vec<_>>(),
+            vec!["[::]:443".to_string(), "0.0.0.0:443".to_string()]
+        );
         assert_eq!(tcp_bind_addrs("[::]:80"), vec!["[::]:80"]);
         assert_eq!(tcp_bind_addrs("127.0.0.1:8080"), vec!["127.0.0.1:8080"]);
     }
@@ -100,6 +135,12 @@ mod tests {
         );
         #[cfg(not(target_os = "macos"))]
         assert_eq!(effective_listen_display("0.0.0.0:443"), "[::]:443");
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            effective_udp_listen_display("0.0.0.0:443"),
+            "0.0.0.0:443, [::]:443"
+        );
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(effective_udp_listen_display("0.0.0.0:443"), "[::]:443");
         assert_eq!(effective_listen_display("[::]:80"), "[::]:80");
     }

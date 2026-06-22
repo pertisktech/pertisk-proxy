@@ -226,13 +226,11 @@ fn main() -> Result<()> {
             || cert_store.default_paths().is_some()
             || acme_tls_pending
         {
-            let configs = h3::h3_bind_addrs(&proxy_env.server.h3_udp_listen)
-                .into_iter()
-                .map(|udp_addr| {
-                    info!(udp = %udp_addr, "HTTP/3 listener queued");
-                    H3Config::new(udp_addr)
-                })
-                .collect();
+            let configs = vec![{
+                let udp = proxy_env.server.h3_udp_listen.clone();
+                info!(udp = %udp, "HTTP/3 listener queued");
+                H3Config::new(udp)
+            }];
             Some(PendingH3 {
                 router: Arc::clone(&router),
                 cert_store: Arc::clone(&cert_store),
