@@ -59,7 +59,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
     cargo fetch --locked
 
 COPY src ./src
-COPY config ./config
 
 ARG CARGO_BUILD_JOBS=1
 ARG VERSION=0.1.0
