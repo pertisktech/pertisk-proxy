@@ -11,6 +11,10 @@ set -euo pipefail
 
 export GH_TOKEN="$GITHUB_TOKEN"
 
+# shellcheck source=ci-install-gh.sh
+source "$(dirname "$0")/ci-install-gh.sh"
+ensure_gh
+
 if ! command -v gh >/dev/null 2>&1; then
   echo "::error::GitHub CLI (gh) is required to publish release notes and assets" >&2
   exit 1

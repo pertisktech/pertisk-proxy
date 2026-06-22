@@ -555,32 +555,6 @@ jobs:
           cat packages/RELEASE_BODY.md
           grep -q '\.rpm' packages/RELEASE_BODY.md
 
-      - name: Install GitHub CLI
-        run: |
-          set -euo pipefail
-          if command -v gh >/dev/null 2>&1; then
-            gh --version
-            exit 0
-          fi
-          GH_VERSION="${GH_VERSION:-2.86.0}"
-          GH_INSTALL_DIR="${HOME}/.local/bin"
-          mkdir -p "$GH_INSTALL_DIR"
-          case "$(uname -m)" in
-            x86_64|amd64) GH_ARCH=amd64 ;;
-            aarch64|arm64) GH_ARCH=arm64 ;;
-            *)
-              echo "unsupported architecture for gh: $(uname -m)" >&2
-              exit 1
-              ;;
-          esac
-          TMP="$(mktemp -d)"
-          trap 'rm -rf "$TMP"' EXIT
-          curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.tar.gz" -o "$TMP/gh.tgz"
-          tar -xzf "$TMP/gh.tgz" -C "$TMP"
-          install -m 755 "$TMP/gh_${GH_VERSION}_linux_${GH_ARCH}/bin/gh" "$GH_INSTALL_DIR/gh"
-          echo "$GH_INSTALL_DIR" >> "$GITHUB_PATH"
-          gh --version
-
       - name: Publish GitHub Release
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
@@ -588,4 +562,8 @@ jobs:
           PACKAGES_DIR: packages
           NOTES_FILE: packages/RELEASE_BODY.md
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: chmod +x build/ci-publish-release.sh && ./build/ci-publish-release.sh
+        run: |
+          set -euo pipefail
+          export PATH="${HOME}/.local/bin:${PATH}"
+          chmod +x build/ci-install-gh.sh build/ci-publish-release.sh
+          ./build/ci-publish-release.sh
