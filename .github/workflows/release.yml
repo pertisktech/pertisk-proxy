@@ -287,6 +287,22 @@ jobs:
           name: release-linux-${{ matrix.goarch }}
           path: .
 
+      - name: Verify Docker build inputs
+        run: |
+          set -euo pipefail
+          ARCH="${{ matrix.goarch }}"
+          BIN="${{ env.BINARY_NAME }}-linux-${ARCH}"
+          INGRESS_BIN="pertisk-proxy-ingress-linux-${ARCH}"
+          for f in "$BIN" "$INGRESS_BIN" admin/dist; do
+            if [ ! -e "$f" ]; then
+              echo "::error::Missing Docker build input: $f"
+              ls -la
+              ls -la admin 2>/dev/null || true
+              exit 1
+            fi
+          done
+          echo "Docker inputs OK: $BIN, $INGRESS_BIN, admin/dist"
+
       - name: Configure Docker
         run: |
           DOCKER_TEMP_DIR="$RUNNER_TEMP/.docker"

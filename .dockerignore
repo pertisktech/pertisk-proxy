@@ -2,19 +2,16 @@
 /target
 **/*.rs.bk
 
-# Package outputs
+# Package outputs (DEB/RPM/tarballs; runtime binaries are needed by docker/Dockerfile.*.binary)
 /release
-/pertisk-proxy-linux-*
-/pertisk-proxy-ingress-linux-*
 /pkg-*
 /.buildx-cache
 /preinstall.sh
 /postinstall.sh
 /preremove.sh
 
-# Admin UI (built inside package.sh or copied explicitly when needed)
+# Admin UI deps (dist is copied into runtime images from CI artifacts)
 /admin/node_modules
-/admin/dist
 
 # Local runtime data
 /data
