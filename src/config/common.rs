@@ -21,7 +21,7 @@ impl ServerConfig {
             http_listen: env_listen("LISTEN_HTTP", "PERTISK_HTTP_ADDR", "[::]:80"),
             https_listen: env_listen("LISTEN_HTTPS", "PERTISK_HTTPS_ADDR", "[::]:443"),
             h3_udp_listen: env_listen("LISTEN_H3_UDP", "PERTISK_HTTP3_ADDR", "[::]:443"),
-            enable_h3: crate::config::common::resolve_enable_h3(env_bool("ENABLE_H3", false)),
+            enable_h3: crate::config::common::resolve_enable_h3(env_bool("ENABLE_H3", true)),
             enable_h2: env_bool("PERTISK_ENABLE_H2", true),
             tls_cert_path: std::env::var("TLS_CERT_PATH").ok().map(PathBuf::from),
             tls_key_path: std::env::var("TLS_KEY_PATH").ok().map(PathBuf::from),
@@ -41,8 +41,10 @@ impl ServerConfig {
     }
 
     pub fn validate_tls(&self) -> Result<()> {
-        if self.enable_h3 {
-            ensure_tls_pair(&self.tls_cert_path, &self.tls_key_path, "ENABLE_H3")?;
+        if (self.tls_cert_path.is_some() || self.tls_key_path.is_some())
+            && !(self.tls_cert_path.is_some() && self.tls_key_path.is_some())
+        {
+            ensure_tls_pair(&self.tls_cert_path, &self.tls_key_path, "TLS")?;
         }
         Ok(())
     }

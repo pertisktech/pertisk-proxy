@@ -15,11 +15,12 @@ ROUTES_CONFIG ?=
 PROXY_CARGO_FEATURES = --features admin
 PROXY_MODE ?= performance
 LOG_LEVEL ?= info
+ENABLE_H3 ?= true
 
 # Dev listen addresses (DNS-ready: 80 + 443/tcp + 443/udp). On macOS use: sudo make dev
 DEV_LISTEN_HTTP ?= 0.0.0.0:80
 DEV_LISTEN_HTTPS ?= 0.0.0.0:443
-DEV_LISTEN_H3_UDP ?= [::]:443
+DEV_LISTEN_H3_UDP ?= 0.0.0.0:443
 DEV_MANAGEMENT_ADDR ?= 0.0.0.0:9080
 
 # When using `sudo make dev`, run pnpm as the invoking user so node_modules stays writable.

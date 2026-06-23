@@ -144,6 +144,13 @@ fn bind_quinn_endpoint(
                     os_error = ?e.raw_os_error(),
                     "HTTP/3 UDP bind failed, trying next address"
                 );
+                #[cfg(target_os = "macos")]
+                if matches!(e.raw_os_error(), Some(1 | 13 | 48 | 98)) {
+                    warn!(
+                        "HTTP/3 on port 443 requires root on macOS (sudo make dev); \
+                         or use LISTEN_H3_UDP=127.0.0.1:8443 for local testing"
+                    );
+                }
                 last_err = Some(e.into());
             }
         }
@@ -163,7 +170,7 @@ pub async fn run(
     while !cert_store.has_any_cert() {
         tracing::info!(
             udp = %config.udp_listen,
-            "HTTP/3 waiting for TLS certificates from ingress reconcile"
+            "HTTP/3 waiting for TLS certificates (add a site with TLS or import a cert)"
         );
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
