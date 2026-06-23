@@ -3,6 +3,9 @@
 #[cfg(all(feature = "admin", feature = "ingress"))]
 pub mod kubernetes;
 
+#[cfg(feature = "admin")]
+pub mod backup;
+
 #[cfg(all(feature = "admin", feature = "acme"))]
 pub mod acme;
 
@@ -145,7 +148,9 @@ pub fn router(state: AdminState) -> Router {
             get(dns_providers_get)
                 .put(dns_providers_put)
                 .delete(dns_providers_delete),
-        );
+        )
+        .route("/api/backup/export", get(backup::backup_export))
+        .route("/api/backup/restore", post(backup::backup_restore));
 
     #[cfg(feature = "ingress")]
     let protected = protected
@@ -240,7 +245,7 @@ fn session_username(sessions: &DashMap<String, SessionEntry>, token: &str) -> Op
     }
 }
 
-async fn is_authorized(state: &AdminState, headers: &HeaderMap) -> bool {
+pub(super) async fn is_authorized(state: &AdminState, headers: &HeaderMap) -> bool {
     resolve_username(state, headers).await.is_some()
 }
 
@@ -907,34 +912,16 @@ async fn put_config(
             }),
         )
     })?;
-    apply::apply_config(state.router.as_ref(), &body).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ApiError {
-                error: e.to_string(),
-            }),
-        )
-    })?;
-    state
-        .cert_store
-        .reload_from_configs(&body.tls)
+    backup::activate_proxy_config(&state, db.as_ref(), &body)
+        .await
         .map_err(|e| {
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::BAD_REQUEST,
                 Json(ApiError {
-                    error: e.to_string(),
+                    error: e,
                 }),
             )
         })?;
-    if let Err(err) =
-        load_db_certs_into_store(db.as_ref(), state.cert_store.as_ref(), &state.certs_dir).await
-    {
-        tracing::warn!(error = %err, "config save: failed to reload certificates from database");
-    }
-    *state.runtime_config.write().await = body.clone();
-    state
-        .proxy_log_enabled
-        .store(body.proxy_log, Ordering::Relaxed);
     state
         .proxy_log
         .push(ProxyLogEntry::config_reload(format!(
@@ -943,16 +930,6 @@ async fn put_config(
             state.router.route_count()
         )))
         .await;
-    #[cfg(feature = "acme")]
-    if let Some(acme) = state.acme_manager.clone() {
-        let cfg = body.clone();
-        let db_c = db.clone();
-        let store_c = state.cert_store.clone();
-        let dir = state.certs_dir.clone();
-        tokio::spawn(async move {
-            acme::spawn_auto_ssl_for_config(&cfg, db_c, acme, store_c, dir).await;
-        });
-    }
     Ok(Json(ReloadResponse {
         ok: true,
         route_count: state.router.route_count(),

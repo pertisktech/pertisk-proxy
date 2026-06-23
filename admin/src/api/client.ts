@@ -392,4 +392,47 @@ export const api = {
         { method: 'DELETE' },
       ),
   },
+
+  backup: {
+    async export(namespace?: string): Promise<void> {
+      const token = getToken();
+      const headers: Record<string, string> = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const qs = namespace ? `?namespace=${encodeURIComponent(namespace)}` : '';
+      const r = await fetch(`${API}/backup/export${qs}`, { headers });
+      if (r.status === 401) {
+        clearToken();
+        window.location.href = '/login';
+        throw new Error('Unauthorized');
+      }
+      if (!r.ok) {
+        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error || `${r.status} ${r.statusText}`);
+      }
+      const blob = await r.blob();
+      const disposition = r.headers.get('Content-Disposition') ?? '';
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename =
+        match?.[1] ??
+        `pertisk-backup-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}`;
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      a.remove();
+    },
+    restore: (data: string, merge: boolean) =>
+      request<{
+        message: string;
+        restored_count: number;
+        errors?: string[];
+        note?: string;
+      }>('/backup/restore', {
+        method: 'POST',
+        body: JSON.stringify({ data, merge }),
+      }),
+  },
 };

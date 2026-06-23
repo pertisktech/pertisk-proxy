@@ -17,6 +17,7 @@ import {
   LineChart,
   PanelLeftClose,
   PanelLeft,
+  Archive,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { cn } from '@/utils';
@@ -40,6 +41,7 @@ function proxyNav(): NavItem[] {
     { to: '/dns-providers', label: 'DNS Providers', icon: Server },
     { to: '/logs', label: 'Logs', icon: ScrollText },
     { to: '/metrics', label: 'Metrics', icon: LineChart },
+    { to: '/backup', label: 'Backup', icon: Archive },
     { to: '/settings', label: 'Settings', icon: Settings },
   ];
 }
@@ -57,6 +59,7 @@ function ingressNav(gatewayApiEnabled: boolean): NavItem[] {
     { to: '/certificates', label: 'Certificates', icon: Shield },
     { to: '/logs', label: 'Logs', icon: ScrollText },
     { to: '/metrics', label: 'Metrics', icon: LineChart },
+    { to: '/backup', label: 'Backup', icon: Archive },
     { to: '/settings', label: 'Settings', icon: Settings },
   );
   return items;
