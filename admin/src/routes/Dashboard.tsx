@@ -76,8 +76,9 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function UsageBar({ percent, tone }: { percent: number; tone: 'cpu' | 'memory' }) {
-  const fill = tone === 'cpu' ? 'bg-primary' : 'bg-green-g1';
+function UsageBar({ percent, tone }: { percent: number; tone: 'cpu' | 'memory' | 'storage' }) {
+  const fill =
+    tone === 'cpu' ? 'bg-primary' : tone === 'storage' ? 'bg-yellow-y1' : 'bg-green-g1';
   const width = clampPercent(percent).toFixed(1);
   return (
     <div
@@ -165,6 +166,10 @@ export function Dashboard() {
     info.memory_used_bytes != null && info.memory_total_bytes
       ? clampPercent((info.memory_used_bytes / info.memory_total_bytes) * 100)
       : null;
+  const diskPercent =
+    info.disk_used_bytes != null && info.disk_total_bytes
+      ? clampPercent((info.disk_used_bytes / info.disk_total_bytes) * 100)
+      : null;
   const processMemoryPercent =
     info.process_memory_bytes != null && info.memory_total_bytes
       ? clampPercent((info.process_memory_bytes / info.memory_total_bytes) * 100)
@@ -249,6 +254,19 @@ export function Dashboard() {
                 {systemMemoryPercent != null ? (
                   <UsageBar percent={systemMemoryPercent} tone="memory" />
                 ) : null}
+              </div>
+              <div>
+                <InfoRow
+                  label="Storage"
+                  value={
+                    info.disk_used_bytes != null && info.disk_total_bytes
+                      ? `${formatBytes(info.disk_used_bytes)} / ${formatBytes(info.disk_total_bytes)}${
+                          diskPercent != null ? ` (${diskPercent.toFixed(1)}%)` : ''
+                        }${info.disk_mount_point ? ` · ${info.disk_mount_point}` : ''}`
+                      : '—'
+                  }
+                />
+                {diskPercent != null ? <UsageBar percent={diskPercent} tone="storage" /> : null}
               </div>
               <InfoRow label="IPv4" value={info.ipv4_addrs?.length ? info.ipv4_addrs.join(', ') : '—'} />
               <InfoRow label="IPv6" value={info.ipv6_addrs?.length ? info.ipv6_addrs.join(', ') : '—'} />

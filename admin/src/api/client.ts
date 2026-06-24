@@ -48,6 +48,9 @@ export type ManagementInfo = {
   cpu_usage_percent?: number | null;
   memory_total_bytes?: number | null;
   memory_used_bytes?: number | null;
+  disk_total_bytes?: number | null;
+  disk_used_bytes?: number | null;
+  disk_mount_point?: string | null;
   process_cpu_usage_percent?: number | null;
   process_memory_bytes?: number | null;
   ipv4_addrs?: string[];

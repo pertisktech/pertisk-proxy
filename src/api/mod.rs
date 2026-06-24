@@ -463,6 +463,9 @@ struct ManagementInfo {
     cpu_usage_percent: Option<f32>,
     memory_total_bytes: Option<u64>,
     memory_used_bytes: Option<u64>,
+    disk_total_bytes: Option<u64>,
+    disk_used_bytes: Option<u64>,
+    disk_mount_point: Option<String>,
     process_cpu_usage_percent: Option<f32>,
     process_memory_bytes: Option<u64>,
     ipv4_addrs: Vec<String>,
@@ -597,6 +600,13 @@ async fn get_metrics(
 async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo> {
     let server = &state.proxy_config.server;
     let cfg = state.runtime_config.read().await;
+    let data_path = state
+        .db
+        .as_ref()
+        .map(|d| d.path().to_path_buf())
+        .unwrap_or_else(|| state.certs_dir.clone());
+    let (disk_total_bytes, disk_used_bytes, disk_mount_point) =
+        disk_usage_for_path(&data_path);
     let (
         hostname,
         os,
@@ -649,6 +659,9 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
         cpu_usage_percent,
         memory_total_bytes,
         memory_used_bytes,
+        disk_total_bytes,
+        disk_used_bytes,
+        disk_mount_point,
         process_cpu_usage_percent,
         process_memory_bytes,
         ipv4_addrs,
@@ -666,6 +679,38 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
         gateway_class,
         leader_election,
     })
+}
+
+fn disk_usage_for_path(data_path: &std::path::Path) -> (Option<u64>, Option<u64>, Option<String>) {
+    if !sysinfo::IS_SUPPORTED_SYSTEM {
+        return (None, None, None);
+    }
+
+    let path = std::fs::canonicalize(data_path).unwrap_or_else(|_| data_path.to_path_buf());
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+
+    let mut best: Option<(&sysinfo::Disk, usize)> = None;
+    for disk in disks.list() {
+        let mount = disk.mount_point();
+        if path.starts_with(mount) {
+            let len = mount.as_os_str().len();
+            if best.map(|(_, best_len)| len > best_len).unwrap_or(true) {
+                best = Some((disk, len));
+            }
+        }
+    }
+
+    let Some((disk, _)) = best else {
+        return (None, None, None);
+    };
+
+    let total = disk.total_space();
+    let used = total.saturating_sub(disk.available_space());
+    (
+        Some(total),
+        Some(used),
+        Some(disk.mount_point().display().to_string()),
+    )
 }
 
 fn gather_system_info() -> (
