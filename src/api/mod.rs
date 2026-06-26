@@ -468,6 +468,7 @@ struct ManagementInfo {
     disk_mount_point: Option<String>,
     process_cpu_usage_percent: Option<f32>,
     process_memory_bytes: Option<u64>,
+    process_pid: u32,
     ipv4_addrs: Vec<String>,
     ipv6_addrs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -664,6 +665,7 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
         disk_mount_point,
         process_cpu_usage_percent,
         process_memory_bytes,
+        process_pid: std::process::id(),
         ipv4_addrs,
         ipv6_addrs,
         gateway_api_enabled,

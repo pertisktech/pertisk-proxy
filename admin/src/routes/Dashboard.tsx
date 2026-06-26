@@ -312,6 +312,7 @@ export function Dashboard() {
         <div className="grid gap-6 lg:grid-cols-2">
           <dl className="space-y-3">
             <InfoRow label="Mode" value={info.mode} />
+            <InfoRow label="PID" value={String(info.process_pid)} />
             <InfoRow label="Runtime" value={info.runtime_mode} />
             <InfoRow label="HTTP" value={info.listeners.http} />
             <InfoRow label="HTTPS" value={info.listeners.https} />

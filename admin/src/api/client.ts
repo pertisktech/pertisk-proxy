@@ -53,6 +53,7 @@ export type ManagementInfo = {
   disk_mount_point?: string | null;
   process_cpu_usage_percent?: number | null;
   process_memory_bytes?: number | null;
+  process_pid: number;
   ipv4_addrs?: string[];
   ipv6_addrs?: string[];
   gateway_api_enabled?: boolean;
