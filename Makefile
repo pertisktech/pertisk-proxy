@@ -3,7 +3,7 @@
 	package-proxy package-ingress release release-amd release-arm \
 	deploy-package deploy-package-ingress deploy-remote \
 	deploy-deb deploy-deb-ingress deploy-rpm deploy-rpm-ingress apply-ingress-rbac \
-	deploy-ingress-helm deploy-ingress deploy-cloud uninstall-legacy-ingress-helm \
+	deploy-ingress-helm deploy-ingress deploy-cloud deploy-285h uninstall-legacy-ingress-helm \
 	docker-ingress docker-ingress-push docker-ingress-multi \
 	install-admin admin-dist fix-perms dev dev-vite dev-serve dev-admin dev-stop
 
@@ -273,6 +273,14 @@ deploy-cloud:
 	chmod +x deploy/cloud.sh
 	VERSION="$(VERSION)" NAMESPACE="$(HELM_NAMESPACE)" RELEASE_NAME="$(HELM_RELEASE)" \
 		DEPLOY_PLATFORMS="$(DEPLOY_PLATFORMS)" ./deploy/cloud.sh
+
+# Talos 285h cluster deploy. See deploy/285h.sh.
+# make deploy-285h VERSION=1.0.0
+# REPLICA_COUNT=1 VERSION=1.0.0 make deploy-285h
+deploy-285h:
+	chmod +x deploy/285h.sh
+	VERSION="$(VERSION)" NAMESPACE="$(HELM_NAMESPACE)" RELEASE_NAME="$(HELM_RELEASE)" \
+		DEPLOY_PLATFORMS="$(DEPLOY_PLATFORMS)" ./deploy/285h.sh
 
 # Remove legacy pertisk-rproxy ingress release (ClusterRole name collision with release "pertisk-ingress")
 uninstall-legacy-ingress-helm:
