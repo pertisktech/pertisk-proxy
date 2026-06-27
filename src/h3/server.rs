@@ -119,6 +119,7 @@ pub async fn run(router: Arc<Router>, config: H3Config, runtime_cfg: &RuntimeCon
         .pool_max_idle_per_host(64)
         .pool_idle_timeout(Duration::from_secs(90))
         .tcp_keepalive(Duration::from_secs(60))
+        .danger_accept_invalid_certs(true)
         .build()?;
 
     for mut accept_stream in listeners {

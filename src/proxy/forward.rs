@@ -17,6 +17,7 @@ pub struct ForwardPlan {
     pub peer_host: String,
     pub peer_port: u16,
     pub upstream_url: String,
+    pub use_tls: bool,
     pub middleware: MiddlewareAction,
 }
 
@@ -61,12 +62,13 @@ pub fn resolve_forward(
     };
 
     let (peer_host, peer_port) = parse_backend_peer(&route.backend.address, route.backend.port)?;
-    let upstream_url = build_upstream_url(&route.backend.address, &upstream_path);
+    let upstream_url = build_upstream_url(&route.backend, &upstream_path);
 
     Ok(ForwardPlan {
         peer_host,
         peer_port,
         upstream_url,
+        use_tls: route.backend.use_tls,
         middleware,
     })
 }
@@ -86,12 +88,9 @@ fn strip_path_prefix(path_and_query: &str, prefix: &str) -> String {
     }
 }
 
-pub fn build_upstream_url(backend_address: &str, path_and_query: &str) -> String {
-    if backend_address.contains("://") {
-        format!("{backend_address}{path_and_query}")
-    } else {
-        format!("http://{backend_address}{path_and_query}")
-    }
+pub fn build_upstream_url(backend: &crate::router::Backend, path_and_query: &str) -> String {
+    let scheme = if backend.use_tls { "https" } else { "http" };
+    format!("{scheme}://{}{path_and_query}", backend.address)
 }
 
 pub fn parse_backend_peer(address: &str, fallback_port: u16) -> Result<(String, u16)> {
@@ -130,8 +129,9 @@ mod tests {
                 path: "/api".into(),
                 path_type: PathMatchType::Prefix,
                 backend: Backend {
-                    address: "http://127.0.0.1:8080".into(),
+                    address: "127.0.0.1:8080".into(),
                     port: 8080,
+                    use_tls: false,
                 },
                 middlewares: vec![Middleware::StripPrefix {
                     prefix: "/api".into(),
@@ -151,8 +151,9 @@ mod tests {
                 path: "/api".into(),
                 path_type: PathMatchType::Prefix,
                 backend: Backend {
-                    address: "http://127.0.0.1:8080".into(),
+                    address: "127.0.0.1:8080".into(),
                     port: 8080,
+                    use_tls: false,
                 },
                 middlewares: vec![],
             }],
@@ -182,11 +183,25 @@ mod tests {
     #[test]
     fn build_upstream_url_adds_scheme() {
         assert_eq!(
-            build_upstream_url("127.0.0.1:8080", "/health"),
+            build_upstream_url(
+                &Backend {
+                    address: "127.0.0.1:8080".into(),
+                    port: 8080,
+                    use_tls: false,
+                },
+                "/health",
+            ),
             "http://127.0.0.1:8080/health"
         );
         assert_eq!(
-            build_upstream_url("https://upstream:443", "/v1"),
+            build_upstream_url(
+                &Backend {
+                    address: "upstream:443".into(),
+                    port: 443,
+                    use_tls: true,
+                },
+                "/v1",
+            ),
             "https://upstream:443/v1"
         );
     }
@@ -208,6 +223,26 @@ mod tests {
     fn strip_prefix_empty_becomes_root() {
         assert_eq!(strip_path_prefix("/api", "/api"), "/");
         assert_eq!(strip_path_prefix("/api?x=1", "/api"), "/?x=1");
+    }
+
+    #[test]
+    fn resolve_forward_https_upstream() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "proxmox.example.com".into(),
+            vec![Route {
+                path: "/".into(),
+                path_type: PathMatchType::Prefix,
+                backend: Backend {
+                    address: "10.1.1.65:8006".into(),
+                    port: 8006,
+                    use_tls: true,
+                },
+                middlewares: vec![],
+            }],
+        )]));
+        let plan = resolve_forward(&table, "proxmox.example.com", "/").unwrap();
+        assert_eq!(plan.upstream_url, "https://10.1.1.65:8006/");
+        assert!(plan.use_tls);
     }
 
     #[test]

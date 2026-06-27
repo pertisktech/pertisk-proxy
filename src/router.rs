@@ -19,6 +19,8 @@ pub enum PathMatchType {
 pub struct Backend {
     pub address: String,
     pub port: u16,
+    /// Connect to upstream over TLS when true (upstream URL used `https://`).
+    pub use_tls: bool,
 }
 
 /// Traefik-style middleware applied to a route (ignored in ingress/nginx/caddy modes except traefik).
@@ -99,10 +101,13 @@ pub fn parse_upstream(raw: &str) -> Option<Backend> {
     if trimmed.contains("://") {
         if let Ok(url) = url::Url::parse(trimmed) {
             let host = normalize_upstream_host(url.host_str()?);
-            let port = url.port_or_known_default().unwrap_or(80);
+            let use_tls = url.scheme() == "https";
+            let default_port = if use_tls { 443 } else { 80 };
+            let port = url.port_or_known_default().unwrap_or(default_port);
             return Some(Backend {
                 address: format!("{host}:{port}"),
                 port,
+                use_tls,
             });
         }
     }
@@ -118,6 +123,7 @@ fn parse_host_port(raw: &str) -> Option<Backend> {
         return Some(Backend {
             address: format!("{host}:{port}"),
             port,
+            use_tls: false,
         });
     }
 
@@ -125,6 +131,7 @@ fn parse_host_port(raw: &str) -> Option<Backend> {
     Some(Backend {
         address: format!("{host}:80"),
         port: 80,
+        use_tls: false,
     })
 }
 
@@ -326,6 +333,7 @@ fn resolve_service_backend(service: &IngressServiceBackend, namespace: &str) -> 
     Some(Backend {
         address: service_dns(name, namespace, port_number as u16),
         port: port_number as u16,
+        use_tls: false,
     })
 }
 
@@ -363,6 +371,7 @@ mod tests {
                     backend: Backend {
                         address: "api.default.svc.cluster.local:8080".into(),
                         port: 8080,
+                        use_tls: false,
                     },
                     middlewares: vec![],
                 }],
@@ -385,6 +394,7 @@ mod tests {
                         backend: Backend {
                             address: "upstream:8080".into(),
                             port: 8080,
+                            use_tls: false,
                         },
                         middlewares: vec![],
                     }],
@@ -397,6 +407,7 @@ mod tests {
                         backend: Backend {
                             address: "catchall:8080".into(),
                             port: 8080,
+                            use_tls: false,
                         },
                         middlewares: vec![],
                     }],
@@ -420,6 +431,7 @@ mod tests {
                 backend: Backend {
                     address: "api:8080".into(),
                     port: 8080,
+                    use_tls: false,
                 },
                 middlewares: vec![],
             }],
@@ -438,6 +450,7 @@ mod tests {
                 backend: Backend {
                     address: "catch:80".into(),
                     port: 80,
+                    use_tls: false,
                 },
                 middlewares: vec![],
             }],
@@ -456,6 +469,7 @@ mod tests {
                     backend: Backend {
                         address: "short:8080".into(),
                         port: 8080,
+                        use_tls: false,
                     },
                     middlewares: vec![],
                 },
@@ -465,6 +479,7 @@ mod tests {
                     backend: Backend {
                         address: "long:8080".into(),
                         port: 8080,
+                        use_tls: false,
                     },
                     middlewares: vec![],
                 },
@@ -484,6 +499,12 @@ mod tests {
         assert_eq!(b.port, 9090);
         let b = parse_upstream("https://example.com").unwrap();
         assert_eq!(b.port, 443);
+        assert!(b.use_tls);
+        let b = parse_upstream("https://10.1.1.65:8006").unwrap();
+        assert_eq!(b.address, "10.1.1.65:8006");
+        assert!(b.use_tls);
+        let b = parse_upstream("http://backend:8080").unwrap();
+        assert!(!b.use_tls);
         let b = parse_upstream("example.com").unwrap();
         assert_eq!(b.address, "example.com:80");
         let b = parse_upstream("10.0.0.1:8080").unwrap();
@@ -500,6 +521,7 @@ mod tests {
                 backend: Backend {
                     address: "a:80".into(),
                     port: 80,
+                    use_tls: false,
                 },
                 middlewares: vec![],
             }],
@@ -520,6 +542,7 @@ mod tests {
                 backend: Backend {
                     address: "x:80".into(),
                     port: 80,
+                    use_tls: false,
                 },
                 middlewares: vec![],
             }],
@@ -608,6 +631,7 @@ mod tests {
                 backend: Backend {
                     address: "api:8080".into(),
                     port: 8080,
+                    use_tls: false,
                 },
                 middlewares: vec![],
             }],
@@ -627,6 +651,7 @@ mod tests {
                 backend: Backend {
                     address: "all:80".into(),
                     port: 80,
+                    use_tls: false,
                 },
                 middlewares: vec![],
             }],
@@ -703,6 +728,7 @@ mod tests {
                 backend: Backend {
                     address: "custom:80".into(),
                     port: 80,
+                    use_tls: false,
                 },
                 middlewares: vec![],
             }],

@@ -342,6 +342,7 @@ impl ProxyHttp for Gateway {
             &plan.peer_host,
             plan.peer_port,
             &host,
+            plan.use_tls,
             ctx,
         ));
         ctx.log_upstream = Some(format!("{}:{}", plan.peer_host, plan.peer_port));
@@ -582,9 +583,14 @@ fn configure_upstream_peer(
     peer_host: &str,
     peer_port: u16,
     sni: &str,
+    use_tls: bool,
     ctx: &RequestCtx,
 ) -> HttpPeer {
-    let mut peer = HttpPeer::new((peer_host, peer_port), false, sni.to_string());
+    let mut peer = HttpPeer::new((peer_host, peer_port), use_tls, sni.to_string());
+    // Internal upstreams (Proxmox, etc.) often use self-signed certs.
+    if use_tls {
+        peer.options.verify_cert = false;
+    }
     if grpc::is_h2c_only_upstream(sni, peer_port)
         || grpc::uses_h2c_upstream(ctx.is_grpc, ctx.is_grpc_web)
     {
