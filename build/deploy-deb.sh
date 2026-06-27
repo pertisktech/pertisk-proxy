@@ -18,6 +18,7 @@ set -euo pipefail
 #   PACKAGE_CLEAN    — 1 (default) run make package-clean before build
 #   PACKAGE_BUILD    — 1 (default) build package; 0 = deploy existing release/*.deb
 #   DEB_ARCH         — amd64 (default) or arm64
+#   DEPLOY_ARCH      — amd64 or arm64 (alias for DEB_ARCH when DEB_ARCH unset)
 
 REMOTE_HOST="${REMOTE_HOST:-10.1.1.8}"
 REMOTE_USER="${REMOTE_USER:-root}"
@@ -28,7 +29,7 @@ VERSION="${VERSION#V}"
 REMOTE_PATH="${REMOTE_PATH:-/tmp}"
 PACKAGE_CLEAN="${PACKAGE_CLEAN:-1}"
 PACKAGE_BUILD="${PACKAGE_BUILD:-1}"
-DEB_ARCH="${DEB_ARCH:-amd64}"
+DEB_ARCH="${DEB_ARCH:-${DEPLOY_ARCH:-amd64}}"
 
 case "$PACKAGE_NAME" in
   pertisk-proxy-ingress)

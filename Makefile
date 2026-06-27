@@ -2,7 +2,7 @@
 	test check package package-clean package-amd64 package-arm64 package-deb package-rpm \
 	package-proxy package-ingress release release-amd release-arm \
 	deploy-package deploy-package-ingress deploy-remote \
-	deploy-deb deploy-deb-ingress deploy-rpm deploy-rpm-ingress apply-ingress-rbac \
+	deploy-deb deploy-deb-ingress deploy-deb-arm deploy-rpm deploy-rpm-ingress deploy-rpm-arm apply-ingress-rbac \
 	deploy-ingress-helm deploy-ingress deploy-cloud deploy-285h uninstall-legacy-ingress-helm \
 	docker-ingress docker-ingress-push docker-ingress-multi \
 	install-admin admin-dist fix-perms dev dev-vite dev-serve dev-admin dev-stop
@@ -35,6 +35,9 @@ CACHE_DIR ?= .buildx-cache/release
 # Remote deploy (make deploy-package DEPLOY_HOST=user@host)
 DEPLOY_HOST ?=
 DEPLOY_ARCH ?= amd64
+# Map DEPLOY_ARCH (amd64|arm64) to package arch names
+RPM_ARCH = $(if $(filter arm64,$(DEPLOY_ARCH)),aarch64,x86_64)
+DEB_ARCH = $(DEPLOY_ARCH)
 DEPLOY_BIN ?= pertisk-proxy
 DEPLOY_PKG ?= auto
 DEPLOY_SSH_OPTS ?=
@@ -303,25 +306,34 @@ deploy-package-ingress:
 deploy-remote: deploy-package
 
 # Build package + deploy DEB/RPM (primary deployment path)
+#   make deploy-rpm REMOTE_HOST=10.1.1.233 REMOTE_USER=almalinux VERSION=0.1.88
+#   make deploy-rpm-arm REMOTE_HOST=10.1.1.233 REMOTE_USER=almalinux VERSION=0.1.88
+#   make deploy-rpm DEPLOY_ARCH=arm64 REMOTE_HOST=...   # same as deploy-rpm-arm
 deploy-deb:
 	chmod +x build/deploy-deb.sh
 	REMOTE_HOST="$(REMOTE_HOST)" REMOTE_USER="$(REMOTE_USER)" VERSION="$(VERSION)" \
-		PACKAGE_NAME="$(PACKAGE_NAME)" \
+		PACKAGE_NAME="$(PACKAGE_NAME)" DEB_ARCH="$(DEB_ARCH)" \
 		REMOTE_PATH="$(REMOTE_PATH)" PACKAGE_CLEAN="$(PACKAGE_CLEAN)" \
 		PACKAGE_BUILD="$(PACKAGE_BUILD)" ./build/deploy-deb.sh
 
 deploy-deb-ingress:
 	$(MAKE) deploy-deb PACKAGE_NAME=pertisk-proxy-ingress
 
+deploy-deb-arm:
+	$(MAKE) deploy-deb DEPLOY_ARCH=arm64
+
 deploy-rpm:
 	chmod +x build/deploy-rpm.sh
 	REMOTE_HOST="$(REMOTE_HOST)" REMOTE_USER="$(REMOTE_USER)" VERSION="$(VERSION)" \
-		PACKAGE_NAME="$(PACKAGE_NAME)" \
+		PACKAGE_NAME="$(PACKAGE_NAME)" RPM_ARCH="$(RPM_ARCH)" \
 		REMOTE_PATH="$(REMOTE_PATH)" PACKAGE_CLEAN="$(PACKAGE_CLEAN)" \
 		PACKAGE_BUILD="$(PACKAGE_BUILD)" ./build/deploy-rpm.sh
 
 deploy-rpm-ingress:
 	$(MAKE) deploy-rpm PACKAGE_NAME=pertisk-proxy-ingress
+
+deploy-rpm-arm:
+	$(MAKE) deploy-rpm DEPLOY_ARCH=arm64
 
 # Delete a tag (local and remote).
 delete-tag:

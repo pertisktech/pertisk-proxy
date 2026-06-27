@@ -6,7 +6,7 @@ ARG BUILDPLATFORM=linux/amd64
 ARG TARGETARCH=amd64
 ARG BUILDARCH=amd64
 
-FROM --platform=$BUILDPLATFORM rust:1-bookworm
+FROM --platform=$BUILDPLATFORM rust:1-bookworm AS builder
 
 ARG TARGETARCH
 ARG BUILDARCH
@@ -113,3 +113,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
         cp "${TARGET_DIR}/pertisk-proxy-ingress" /app/out/pertisk-proxy-ingress; \
         ;; \
     esac
+
+# Export binaries for buildx -o type=local (works cross-arch; --load does not).
+FROM scratch AS artifacts
+COPY --from=builder /app/out/ /

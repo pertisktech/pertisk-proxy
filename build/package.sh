@@ -100,17 +100,23 @@ build_binaries_docker() {
     docker buildx create --name "$BUILDER_NAME" --driver docker-container --bootstrap
   fi
 
-  mkdir -p "$CACHE_DIR"
+  mkdir -p "${CACHE_DIR}/${ARCH}"
+  local cache_dir="${CACHE_DIR}/${ARCH}"
+  local extract_dir
+  extract_dir="$(mktemp -d)"
   local build_success=0
   for attempt in 1 2 3; do
     if docker buildx build --builder "$BUILDER_NAME" --platform "linux/$ARCH" \
       -f docker/Dockerfile.release \
-      --cache-from "type=local,src=${CACHE_DIR}" \
-      --cache-to "type=local,dest=${CACHE_DIR},mode=max" \
+      --target artifacts \
+      --cache-from "type=local,src=${cache_dir}" \
+      --cache-to "type=local,dest=${cache_dir},mode=max,ignore-error=true" \
+      --build-arg TARGETPLATFORM="linux/$ARCH" \
+      --build-arg TARGETARCH="$ARCH" \
       --build-arg PACKAGE_TARGET="$TARGET" \
       --build-arg VERSION="$VERSION" \
       --build-arg CARGO_BUILD_JOBS="$CARGO_JOBS" \
-      --load -t "pertisk-proxy-build:$ARCH" .; then
+      -o "type=local,dest=${extract_dir}" .; then
       build_success=1
       break
     fi
@@ -121,21 +127,28 @@ build_binaries_docker() {
     fi
   done
   if [ "$build_success" -ne 1 ]; then
+    rm -rf "$extract_dir"
     echo "Error: docker buildx build failed after 3 attempts" >&2
     exit 1
   fi
 
-  docker rm -f "extract-proxy-$ARCH" 2>/dev/null || true
-  docker create --name "extract-proxy-$ARCH" "pertisk-proxy-build:$ARCH"
   for bin in "${PACKAGE_BINARIES[@]}"; do
-    docker cp "extract-proxy-$ARCH:/app/out/${bin}" "./${bin}-linux-${ARCH}" 2>/dev/null || {
-      echo "Error: binary $bin not found in build image" >&2
-      docker rm "extract-proxy-$ARCH"
+    if [ ! -f "${extract_dir}/${bin}" ]; then
+      echo "Error: binary $bin not found in build output" >&2
+      ls -la "$extract_dir" >&2 || true
+      rm -rf "$extract_dir"
       exit 1
-    }
+    fi
+    if ! is_valid_linux_binary "${extract_dir}/${bin}" "$ARCH"; then
+      echo "Error: docker build produced wrong architecture for $bin" >&2
+      command -v file >/dev/null 2>&1 && file "${extract_dir}/${bin}" >&2 || true
+      rm -rf "$extract_dir" "${cache_dir}"
+      exit 1
+    fi
+    cp "${extract_dir}/${bin}" "./${bin}-linux-${ARCH}"
     chmod +x "./${bin}-linux-${ARCH}"
   done
-  docker rm "extract-proxy-$ARCH"
+  rm -rf "$extract_dir"
 }
 
 need_rebuild=0
@@ -145,6 +158,7 @@ for bin in "${PACKAGE_BINARIES[@]}"; do
   if [ -f "$artifact" ] && ! is_valid_linux_binary "$artifact" "$ARCH"; then
     echo "Removing stale $artifact (not Linux/$ARCH)..."
     rm -f "$artifact" "$version_stamp"
+    rm -rf "${CACHE_DIR}/${ARCH}"
   fi
   if [ ! -f "$artifact" ]; then
     need_rebuild=1
