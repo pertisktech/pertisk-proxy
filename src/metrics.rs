@@ -355,6 +355,16 @@ pub async fn start_metrics_server(addr: SocketAddr, metrics: ProxyMetrics) -> an
 mod tests {
     use super::*;
     use http::Version;
+    use std::sync::Mutex;
+
+    static METRICS_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn restore_env_var(key: &str, previous: Option<String>) {
+        match previous {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
 
     #[test]
     fn counters_increment_and_export() {
@@ -408,17 +418,27 @@ mod tests {
 
     #[test]
     fn metrics_env_defaults() {
+        let _lock = METRICS_ENV_LOCK.lock().unwrap();
+        let saved_enabled = std::env::var("PERTISK_METRICS_ENABLED").ok();
+        let saved_addr = std::env::var("PERTISK_METRICS_ADDR").ok();
         std::env::remove_var("PERTISK_METRICS_ENABLED");
+        std::env::remove_var("PERTISK_METRICS_ADDR");
+
         let addr = metrics_addr_from_env();
         assert_eq!(addr.port(), 9090);
         assert!(metrics_enabled_from_env());
+
+        restore_env_var("PERTISK_METRICS_ENABLED", saved_enabled);
+        restore_env_var("PERTISK_METRICS_ADDR", saved_addr);
     }
 
     #[test]
     fn metrics_env_can_disable() {
+        let _lock = METRICS_ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("PERTISK_METRICS_ENABLED").ok();
         std::env::set_var("PERTISK_METRICS_ENABLED", "off");
         assert!(!metrics_enabled_from_env());
-        std::env::remove_var("PERTISK_METRICS_ENABLED");
+        restore_env_var("PERTISK_METRICS_ENABLED", saved);
     }
 
     #[test]

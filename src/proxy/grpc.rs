@@ -336,6 +336,16 @@ pub fn grpc_h2_ping_interval() -> std::time::Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static GRPC_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn restore_env_var(key: &str, previous: Option<String>) {
+        match previous {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
 
     #[test]
     fn grpc_web_content_type_is_not_native_grpc() {
@@ -516,8 +526,17 @@ mod tests {
 
     #[test]
     fn grpc_timeouts_from_env_defaults() {
+        let _lock = GRPC_ENV_LOCK.lock().unwrap();
+        let saved_timeout = std::env::var("PERTISK_GRPC_UPSTREAM_REQUEST_TIMEOUT_SECS").ok();
+        let saved_keepalive = std::env::var("PERTISK_GRPC_H2C_KEEPALIVE_SECS").ok();
+        std::env::remove_var("PERTISK_GRPC_UPSTREAM_REQUEST_TIMEOUT_SECS");
+        std::env::remove_var("PERTISK_GRPC_H2C_KEEPALIVE_SECS");
+
         assert_eq!(grpc_upstream_timeout().as_secs(), 3600);
         assert_eq!(grpc_h2_ping_interval().as_secs(), 20);
+
+        restore_env_var("PERTISK_GRPC_UPSTREAM_REQUEST_TIMEOUT_SECS", saved_timeout);
+        restore_env_var("PERTISK_GRPC_H2C_KEEPALIVE_SECS", saved_keepalive);
     }
 
     #[test]
@@ -576,9 +595,11 @@ mod tests {
 
     #[test]
     fn grpc_upstream_timeout_zero_is_max() {
+        let _lock = GRPC_ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("PERTISK_GRPC_UPSTREAM_REQUEST_TIMEOUT_SECS").ok();
         std::env::set_var("PERTISK_GRPC_UPSTREAM_REQUEST_TIMEOUT_SECS", "0");
         assert_eq!(grpc_upstream_timeout(), std::time::Duration::MAX);
-        std::env::remove_var("PERTISK_GRPC_UPSTREAM_REQUEST_TIMEOUT_SECS");
+        restore_env_var("PERTISK_GRPC_UPSTREAM_REQUEST_TIMEOUT_SECS", saved);
     }
 
     #[test]
