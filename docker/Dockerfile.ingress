@@ -1,9 +1,9 @@
 # Build pertisk-proxy-ingress (Kubernetes Ingress + Gateway API controller).
 # TARGETPLATFORM / TARGETARCH are injected by buildx per --platform (do not hardcode defaults).
 #
-# Rust compiles on BUILDPLATFORM (native) and cross-compiles to TARGETARCH when needed,
-# avoiding slow QEMU emulation for arm64 on amd64 hosts.
-# Admin UI builds once on BUILDPLATFORM (node stage), shared across all target arches.
+# All RUN steps execute on BUILDPLATFORM (native on the build host). Cross-compilation
+# uses musl.cc toolchains so arm64 hosts can build amd64 (and vice versa) without QEMU.
+# The final stage is COPY-only (scratch) — no target-platform RUN (avoids exec format error).
 
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
@@ -117,15 +117,31 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
       amd64) file /app/pertisk-proxy-ingress | grep -Eq 'x86-64|Intel 80386' ;; \
       arm64) file /app/pertisk-proxy-ingress | grep -Eq 'aarch64|ARM' ;; \
       *) echo "unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
-    esac
+    esac; \
+    mkdir -p /runtime/etc/ssl/certs /runtime/lib /runtime/usr/local/bin /runtime/usr/share/pertisk-proxy/admin/dist; \
+    apk add --no-cache ca-certificates; \
+    cp /etc/ssl/certs/ca-certificates.crt /runtime/etc/ssl/certs/; \
+    if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
+      case "${TARGETARCH}" in \
+        amd64) sysroot=/opt/x86_64-linux-musl-cross/x86_64-linux-musl ;; \
+        arm64) sysroot=/opt/aarch64-linux-musl-cross/aarch64-linux-musl ;; \
+      esac; \
+      cp -a "${sysroot}/lib/." /runtime/lib/; \
+    else \
+      apk add --no-cache openssl; \
+      for d in /lib /usr/lib; do \
+        for pat in libssl.so* libcrypto.so* ld-musl-*.so*; do \
+          cp -a ${d}/${pat} /runtime/lib/ 2>/dev/null || true; \
+        done; \
+      done; \
+    fi; \
+    cp /app/pertisk-proxy-ingress /runtime/usr/local/bin/pertisk-proxy-ingress; \
+    cp -a /app/admin/dist/. /runtime/usr/share/pertisk-proxy/admin/dist/
 
-FROM alpine:3.21
-
-RUN apk add --no-cache ca-certificates openssl
-
-COPY --from=builder /app/pertisk-proxy-ingress /usr/local/bin/pertisk-proxy-ingress
-COPY --from=admin /admin/dist /usr/share/pertisk-proxy/admin/dist
-
+# COPY-only final stage: works for any --platform without QEMU/binfmt on the build host.
+FROM scratch
+COPY --from=builder /runtime /
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 USER 65532:65532
 EXPOSE 8080 8443 8443/udp 9080
 ENTRYPOINT ["/usr/local/bin/pertisk-proxy-ingress"]
