@@ -234,6 +234,12 @@ if [ -n "$PLATFORMS" ]; then
       -t "${IMAGE}:latest" \
       "${platform_tags[@]}"
   fi
+  # Verify per-arch tags before trusting the merged manifest (catches cache mix-ups).
+  for platform in "${PLATFORM_LIST[@]}"; do
+    platform="${platform// /}"
+    arch="${platform#linux/}"
+    verify_ingress_manifest "${VERSION}-${arch}" "$platform"
+  done
   verify_ingress_manifest "${VERSION}" "${PLATFORM_LIST[@]}"
 else
   case "$(uname -m)" in

@@ -56,11 +56,16 @@ COPY docker/ingress-build.sh /usr/local/sbin/ingress-build
 ARG CARGO_BUILD_JOBS
 ENV pertisk_proxy_VERSION=${VERSION}
 ENV RUST_MIN_STACK=16777216
+ENV TARGETPLATFORM=${TARGETPLATFORM}
+ENV TARGETARCH=${TARGETARCH}
+ENV BUILDARCH=${BUILDARCH}
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-ingress-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-ingress-git-${TARGETPLATFORM} \
     --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-ingress-target-${TARGETPLATFORM} \
-    chmod +x /usr/local/sbin/ingress-build && ingress-build
+    chmod +x /usr/local/sbin/ingress-build \
+    && echo "ingress-build: TARGETPLATFORM=${TARGETPLATFORM} TARGETARCH=${TARGETARCH} BUILDARCH=${BUILDARCH}" \
+    && ingress-build
 
 # COPY-only final stage: works for any --platform without QEMU/binfmt on the build host.
 FROM scratch

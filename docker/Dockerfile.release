@@ -45,11 +45,16 @@ ARG VERSION=0.1.0
 ENV pertisk_proxy_VERSION=${VERSION}
 ENV RUST_MIN_STACK=16777216
 ENV PACKAGE_TARGET=${PACKAGE_TARGET}
+ENV TARGETPLATFORM=${TARGETPLATFORM}
+ENV TARGETARCH=${TARGETARCH}
+ENV BUILDARCH=${BUILDARCH}
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-proxy-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-proxy-git-${TARGETPLATFORM} \
     --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-proxy-target-${TARGETPLATFORM} \
-    chmod +x /usr/local/sbin/release-build && release-build
+    chmod +x /usr/local/sbin/release-build \
+    && echo "release-build: TARGETPLATFORM=${TARGETPLATFORM} TARGETARCH=${TARGETARCH} BUILDARCH=${BUILDARCH}" \
+    && release-build
 
 # Export binaries for buildx -o type=local (works cross-arch; --load does not).
 FROM scratch AS artifacts

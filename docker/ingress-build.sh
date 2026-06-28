@@ -4,10 +4,20 @@
 # x86_64-hosted and cannot run on arm64 build hosts.
 set -eu
 
-case "${TARGETPLATFORM:-}" in
-  linux/arm64|linux/arm64/*) TARGETARCH=arm64 ;;
-  linux/amd64|linux/amd64/*) TARGETARCH=amd64 ;;
-esac
+# TARGETARCH is passed via --build-arg; derive from TARGETPLATFORM if missing.
+if [ -z "${TARGETARCH:-}" ]; then
+  case "${TARGETPLATFORM:-}" in
+    linux/arm64|linux/arm64/*) TARGETARCH=arm64 ;;
+    linux/amd64|linux/amd64/*) TARGETARCH=amd64 ;;
+  esac
+fi
+
+if [ -z "${TARGETARCH:-}" ]; then
+  echo "ingress-build: TARGETARCH is required (use buildx --platform or --build-arg TARGETARCH=...)" >&2
+  exit 1
+fi
+
+echo "ingress-build: BUILDARCH=${BUILDARCH:-?} TARGETARCH=${TARGETARCH} TARGETPLATFORM=${TARGETPLATFORM:-?}"
 
 JOBS="${CARGO_BUILD_JOBS:-$(nproc)}"
 export CARGO_BUILD_JOBS="${JOBS}"
@@ -18,21 +28,24 @@ case "${TARGETARCH}" in
   *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;;
 esac
 
+rustup target add "${RUST_TARGET}"
+
 if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then
-  rustup target add "${RUST_TARGET}"
   cargo zigbuild --release --locked --target "${RUST_TARGET}" \
     --bin pertisk-proxy-ingress --features ingress
-  TARGET_DIR="/app/target/${RUST_TARGET}/release"
 else
-  cargo build --release --locked --bin pertisk-proxy-ingress --features ingress
-  TARGET_DIR="/app/target/release"
+  cargo build --release --locked --target "${RUST_TARGET}" \
+    --bin pertisk-proxy-ingress --features ingress
 fi
+TARGET_DIR="/app/target/${RUST_TARGET}/release"
 
 cp "${TARGET_DIR}/pertisk-proxy-ingress" /app/pertisk-proxy-ingress
 
+file_out="$(file /app/pertisk-proxy-ingress)"
+echo "ingress-build: binary=${file_out}"
 case "${TARGETARCH}" in
-  amd64) file /app/pertisk-proxy-ingress | grep -Eq 'x86-64|Intel 80386' ;;
-  arm64) file /app/pertisk-proxy-ingress | grep -Eq 'aarch64|ARM' ;;
+  amd64) echo "$file_out" | grep -Eq 'x86-64|Intel 80386' || { echo "wrong arch for amd64: $file_out" >&2; exit 1; } ;;
+  arm64) echo "$file_out" | grep -Eq 'aarch64|ARM' || { echo "wrong arch for arm64: $file_out" >&2; exit 1; } ;;
 esac
 
 mkdir -p /runtime/etc/ssl/certs /runtime/lib /runtime/usr/local/bin /runtime/usr/share/pertisk-proxy/admin/dist
