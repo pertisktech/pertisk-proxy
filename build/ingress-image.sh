@@ -29,6 +29,8 @@ if [ -n "$PUSH" ] && [ -z "$PLATFORMS" ]; then
   PLATFORMS="$DEFAULT_PLATFORMS"
 fi
 BUILDER_NAME="${BUILDER_NAME:-pertisk-proxy-multiarch}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
+PARALLEL_PLATFORMS="${PARALLEL_PLATFORMS:-1}"
 CACHE_DIR="${CACHE_DIR:-.buildx-cache/ingress}"
 CACHE_DIR_NEW="${CACHE_DIR_NEW:-.buildx-cache/ingress-new}"
 CACHE_IMAGE="${CACHE_IMAGE:-${IMAGE}:buildcache}"
@@ -79,7 +81,7 @@ if [ "$CACHE_BACKEND" = "auto" ]; then
   fi
 fi
 
-echo "Build config: platforms='${PLATFORMS:-single-arch}', dockerfile=${DOCKERFILE}, cache_backend=${CACHE_BACKEND}, push=${PUSH:-0}"
+echo "Build config: platforms='${PLATFORMS:-single-arch}', dockerfile=${DOCKERFILE}, cache_backend=${CACHE_BACKEND}, push=${PUSH:-0}, cargo_jobs=${CARGO_BUILD_JOBS}, parallel=${PARALLEL_PLATFORMS}"
 
 use_local_cache=0
 cache_args=()
@@ -134,6 +136,64 @@ verify_ingress_manifest() {
   done
 }
 
+build_ingress_platform() {
+  local platform="$1"
+  platform="${platform// /}"
+  local arch="${platform#linux/}"
+  local platform_tag="${IMAGE}:${VERSION}-${arch}"
+  local platform_cache="${CACHE_IMAGE}-${arch}"
+  local -a per_platform_cache_args=()
+
+  case "$CACHE_BACKEND" in
+    registry)
+      per_platform_cache_args+=(--cache-from "type=registry,ref=${platform_cache}")
+      per_platform_cache_args+=(--cache-to "type=registry,ref=${platform_cache},mode=max,ignore-error=true")
+      ;;
+    local)
+      mkdir -p "${CACHE_DIR}/${arch}"
+      rm -rf "${CACHE_DIR_NEW}/${arch}"
+      per_platform_cache_args+=(--cache-from "type=local,src=${CACHE_DIR}/${arch}")
+      per_platform_cache_args+=(--cache-to "type=local,dest=${CACHE_DIR_NEW}/${arch},mode=max,ignore-error=true")
+      ;;
+    both)
+      mkdir -p "${CACHE_DIR}/${arch}"
+      rm -rf "${CACHE_DIR_NEW}/${arch}"
+      per_platform_cache_args+=(--cache-from "type=registry,ref=${platform_cache}")
+      per_platform_cache_args+=(--cache-to "type=registry,ref=${platform_cache},mode=max,ignore-error=true")
+      per_platform_cache_args+=(--cache-from "type=local,src=${CACHE_DIR}/${arch}")
+      per_platform_cache_args+=(--cache-to "type=local,dest=${CACHE_DIR_NEW}/${arch},mode=max,ignore-error=true")
+      ;;
+    none)
+      ;;
+  esac
+
+  echo "Building ${platform} -> ${platform_tag} (native cross-compile, jobs=${CARGO_BUILD_JOBS})"
+  if [ "${#per_platform_cache_args[@]}" -gt 0 ]; then
+    docker buildx build --builder "$BUILDER_NAME" --platform "$platform" -f "$DOCKERFILE" \
+      "${per_platform_cache_args[@]}" \
+      --build-arg "TARGETPLATFORM=${platform}" \
+      --build-arg "TARGETARCH=${arch}" \
+      --build-arg "VERSION=${VERSION}" \
+      --build-arg "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" \
+      --provenance="$PROVENANCE" \
+      --sbom="$SBOM" \
+      -t "$platform_tag" \
+      --push \
+      .
+  else
+    docker buildx build --builder "$BUILDER_NAME" --platform "$platform" -f "$DOCKERFILE" \
+      --build-arg "TARGETPLATFORM=${platform}" \
+      --build-arg "TARGETARCH=${arch}" \
+      --build-arg "VERSION=${VERSION}" \
+      --build-arg "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" \
+      --provenance="$PROVENANCE" \
+      --sbom="$SBOM" \
+      -t "$platform_tag" \
+      --push \
+      .
+  fi
+}
+
 if [ -n "$PLATFORMS" ]; then
   if [ -z "$PUSH" ]; then
     echo "Error: multi-arch build requires PUSH=1 (manifest cannot be loaded locally)." >&2
@@ -141,57 +201,27 @@ if [ -n "$PLATFORMS" ]; then
   fi
   IFS=',' read -r -a PLATFORM_LIST <<< "$PLATFORMS"
   platform_tags=()
+  build_pids=()
   for platform in "${PLATFORM_LIST[@]}"; do
     platform="${platform// /}"
     arch="${platform#linux/}"
-    platform_tag="${IMAGE}:${VERSION}-${arch}"
-    platform_cache="${CACHE_IMAGE}-${arch}"
-
-    per_platform_cache_args=()
-    case "$CACHE_BACKEND" in
-      registry)
-        per_platform_cache_args+=(--cache-from "type=registry,ref=${platform_cache}")
-        per_platform_cache_args+=(--cache-to "type=registry,ref=${platform_cache},mode=max,ignore-error=true")
-        ;;
-      local)
-        mkdir -p "${CACHE_DIR}/${arch}"
-        rm -rf "${CACHE_DIR_NEW}/${arch}"
-        per_platform_cache_args+=(--cache-from "type=local,src=${CACHE_DIR}/${arch}")
-        per_platform_cache_args+=(--cache-to "type=local,dest=${CACHE_DIR_NEW}/${arch},mode=max,ignore-error=true")
-        ;;
-      both)
-        mkdir -p "${CACHE_DIR}/${arch}"
-        rm -rf "${CACHE_DIR_NEW}/${arch}"
-        per_platform_cache_args+=(--cache-from "type=registry,ref=${platform_cache}")
-        per_platform_cache_args+=(--cache-to "type=registry,ref=${platform_cache},mode=max,ignore-error=true")
-        per_platform_cache_args+=(--cache-from "type=local,src=${CACHE_DIR}/${arch}")
-        per_platform_cache_args+=(--cache-to "type=local,dest=${CACHE_DIR_NEW}/${arch},mode=max,ignore-error=true")
-        ;;
-      none)
-        ;;
-    esac
-
-    echo "Building ${platform} -> ${platform_tag}"
-    if [ "${#per_platform_cache_args[@]}" -gt 0 ]; then
-      docker buildx build --builder "$BUILDER_NAME" --platform "$platform" -f "$DOCKERFILE" \
-        "${per_platform_cache_args[@]}" \
-        --build-arg "VERSION=${VERSION}" \
-        --provenance="$PROVENANCE" \
-        --sbom="$SBOM" \
-        -t "$platform_tag" \
-        --push \
-        .
+    platform_tags+=("${IMAGE}:${VERSION}-${arch}")
+    if [ "$PARALLEL_PLATFORMS" = "1" ] && [ "${#PLATFORM_LIST[@]}" -gt 1 ]; then
+      build_ingress_platform "$platform" &
+      build_pids+=("$!")
     else
-      docker buildx build --builder "$BUILDER_NAME" --platform "$platform" -f "$DOCKERFILE" \
-        --build-arg "VERSION=${VERSION}" \
-        --provenance="$PROVENANCE" \
-        --sbom="$SBOM" \
-        -t "$platform_tag" \
-        --push \
-        .
+      build_ingress_platform "$platform"
     fi
-    platform_tags+=("$platform_tag")
   done
+  if [ "${#build_pids[@]}" -gt 0 ]; then
+    for pid in "${build_pids[@]}"; do
+      wait "$pid"
+    done
+  fi
+  if [ "$use_local_cache" -eq 1 ] && [ -d "$CACHE_DIR_NEW" ]; then
+    rm -rf "$CACHE_DIR"
+    mv "$CACHE_DIR_NEW" "$CACHE_DIR"
+  fi
 
   if [ "${#platform_tags[@]}" -eq 1 ]; then
     docker buildx imagetools create \
@@ -206,9 +236,17 @@ if [ -n "$PLATFORMS" ]; then
   fi
   verify_ingress_manifest "${VERSION}" "${PLATFORM_LIST[@]}"
 else
+  case "$(uname -m)" in
+    x86_64) NATIVE_ARCH=amd64 ;;
+    aarch64|arm64) NATIVE_ARCH=arm64 ;;
+    *) echo "Error: unsupported native arch: $(uname -m)" >&2; exit 1 ;;
+  esac
   docker buildx build --builder "$BUILDER_NAME" --load -f "$DOCKERFILE" \
     "${cache_args[@]}" \
+    --build-arg "TARGETPLATFORM=linux/${NATIVE_ARCH}" \
+    --build-arg "TARGETARCH=${NATIVE_ARCH}" \
     --build-arg "VERSION=${VERSION}" \
+    --build-arg "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" \
     -t "${IMAGE}:${VERSION}" \
     -t "${IMAGE}:latest" \
     .

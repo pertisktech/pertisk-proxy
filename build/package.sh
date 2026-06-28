@@ -13,6 +13,7 @@ TARGET="${3:-all}"
 RELEASE_DIR="release"
 CACHE_DIR="${CACHE_DIR:-.buildx-cache/release}"
 BUILDER_NAME="${BUILDER_NAME:-pertisk-proxy-package}"
+CARGO_JOBS="${PERTISK_CARGO_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 mkdir -p "$RELEASE_DIR"
 
 case "$ARCH" in
@@ -89,8 +90,6 @@ build_native() {
 build_binaries_docker() {
   echo "Building binaries for linux/$ARCH via Docker buildx (target=$TARGET)..."
   export DOCKER_BUILDKIT=1
-  CARGO_JOBS="${PERTISK_CARGO_JOBS:-1}"
-  [ "$ARCH" = "amd64" ] && CARGO_JOBS=4
 
   if docker buildx inspect "$BUILDER_NAME" --bootstrap >/dev/null 2>&1; then
     :
@@ -170,8 +169,6 @@ for bin in "${PACKAGE_BINARIES[@]}"; do
 done
 
 if [ "$need_rebuild" -eq 1 ]; then
-  CARGO_JOBS="${PERTISK_CARGO_JOBS:-1}"
-  [ "$ARCH" = "amd64" ] && CARGO_JOBS=4
 
   if [ "$ARCH" = "$HOST_ARCH" ] && [ "$HOST_OS" = "Linux" ]; then
     HOST_RUST_MINOR="$(host_rust_minor_version)"
