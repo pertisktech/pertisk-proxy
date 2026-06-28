@@ -24,20 +24,9 @@ RUN apk add --no-cache \
     clang-dev \
     go \
     curl \
-    musl-dev
-
-RUN set -eu; \
-    if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
-      case "${TARGETARCH}" in \
-        amd64) curl -fsSL https://musl.cc/x86_64-linux-musl-cross.tgz | tar xz -C /opt ;; \
-        arm64) curl -fsSL https://musl.cc/aarch64-linux-musl-cross.tgz | tar xz -C /opt ;; \
-        *) echo "unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
-      esac; \
-      case "${TARGETARCH}" in \
-        amd64) rustup target add x86_64-unknown-linux-musl ;; \
-        arm64) rustup target add aarch64-unknown-linux-musl ;; \
-      esac; \
-    fi
+    musl-dev \
+    zig \
+    && cargo install cargo-zigbuild --locked
 
 WORKDIR /app
 
@@ -49,66 +38,18 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
     cargo fetch --locked
 
 COPY src ./src
+COPY docker/release-build.sh /usr/local/sbin/release-build
 
 ARG CARGO_BUILD_JOBS
 ARG VERSION=0.1.0
 ENV pertisk_proxy_VERSION=${VERSION}
 ENV RUST_MIN_STACK=16777216
+ENV PACKAGE_TARGET=${PACKAGE_TARGET}
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-proxy-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-proxy-git-${TARGETPLATFORM} \
     --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-proxy-target-${TARGETPLATFORM} \
-    set -eu; \
-    JOBS="${CARGO_BUILD_JOBS:-$(nproc)}"; \
-    export CARGO_BUILD_JOBS="${JOBS}"; \
-    case "${TARGETARCH}" in \
-      amd64) RUST_TARGET=x86_64-unknown-linux-musl ;; \
-      arm64) RUST_TARGET=aarch64-unknown-linux-musl ;; \
-      *) echo "unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
-    esac; \
-    mkdir -p /app/out; \
-    if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
-      export PKG_CONFIG_ALLOW_CROSS=1; \
-      case "${TARGETARCH}" in \
-        amd64) export PATH="/opt/x86_64-linux-musl-cross/bin:${PATH}" ;; \
-        arm64) export PATH="/opt/aarch64-linux-musl-cross/bin:${PATH}" ;; \
-      esac; \
-      case "${TARGETARCH}" in \
-        amd64) \
-          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=x86_64-linux-musl-gcc; \
-          export CC_x86_64_unknown_linux_musl=x86_64-linux-musl-gcc; \
-          export CXX_x86_64_unknown_linux_musl=x86_64-linux-musl-g++; \
-          export AR_x86_64_unknown_linux_musl=x86_64-linux-musl-ar; \
-          ;; \
-        arm64) \
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc; \
-          export CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc; \
-          export CXX_aarch64_unknown_linux_musl=aarch64-linux-musl-g++; \
-          export AR_aarch64_unknown_linux_musl=aarch64-linux-musl-ar; \
-          ;; \
-      esac; \
-      BUILD_FLAGS="--release --locked --target ${RUST_TARGET}"; \
-      TARGET_DIR="/app/target/${RUST_TARGET}/release"; \
-    else \
-      BUILD_FLAGS="--release --locked"; \
-      TARGET_DIR="/app/target/release"; \
-    fi; \
-    case "${PACKAGE_TARGET}" in \
-      proxy) \
-        cargo build ${BUILD_FLAGS} --bin pertisk-proxy; \
-        cp "${TARGET_DIR}/pertisk-proxy" /app/out/pertisk-proxy; \
-        ;; \
-      ingress) \
-        cargo build ${BUILD_FLAGS} --bin pertisk-proxy-ingress --features ingress; \
-        cp "${TARGET_DIR}/pertisk-proxy-ingress" /app/out/pertisk-proxy-ingress; \
-        ;; \
-      *) \
-        cargo build ${BUILD_FLAGS} --bin pertisk-proxy; \
-        cargo build ${BUILD_FLAGS} --bin pertisk-proxy-ingress --features ingress; \
-        cp "${TARGET_DIR}/pertisk-proxy" /app/out/pertisk-proxy; \
-        cp "${TARGET_DIR}/pertisk-proxy-ingress" /app/out/pertisk-proxy-ingress; \
-        ;; \
-    esac
+    chmod +x /usr/local/sbin/release-build && release-build
 
 # Export binaries for buildx -o type=local (works cross-arch; --load does not).
 FROM scratch AS artifacts

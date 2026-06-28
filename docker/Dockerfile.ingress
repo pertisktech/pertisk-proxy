@@ -2,7 +2,8 @@
 # TARGETPLATFORM / TARGETARCH are injected by buildx per --platform (do not hardcode defaults).
 #
 # All RUN steps execute on BUILDPLATFORM (native on the build host). Cross-compilation
-# uses musl.cc toolchains so arm64 hosts can build amd64 (and vice versa) without QEMU.
+# uses cargo-zigbuild (works arm64→amd64 and amd64→arm64). musl.cc -cross toolchains
+# are x86_64-hosted only and fail on arm64 build hosts.
 # The final stage is COPY-only (scratch) — no target-platform RUN (avoids exec format error).
 
 ARG TARGETPLATFORM
@@ -35,24 +36,9 @@ RUN apk add --no-cache \
     go \
     file \
     curl \
-    musl-dev
-
-RUN set -eu; \
-    case "${TARGETPLATFORM}" in \
-      linux/arm64|linux/arm64/*) TARGETARCH=arm64 ;; \
-      linux/amd64|linux/amd64/*) TARGETARCH=amd64 ;; \
-    esac; \
-    if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
-      case "${TARGETARCH}" in \
-        amd64) curl -fsSL https://musl.cc/x86_64-linux-musl-cross.tgz | tar xz -C /opt ;; \
-        arm64) curl -fsSL https://musl.cc/aarch64-linux-musl-cross.tgz | tar xz -C /opt ;; \
-        *) echo "unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
-      esac; \
-      case "${TARGETARCH}" in \
-        amd64) rustup target add x86_64-unknown-linux-musl ;; \
-        arm64) rustup target add aarch64-unknown-linux-musl ;; \
-      esac; \
-    fi
+    musl-dev \
+    zig \
+    && cargo install cargo-zigbuild --locked
 
 WORKDIR /app
 
@@ -65,6 +51,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
 
 COPY src ./src
 COPY --from=admin /admin/dist ./admin/dist
+COPY docker/ingress-build.sh /usr/local/sbin/ingress-build
 
 ARG CARGO_BUILD_JOBS
 ENV pertisk_proxy_VERSION=${VERSION}
@@ -73,70 +60,7 @@ ENV RUST_MIN_STACK=16777216
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-ingress-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-ingress-git-${TARGETPLATFORM} \
     --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-ingress-target-${TARGETPLATFORM} \
-    set -eu; \
-    case "${TARGETPLATFORM}" in \
-      linux/arm64|linux/arm64/*) TARGETARCH=arm64 ;; \
-      linux/amd64|linux/amd64/*) TARGETARCH=amd64 ;; \
-    esac; \
-    JOBS="${CARGO_BUILD_JOBS:-$(nproc)}"; \
-    export CARGO_BUILD_JOBS="${JOBS}"; \
-    case "${TARGETARCH}" in \
-      amd64) RUST_TARGET=x86_64-unknown-linux-musl ;; \
-      arm64) RUST_TARGET=aarch64-unknown-linux-musl ;; \
-      *) echo "unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
-    esac; \
-    if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
-      export PKG_CONFIG_ALLOW_CROSS=1; \
-      case "${TARGETARCH}" in \
-        amd64) export PATH="/opt/x86_64-linux-musl-cross/bin:${PATH}" ;; \
-        arm64) export PATH="/opt/aarch64-linux-musl-cross/bin:${PATH}" ;; \
-      esac; \
-      case "${TARGETARCH}" in \
-        amd64) \
-          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=x86_64-linux-musl-gcc; \
-          export CC_x86_64_unknown_linux_musl=x86_64-linux-musl-gcc; \
-          export CXX_x86_64_unknown_linux_musl=x86_64-linux-musl-g++; \
-          export AR_x86_64_unknown_linux_musl=x86_64-linux-musl-ar; \
-          ;; \
-        arm64) \
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc; \
-          export CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc; \
-          export CXX_aarch64_unknown_linux_musl=aarch64-linux-musl-g++; \
-          export AR_aarch64_unknown_linux_musl=aarch64-linux-musl-ar; \
-          ;; \
-      esac; \
-      BUILD_FLAGS="--release --locked --target ${RUST_TARGET}"; \
-      TARGET_DIR="/app/target/${RUST_TARGET}/release"; \
-    else \
-      BUILD_FLAGS="--release --locked"; \
-      TARGET_DIR="/app/target/release"; \
-    fi; \
-    cargo build ${BUILD_FLAGS} --bin pertisk-proxy-ingress --features ingress; \
-    cp "${TARGET_DIR}/pertisk-proxy-ingress" /app/pertisk-proxy-ingress; \
-    case "${TARGETARCH}" in \
-      amd64) file /app/pertisk-proxy-ingress | grep -Eq 'x86-64|Intel 80386' ;; \
-      arm64) file /app/pertisk-proxy-ingress | grep -Eq 'aarch64|ARM' ;; \
-      *) echo "unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
-    esac; \
-    mkdir -p /runtime/etc/ssl/certs /runtime/lib /runtime/usr/local/bin /runtime/usr/share/pertisk-proxy/admin/dist; \
-    apk add --no-cache ca-certificates; \
-    cp /etc/ssl/certs/ca-certificates.crt /runtime/etc/ssl/certs/; \
-    if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
-      case "${TARGETARCH}" in \
-        amd64) sysroot=/opt/x86_64-linux-musl-cross/x86_64-linux-musl ;; \
-        arm64) sysroot=/opt/aarch64-linux-musl-cross/aarch64-linux-musl ;; \
-      esac; \
-      cp -a "${sysroot}/lib/." /runtime/lib/; \
-    else \
-      apk add --no-cache openssl; \
-      for d in /lib /usr/lib; do \
-        for pat in libssl.so* libcrypto.so* ld-musl-*.so*; do \
-          cp -a ${d}/${pat} /runtime/lib/ 2>/dev/null || true; \
-        done; \
-      done; \
-    fi; \
-    cp /app/pertisk-proxy-ingress /runtime/usr/local/bin/pertisk-proxy-ingress; \
-    cp -a /app/admin/dist/. /runtime/usr/share/pertisk-proxy/admin/dist/
+    chmod +x /usr/local/sbin/ingress-build && ingress-build
 
 # COPY-only final stage: works for any --platform without QEMU/binfmt on the build host.
 FROM scratch
