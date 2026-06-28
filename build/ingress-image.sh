@@ -117,12 +117,17 @@ fi
 
 verify_ingress_manifest() {
   local tag="$1"
-  shift
+  local pull_policy="$2"
+  shift 2
   local platforms=("$@")
-  local platform arch file_out cid
+  local platform arch file_out cid pull_args=()
+  if [ "$pull_policy" = "always" ] || [ "$pull_policy" = "missing" ]; then
+    pull_args=(--pull "$pull_policy")
+  fi
   for platform in "${platforms[@]}"; do
+    platform="${platform// /}"
     arch="${platform#linux/}"
-    cid="$(docker create --platform "$platform" "${IMAGE}:${tag}")"
+    cid="$(docker create "${pull_args[@]}" --platform "$platform" "${IMAGE}:${tag}")"
     docker cp "${cid}:/usr/local/bin/pertisk-proxy-ingress" "/tmp/pertisk-ingress-${arch}" >/dev/null
     docker rm "${cid}" >/dev/null
     file_out="$(file "/tmp/pertisk-ingress-${arch}")"
@@ -132,7 +137,7 @@ verify_ingress_manifest() {
       arm64) echo "$file_out" | grep -Eq 'aarch64|ARM' || { echo "Error: ${IMAGE}:${tag} ${platform} binary check failed: $file_out" >&2; return 1; } ;;
       *) echo "Error: unsupported platform for verify: ${platform}" >&2; return 1 ;;
     esac
-    echo "Verified ${platform} binary: ${file_out}"
+    echo "Verified ${platform} binary (${tag}): ${file_out}"
   done
 }
 
@@ -223,6 +228,13 @@ if [ -n "$PLATFORMS" ]; then
     mv "$CACHE_DIR_NEW" "$CACHE_DIR"
   fi
 
+  # Verify pushed per-arch images before publishing the manifest list.
+  for platform in "${PLATFORM_LIST[@]}"; do
+    platform="${platform// /}"
+    arch="${platform#linux/}"
+    verify_ingress_manifest "${VERSION}-${arch}" "always" "$platform"
+  done
+
   if [ "${#platform_tags[@]}" -eq 1 ]; then
     docker buildx imagetools create \
       -t "${IMAGE}:${VERSION}" \
@@ -234,13 +246,17 @@ if [ -n "$PLATFORMS" ]; then
       -t "${IMAGE}:latest" \
       "${platform_tags[@]}"
   fi
-  # Verify per-arch tags before trusting the merged manifest (catches cache mix-ups).
-  for platform in "${PLATFORM_LIST[@]}"; do
-    platform="${platform// /}"
-    arch="${platform#linux/}"
-    verify_ingress_manifest "${VERSION}-${arch}" "$platform"
-  done
-  verify_ingress_manifest "${VERSION}" "${PLATFORM_LIST[@]}"
+
+  if docker buildx imagetools inspect "${IMAGE}:${VERSION}" >/tmp/pertisk-ingress-manifest-inspect.txt 2>&1; then
+    echo "Published manifest ${IMAGE}:${VERSION}:"
+    grep -E '^Name:|^MediaType:|^Digest:|^Platform:' /tmp/pertisk-ingress-manifest-inspect.txt \
+      || cat /tmp/pertisk-ingress-manifest-inspect.txt
+    rm -f /tmp/pertisk-ingress-manifest-inspect.txt
+  fi
+
+  # Drop stale local manifest copy; re-pull from registry before checking the merged tag.
+  docker rmi "${IMAGE}:${VERSION}" "${IMAGE}:latest" 2>/dev/null || true
+  verify_ingress_manifest "${VERSION}" "always" "${PLATFORM_LIST[@]}"
 else
   case "$(uname -m)" in
     x86_64) NATIVE_ARCH=amd64 ;;
