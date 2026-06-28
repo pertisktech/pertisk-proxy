@@ -1,0 +1,47 @@
+# cloud (Hetzner + floating-IP LB) — IngressClass mode.
+# Deploy: make deploy-cloud VERSION=x.y.z
+#
+# TPS / latency tuning:
+# - runtime.mode=performance, proxyLog=false, logging.level=warn
+# - upstream HTTP/2 pool keeps connections warm to backends
+# - http3.maxStreams >= concurrent clients (k6 VUs)
+#
+# HTTP/3 (QUIC): UDP must reach the same pod for a connection.
+# Use externalTrafficPolicy: Local + sessionAffinity. For k6 HTTP/3 benchmarks
+# pin one replica: REPLICA_COUNT=1 VERSION=x.y.z make deploy-cloud
+
+http3Addr: "0.0.0.0:8443"
+
+service:
+  externalTrafficPolicy: Cluster
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+
+runtime:
+  mode: performance
+  autoWorkerThreads: true
+  maxBlockingThreads: 2048
+  proxyLog: false
+
+logging:
+  level: warn
+  format: json
+
+upstream:
+  poolMaxIdlePerHost: 256
+  poolIdleTimeoutSecs: 90
+  h2KeepaliveSecs: 20
+  h2KeepaliveTimeoutSecs: 10
+
+http3:
+  maxStreams: 2048
+
+resources:
+  limits:
+    cpu: 750m
+    memory: 768Mi
+  requests:
+    cpu: 500m
+    memory: 256Mi

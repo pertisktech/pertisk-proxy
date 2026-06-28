@@ -227,11 +227,13 @@ apply-ingress-rbac:
 	kubectl apply -f deploy/kubernetes-rbac.yaml
 
 # --- Docker: ingress controller image (buildx) ---
-# make docker-ingress              — build local single-arch image
-# make docker-ingress-push         — build + push single-arch
-# make docker-ingress-multi        — build + push linux/amd64,linux/arm64 manifest
-# make deploy-ingress              — docker-ingress-multi + helm upgrade (full pipeline)
+# make docker-ingress              — build local single-arch image (--load, native platform)
+# make docker-ingress-push         — build + push multi-arch manifest (linux/amd64 + linux/arm64)
+# make docker-ingress-multi        — alias for docker-ingress-push
+# make deploy-ingress              — docker-ingress-push + helm upgrade (full pipeline)
+# Kubelet/containerd auto-selects the node arch when pulling a multi-arch tag (no nodeSelector).
 INGRESS_BUILD_PLATFORMS ?= linux/amd64,linux/arm64
+CACHE_BACKEND ?= registry
 HARBOR_INGRESS_IMAGE ?= harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress
 INGRESS_DOCKERFILE ?= docker/Dockerfile.ingress
 
@@ -240,17 +242,11 @@ docker-ingress: admin-dist
 	VERSION="$(VERSION)" HARBOR_INGRESS_IMAGE="$(HARBOR_INGRESS_IMAGE)" \
 		INGRESS_DOCKERFILE="$(INGRESS_DOCKERFILE)" ./build/ingress-image.sh "$(VERSION)"
 
-docker-ingress-push: admin-dist
-	chmod +x build/ingress-image.sh
-	VERSION="$(VERSION)" HARBOR_INGRESS_IMAGE="$(HARBOR_INGRESS_IMAGE)" \
-		INGRESS_DOCKERFILE="$(INGRESS_DOCKERFILE)" PUSH=1 ./build/ingress-image.sh "$(VERSION)"
-	@echo "Pushed $(HARBOR_INGRESS_IMAGE):$(VERSION)"
-
-docker-ingress-multi: admin-dist
+docker-ingress-push docker-ingress-multi: admin-dist
 	chmod +x build/ingress-image.sh
 	VERSION="$(VERSION)" HARBOR_INGRESS_IMAGE="$(HARBOR_INGRESS_IMAGE)" \
 		INGRESS_DOCKERFILE="$(INGRESS_DOCKERFILE)" \
-		PLATFORMS="$(INGRESS_BUILD_PLATFORMS)" CACHE_BACKEND=registry PUSH=1 \
+		PLATFORMS="$(INGRESS_BUILD_PLATFORMS)" CACHE_BACKEND="$(CACHE_BACKEND)" PUSH=1 \
 		./build/ingress-image.sh "$(VERSION)"
 	@echo "Pushed multi-arch ($(INGRESS_BUILD_PLATFORMS)): $(HARBOR_INGRESS_IMAGE):$(VERSION)"
 
@@ -258,8 +254,8 @@ docker-ingress-multi: admin-dist
 HELM_RELEASE ?= pertisk-proxy-ingress
 HELM_NAMESPACE ?= pertisk-proxy
 HELM_INGRESS_VALUES ?= deploy/helm/pertisk-ingress/values.yaml
-# Cloud deploy (deploy-cloud): single platform by default; override for multi-arch push.
-DEPLOY_PLATFORMS ?= linux/amd64
+# Cloud deploy: multi-arch by default (amd64 + arm64). Override e.g. DEPLOY_PLATFORMS=linux/amd64.
+DEPLOY_PLATFORMS ?= linux/amd64,linux/arm64
 deploy-ingress-helm:
 	helm upgrade --install $(HELM_RELEASE) deploy/helm/pertisk-ingress \
 		-n $(HELM_NAMESPACE) --create-namespace \
@@ -284,6 +280,14 @@ deploy-285h:
 	chmod +x deploy/285h.sh
 	VERSION="$(VERSION)" NAMESPACE="$(HELM_NAMESPACE)" RELEASE_NAME="$(HELM_RELEASE)" \
 		DEPLOY_PLATFORMS="$(DEPLOY_PLATFORMS)" ./deploy/285h.sh
+
+# Talos orion cluster deploy. See deploy/orion.sh.
+# make deploy-orion VERSION=1.0.0
+# REPLICA_COUNT=1 VERSION=1.0.0 make deploy-orion
+deploy-orion:
+	chmod +x deploy/orion.sh
+	VERSION="$(VERSION)" NAMESPACE="$(HELM_NAMESPACE)" RELEASE_NAME="$(HELM_RELEASE)" \
+		DEPLOY_PLATFORMS="$(DEPLOY_PLATFORMS)" ./deploy/orion.sh
 
 # Remove legacy pertisk-rproxy ingress release (ClusterRole name collision with release "pertisk-ingress")
 uninstall-legacy-ingress-helm:

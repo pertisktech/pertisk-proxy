@@ -6,6 +6,9 @@
 #   PUSH=1 ./build/ingress-image.sh
 #   PLATFORMS=linux/amd64,linux/arm64 PUSH=1 ./build/ingress-image.sh
 #
+# PUSH=1 defaults to linux/amd64,linux/arm64 so registry tags stay multi-arch manifests.
+# Kubernetes/containerd then auto-selects the node architecture on pull (no nodeSelector needed).
+#
 # Image: ${HARBOR_INGRESS_IMAGE}:${VERSION}
 
 set -euo pipefail
@@ -17,8 +20,14 @@ cd "$REPO_ROOT"
 VERSION="${VERSION:-${1:-0.1.0}}"
 IMAGE="${HARBOR_INGRESS_IMAGE:-harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress}"
 DOCKERFILE="${INGRESS_DOCKERFILE:-docker/Dockerfile.ingress}"
+DEFAULT_PLATFORMS="${DEFAULT_PLATFORMS:-linux/amd64,linux/arm64}"
 PLATFORMS="${PLATFORMS:-}"
 PUSH="${PUSH:-${BUILD_PUSH:-}}"
+
+# Any registry push must publish a manifest list so clusters pull the matching arch automatically.
+if [ -n "$PUSH" ] && [ -z "$PLATFORMS" ]; then
+  PLATFORMS="$DEFAULT_PLATFORMS"
+fi
 BUILDER_NAME="${BUILDER_NAME:-pertisk-proxy-multiarch}"
 CACHE_DIR="${CACHE_DIR:-.buildx-cache/ingress}"
 CACHE_DIR_NEW="${CACHE_DIR_NEW:-.buildx-cache/ingress-new}"
@@ -104,20 +113,98 @@ if [ "$use_local_cache" -eq 1 ]; then
   cache_args+=(--cache-to "type=local,dest=${CACHE_DIR_NEW},mode=max,ignore-error=true")
 fi
 
+verify_ingress_manifest() {
+  local tag="$1"
+  shift
+  local platforms=("$@")
+  local platform arch file_out cid
+  for platform in "${platforms[@]}"; do
+    arch="${platform#linux/}"
+    cid="$(docker create --platform "$platform" "${IMAGE}:${tag}")"
+    docker cp "${cid}:/usr/local/bin/pertisk-proxy-ingress" "/tmp/pertisk-ingress-${arch}" >/dev/null
+    docker rm "${cid}" >/dev/null
+    file_out="$(file "/tmp/pertisk-ingress-${arch}")"
+    rm -f "/tmp/pertisk-ingress-${arch}"
+    case "$arch" in
+      amd64) echo "$file_out" | grep -Eq 'x86-64|Intel 80386' || { echo "Error: ${IMAGE}:${tag} ${platform} binary check failed: $file_out" >&2; return 1; } ;;
+      arm64) echo "$file_out" | grep -Eq 'aarch64|ARM' || { echo "Error: ${IMAGE}:${tag} ${platform} binary check failed: $file_out" >&2; return 1; } ;;
+      *) echo "Error: unsupported platform for verify: ${platform}" >&2; return 1 ;;
+    esac
+    echo "Verified ${platform} binary: ${file_out}"
+  done
+}
+
 if [ -n "$PLATFORMS" ]; then
   if [ -z "$PUSH" ]; then
     echo "Error: multi-arch build requires PUSH=1 (manifest cannot be loaded locally)." >&2
     exit 1
   fi
-  docker buildx build --builder "$BUILDER_NAME" --platform "$PLATFORMS" -f "$DOCKERFILE" \
-    "${cache_args[@]}" \
-    --build-arg "VERSION=${VERSION}" \
-    --provenance="$PROVENANCE" \
-    --sbom="$SBOM" \
-    -t "${IMAGE}:${VERSION}" \
-    -t "${IMAGE}:latest" \
-    --push \
-    .
+  IFS=',' read -r -a PLATFORM_LIST <<< "$PLATFORMS"
+  platform_tags=()
+  for platform in "${PLATFORM_LIST[@]}"; do
+    platform="${platform// /}"
+    arch="${platform#linux/}"
+    platform_tag="${IMAGE}:${VERSION}-${arch}"
+    platform_cache="${CACHE_IMAGE}-${arch}"
+
+    per_platform_cache_args=()
+    case "$CACHE_BACKEND" in
+      registry)
+        per_platform_cache_args+=(--cache-from "type=registry,ref=${platform_cache}")
+        per_platform_cache_args+=(--cache-to "type=registry,ref=${platform_cache},mode=max,ignore-error=true")
+        ;;
+      local)
+        mkdir -p "${CACHE_DIR}/${arch}"
+        rm -rf "${CACHE_DIR_NEW}/${arch}"
+        per_platform_cache_args+=(--cache-from "type=local,src=${CACHE_DIR}/${arch}")
+        per_platform_cache_args+=(--cache-to "type=local,dest=${CACHE_DIR_NEW}/${arch},mode=max,ignore-error=true")
+        ;;
+      both)
+        mkdir -p "${CACHE_DIR}/${arch}"
+        rm -rf "${CACHE_DIR_NEW}/${arch}"
+        per_platform_cache_args+=(--cache-from "type=registry,ref=${platform_cache}")
+        per_platform_cache_args+=(--cache-to "type=registry,ref=${platform_cache},mode=max,ignore-error=true")
+        per_platform_cache_args+=(--cache-from "type=local,src=${CACHE_DIR}/${arch}")
+        per_platform_cache_args+=(--cache-to "type=local,dest=${CACHE_DIR_NEW}/${arch},mode=max,ignore-error=true")
+        ;;
+      none)
+        ;;
+    esac
+
+    echo "Building ${platform} -> ${platform_tag}"
+    if [ "${#per_platform_cache_args[@]}" -gt 0 ]; then
+      docker buildx build --builder "$BUILDER_NAME" --platform "$platform" -f "$DOCKERFILE" \
+        "${per_platform_cache_args[@]}" \
+        --build-arg "VERSION=${VERSION}" \
+        --provenance="$PROVENANCE" \
+        --sbom="$SBOM" \
+        -t "$platform_tag" \
+        --push \
+        .
+    else
+      docker buildx build --builder "$BUILDER_NAME" --platform "$platform" -f "$DOCKERFILE" \
+        --build-arg "VERSION=${VERSION}" \
+        --provenance="$PROVENANCE" \
+        --sbom="$SBOM" \
+        -t "$platform_tag" \
+        --push \
+        .
+    fi
+    platform_tags+=("$platform_tag")
+  done
+
+  if [ "${#platform_tags[@]}" -eq 1 ]; then
+    docker buildx imagetools create \
+      -t "${IMAGE}:${VERSION}" \
+      -t "${IMAGE}:latest" \
+      "${platform_tags[0]}"
+  else
+    docker buildx imagetools create \
+      -t "${IMAGE}:${VERSION}" \
+      -t "${IMAGE}:latest" \
+      "${platform_tags[@]}"
+  fi
+  verify_ingress_manifest "${VERSION}" "${PLATFORM_LIST[@]}"
 else
   docker buildx build --builder "$BUILDER_NAME" --load -f "$DOCKERFILE" \
     "${cache_args[@]}" \
@@ -137,10 +224,15 @@ if [ "$use_local_cache" -eq 1 ] && [ -d "$CACHE_DIR_NEW" ]; then
 fi
 
 echo "Done. Image: ${IMAGE}:${VERSION}"
-if [ -n "$PLATFORMS" ]; then
+if [ -n "$PLATFORMS" ] && [ -n "$PUSH" ]; then
   echo "Pushed multi-arch manifest (${PLATFORMS}): ${IMAGE}:${VERSION}"
+  if docker buildx imagetools inspect "${IMAGE}:${VERSION}" >/tmp/pertisk-ingress-manifest.txt 2>&1; then
+    echo "Registry manifest (kubelet pulls matching platform automatically):"
+    grep -E '^Name:|^MediaType:|^Platform:' /tmp/pertisk-ingress-manifest.txt || cat /tmp/pertisk-ingress-manifest.txt
+    rm -f /tmp/pertisk-ingress-manifest.txt
+  fi
 elif [ -n "$PUSH" ]; then
   echo "Pushed: ${IMAGE}:${VERSION}"
 else
-  echo "Built locally. Push: docker push ${IMAGE}:${VERSION}"
+  echo "Built locally (native arch). Push multi-arch: PUSH=1 ./build/ingress-image.sh ${VERSION}"
 fi

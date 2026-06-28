@@ -1,9 +1,5 @@
 # Build pertisk-proxy-ingress (Kubernetes Ingress + Gateway API controller).
-
-ARG TARGETPLATFORM=linux/amd64
-ARG BUILDPLATFORM=linux/amd64
-ARG TARGETARCH=amd64
-ARG BUILDARCH=amd64
+# TARGETPLATFORM / TARGETARCH are injected by buildx — do not default them to amd64.
 
 FROM node:22-bookworm AS admin
 WORKDIR /admin
@@ -12,11 +8,11 @@ RUN corepack enable && pnpm install --frozen-lockfile
 COPY admin/ ./
 RUN pnpm build
 
-FROM --platform=$BUILDPLATFORM rust:1-bookworm AS builder
+# Build on TARGETPLATFORM so each manifest entry gets a native binary (buildx + QEMU).
+FROM --platform=$TARGETPLATFORM rust:1-bookworm AS builder
 
-ARG TARGETARCH
-ARG BUILDARCH
 ARG TARGETPLATFORM
+ARG TARGETARCH
 ARG VERSION=0.1.0
 
 COPY docker/apt-bookworm-install.sh /usr/local/sbin/apt-bookworm-install
@@ -27,28 +23,8 @@ RUN chmod +x /usr/local/sbin/apt-bookworm-install \
     clang \
     libclang-dev \
     golang-go \
-    nasm
-
-RUN set -eu; \
-    if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
-      case "${TARGETARCH}" in \
-        amd64) \
-          apt-bookworm-install \
-            gcc-x86-64-linux-gnu \
-            libc6-dev-amd64-cross \
-            linux-libc-dev-amd64-cross ;; \
-        arm64) \
-          apt-bookworm-install \
-            gcc-aarch64-linux-gnu \
-            libc6-dev-arm64-cross \
-            linux-libc-dev-arm64-cross ;; \
-        *) echo "unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
-      esac; \
-      case "${TARGETARCH}" in \
-        amd64) rustup target add x86_64-unknown-linux-gnu ;; \
-        arm64) rustup target add aarch64-unknown-linux-gnu ;; \
-      esac; \
-    fi
+    nasm \
+    file
 
 WORKDIR /app
 
@@ -71,41 +47,18 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-ingress-git-${TARGETPLATFORM} \
     --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-ingress-target-${TARGETPLATFORM} \
     set -eu; \
+    cargo build --release --locked --bin pertisk-proxy-ingress --features ingress; \
+    cp /app/target/release/pertisk-proxy-ingress /app/pertisk-proxy-ingress; \
     case "${TARGETARCH}" in \
-      amd64) RUST_TARGET=x86_64-unknown-linux-gnu ;; \
-      arm64) RUST_TARGET=aarch64-unknown-linux-gnu ;; \
+      amd64) file /app/pertisk-proxy-ingress | grep -Eq 'x86-64|Intel 80386' ;; \
+      arm64) file /app/pertisk-proxy-ingress | grep -Eq 'aarch64|ARM' ;; \
       *) echo "unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
-    esac; \
-    if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
-      export PKG_CONFIG_ALLOW_CROSS=1; \
-      case "${TARGETARCH}" in \
-        amd64) \
-          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc; \
-          export CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc; \
-          export CXX_x86_64_unknown_linux_gnu=x86_64-linux-gnu-g++; \
-          export AR_x86_64_unknown_linux_gnu=x86_64-linux-gnu-ar; \
-          export CFLAGS_x86_64_unknown_linux_gnu="-I/usr/x86_64-linux-gnu/include"; \
-          export CXXFLAGS_x86_64_unknown_linux_gnu="-I/usr/x86_64-linux-gnu/include"; \
-          ;; \
-        arm64) \
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc; \
-          export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc; \
-          export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++; \
-          export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar; \
-          export CFLAGS_aarch64_unknown_linux_gnu="-I/usr/aarch64-linux-gnu/include"; \
-          export CXXFLAGS_aarch64_unknown_linux_gnu="-I/usr/aarch64-linux-gnu/include"; \
-          ;; \
-      esac; \
-      BUILD_FLAGS="--release --locked --target ${RUST_TARGET}"; \
-      TARGET_DIR="/app/target/${RUST_TARGET}/release"; \
-    else \
-      BUILD_FLAGS="--release --locked"; \
-      TARGET_DIR="/app/target/release"; \
-    fi; \
-    cargo build ${BUILD_FLAGS} --bin pertisk-proxy-ingress --features ingress; \
-    cp "${TARGET_DIR}/pertisk-proxy-ingress" /app/pertisk-proxy-ingress
+    esac
 
-FROM debian:bookworm-slim
+FROM --platform=$TARGETPLATFORM debian:bookworm-slim
+
+ARG TARGETPLATFORM
+ARG TARGETARCH
 
 COPY docker/apt-bookworm-install.sh /usr/local/sbin/apt-bookworm-install
 RUN chmod +x /usr/local/sbin/apt-bookworm-install \

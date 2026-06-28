@@ -12,13 +12,13 @@ fi
 NAMESPACE="${NAMESPACE:-pertisk-proxy}"
 RELEASE_NAME="${RELEASE_NAME:-pertisk-proxy-ingress}"
 CHART_PATH="${CHART_PATH:-./deploy/helm/pertisk-ingress}"
-CLOUD_VALUES="${CLOUD_VALUES:-./deploy/helm/pertisk-ingress/cloud/values.yaml}"
+CLOUD_VALUES="${CLOUD_VALUES:-./deploy/helm/pertisk-ingress/orion/values.yaml}"
 CRD_DIR="${CRD_DIR:-./deploy/helm/pertisk-ingress/crds}"
 CRD_TIMEOUT="${CRD_TIMEOUT:-180s}"
 APPLY_CRDS="${APPLY_CRDS:-1}"
 WAIT_FOR_CRDS="${WAIT_FOR_CRDS:-0}"
-ADMIN_HOST="${ADMIN_HOST:-admin.cloud.thaidevops.co}"
-ADMIN_TLS_SECRET="${ADMIN_TLS_SECRET:-admin-cloud-tls}"
+ADMIN_HOST="${ADMIN_HOST:-admin.orion.thaidevops.co}"
+ADMIN_TLS_SECRET="${ADMIN_TLS_SECRET:-admin-orion-tls}"
 HELM_TIMEOUT="${HELM_TIMEOUT:-20m}"
 # Build both architectures so arm64 clusters (e.g. Hetzner CAX) and amd64 nodes both work.
 DEPLOY_PLATFORMS="${DEPLOY_PLATFORMS:-linux/amd64,linux/arm64}"
@@ -99,9 +99,6 @@ helm upgrade --install "${RELEASE_NAME}" "${CHART_PATH}" \
   --set gatewayApi.enabled=false \
   --set gatewayClassResource.enabled=false \
   --set ingressClassResource.enabled=true \
-  --set-string service.annotations."pertisk\.tech/floating-ip-enabled"="${FLOATING_IP_ENABLED}" \
-  --set-string service.annotations."pertisk\.tech/floating-ip-family"="${FLOATING_IP_FAMILY}" \
-  --set-string service.annotations."pertisk\.tech/floating-ip-home-location"="${FLOATING_IP_HOME_LOCATION}" \
   --force-conflicts \
   ${OPTIONAL_SET_ARGS+"${OPTIONAL_SET_ARGS[@]}"}
 

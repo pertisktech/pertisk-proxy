@@ -35,9 +35,9 @@ Cloud overrides: `ADMIN_HOST`, `FLOATING_IP_HOME_LOCATION`, `AUTH_SIGNING_SECRET
 **Docker only:**
 
 ```bash
-make docker-ingress-multi VERSION=0.1.0   # linux/amd64 + linux/arm64 → registry
-make docker-ingress VERSION=0.1.0         # local single-arch load
-make docker-ingress-push VERSION=0.1.0    # single-arch push
+make docker-ingress-multi VERSION=0.1.0   # linux/amd64 + linux/arm64 manifest → registry
+make docker-ingress-push VERSION=0.1.0    # alias for docker-ingress-multi
+make docker-ingress VERSION=0.1.0         # local single-arch load (--load, native platform)
 ```
 
 Override registry: `HARBOR_INGRESS_IMAGE=my.registry/pertisk-proxy/ingress make deploy-ingress`
