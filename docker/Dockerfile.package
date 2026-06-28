@@ -1,18 +1,16 @@
 # Linux environment for building .deb and .rpm with fpm (GNU tar, dpkg/rpmbuild).
-# Debian bookworm matches docker/Dockerfile.release and apt-bookworm-install.sh.
-FROM debian:bookworm-slim
+# Alpine matches docker/Dockerfile.release (musl cross-build artifacts).
+FROM alpine:3.21
 
-COPY docker/apt-bookworm-install.sh /usr/local/sbin/apt-bookworm-install
-RUN chmod +x /usr/local/sbin/apt-bookworm-install \
-    && apt-bookworm-install \
-      ca-certificates \
-      curl \
-      ruby \
-      ruby-dev \
-      build-essential \
-      rpm \
-      cpio \
-      zip \
+RUN apk add --no-cache \
+    ca-certificates \
+    curl \
+    ruby \
+    ruby-dev \
+    build-base \
+    rpm \
+    cpio \
+    zip \
     && gem install --no-document fpm
 
 WORKDIR /work

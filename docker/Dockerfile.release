@@ -6,7 +6,7 @@ ARG BUILDPLATFORM=linux/amd64
 ARG TARGETARCH=amd64
 ARG BUILDARCH=amd64
 
-FROM --platform=$BUILDPLATFORM rust:1-bookworm AS builder
+FROM --platform=$BUILDPLATFORM rust:1-alpine AS builder
 
 ARG TARGETARCH
 ARG BUILDARCH
@@ -14,33 +14,29 @@ ARG TARGETPLATFORM
 ARG PACKAGE_TARGET=all
 ARG VERSION=0.1.0
 
-COPY docker/apt-bookworm-install.sh /usr/local/sbin/apt-bookworm-install
-RUN chmod +x /usr/local/sbin/apt-bookworm-install \
-    && apt-bookworm-install \
-    build-essential \
+RUN apk add --no-cache \
+    build-base \
+    pkgconfig \
+    openssl-dev \
+    perl \
     cmake \
     clang \
-    libclang-dev \
-    golang-go
+    clang-dev \
+    go \
+    musl-dev
 
 RUN set -eu; \
     if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
       case "${TARGETARCH}" in \
         amd64) \
-          apt-bookworm-install \
-            gcc-x86-64-linux-gnu \
-            libc6-dev-amd64-cross \
-            linux-libc-dev-amd64-cross ;; \
+          apk add --no-cache x86_64-linux-musl-cross ;; \
         arm64) \
-          apt-bookworm-install \
-            gcc-aarch64-linux-gnu \
-            libc6-dev-arm64-cross \
-            linux-libc-dev-arm64-cross ;; \
+          apk add --no-cache aarch64-linux-musl-cross ;; \
         *) echo "unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
       esac; \
       case "${TARGETARCH}" in \
-        amd64) rustup target add x86_64-unknown-linux-gnu ;; \
-        arm64) rustup target add aarch64-unknown-linux-gnu ;; \
+        amd64) rustup target add x86_64-unknown-linux-musl ;; \
+        arm64) rustup target add aarch64-unknown-linux-musl ;; \
       esac; \
     fi
 
@@ -66,8 +62,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
     --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-proxy-target-${TARGETPLATFORM} \
     set -eu; \
     case "${TARGETARCH}" in \
-      amd64) RUST_TARGET=x86_64-unknown-linux-gnu ;; \
-      arm64) RUST_TARGET=aarch64-unknown-linux-gnu ;; \
+      amd64) RUST_TARGET=x86_64-unknown-linux-musl ;; \
+      arm64) RUST_TARGET=aarch64-unknown-linux-musl ;; \
       *) echo "unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
     esac; \
     mkdir -p /app/out; \
@@ -75,20 +71,16 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
       export PKG_CONFIG_ALLOW_CROSS=1; \
       case "${TARGETARCH}" in \
         amd64) \
-          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc; \
-          export CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc; \
-          export CXX_x86_64_unknown_linux_gnu=x86_64-linux-gnu-g++; \
-          export AR_x86_64_unknown_linux_gnu=x86_64-linux-gnu-ar; \
-          export CFLAGS_x86_64_unknown_linux_gnu="-I/usr/x86_64-linux-gnu/include"; \
-          export CXXFLAGS_x86_64_unknown_linux_gnu="-I/usr/x86_64-linux-gnu/include"; \
+          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=x86_64-linux-musl-gcc; \
+          export CC_x86_64_unknown_linux_musl=x86_64-linux-musl-gcc; \
+          export CXX_x86_64_unknown_linux_musl=x86_64-linux-musl-g++; \
+          export AR_x86_64_unknown_linux_musl=x86_64-linux-musl-ar; \
           ;; \
         arm64) \
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc; \
-          export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc; \
-          export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++; \
-          export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar; \
-          export CFLAGS_aarch64_unknown_linux_gnu="-I/usr/aarch64-linux-gnu/include"; \
-          export CXXFLAGS_aarch64_unknown_linux_gnu="-I/usr/aarch64-linux-gnu/include"; \
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc; \
+          export CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc; \
+          export CXX_aarch64_unknown_linux_musl=aarch64-linux-musl-g++; \
+          export AR_aarch64_unknown_linux_musl=aarch64-linux-musl-ar; \
           ;; \
       esac; \
       BUILD_FLAGS="--release --locked --target ${RUST_TARGET}"; \

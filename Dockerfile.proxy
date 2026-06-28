@@ -1,13 +1,12 @@
-FROM rust:1-bookworm AS builder
+FROM rust:1-alpine AS builder
+RUN apk add --no-cache build-base pkgconfig openssl-dev perl musl-dev
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo build --release --bin pertisk-proxy --features admin,acme,dns-challenge,h3-quinn
 
-FROM debian:bookworm-slim
-COPY docker/apt-bookworm-install.sh /usr/local/sbin/apt-bookworm-install
-RUN chmod +x /usr/local/sbin/apt-bookworm-install \
-    && apt-bookworm-install ca-certificates \
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates openssl \
     && mkdir -p /var/lib/pertisk-proxy/certs
 COPY --from=builder /app/target/release/pertisk-proxy /usr/local/bin/pertisk-proxy
 COPY build/pertisk-proxy.conf /etc/pertisk-proxy/pertisk-proxy.conf

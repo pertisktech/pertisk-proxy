@@ -1,7 +1,7 @@
 # Build pertisk-proxy-ingress (Kubernetes Ingress + Gateway API controller).
 # TARGETPLATFORM / TARGETARCH are injected by buildx — do not default them to amd64.
 
-FROM node:22-bookworm AS admin
+FROM node:22-alpine AS admin
 WORKDIR /admin
 COPY admin/package.json admin/pnpm-lock.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile
@@ -9,22 +9,24 @@ COPY admin/ ./
 RUN pnpm build
 
 # Build on TARGETPLATFORM so each manifest entry gets a native binary (buildx + QEMU).
-FROM --platform=$TARGETPLATFORM rust:1-bookworm AS builder
+FROM --platform=$TARGETPLATFORM rust:1-alpine AS builder
 
 ARG TARGETPLATFORM
 ARG TARGETARCH
 ARG VERSION=0.1.0
 
-COPY docker/apt-bookworm-install.sh /usr/local/sbin/apt-bookworm-install
-RUN chmod +x /usr/local/sbin/apt-bookworm-install \
-    && apt-bookworm-install \
-    build-essential \
+RUN apk add --no-cache \
+    build-base \
+    pkgconfig \
+    openssl-dev \
+    perl \
     cmake \
     clang \
-    libclang-dev \
-    golang-go \
+    clang-dev \
+    go \
     nasm \
-    file
+    file \
+    musl-dev
 
 WORKDIR /app
 
@@ -55,14 +57,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
       *) echo "unsupported TARGETARCH: ${TARGETARCH}"; exit 1 ;; \
     esac
 
-FROM --platform=$TARGETPLATFORM debian:bookworm-slim
+FROM --platform=$TARGETPLATFORM alpine:3.21
 
 ARG TARGETPLATFORM
 ARG TARGETARCH
 
-COPY docker/apt-bookworm-install.sh /usr/local/sbin/apt-bookworm-install
-RUN chmod +x /usr/local/sbin/apt-bookworm-install \
-    && apt-bookworm-install ca-certificates
+RUN apk add --no-cache ca-certificates openssl
 
 COPY --from=builder /app/pertisk-proxy-ingress /usr/local/bin/pertisk-proxy-ingress
 COPY --from=admin /admin/dist /usr/share/pertisk-proxy/admin/dist
