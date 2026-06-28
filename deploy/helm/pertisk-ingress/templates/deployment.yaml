@@ -73,6 +73,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.labels['app.kubernetes.io/instance']
+            - name: PERTISK_HELM_SERVICE_NAME
+              value: {{ include "pertisk-ingress.fullname" . | quote }}
             - name: PERTISK_HELM_NAMESPACE
               value: {{ default .Release.Namespace .Values.helm.namespace | quote }}
             - name: PERTISK_HELM_HISTORY_MAX

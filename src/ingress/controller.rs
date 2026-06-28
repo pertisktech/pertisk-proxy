@@ -849,19 +849,25 @@ fn is_self_management_service(service_name: &str, namespace: &str, port: u16) ->
     if port != crate::api::management_addr().port() {
         return false;
     }
-    let Some(release) = std::env::var("PERTISK_HELM_RELEASE")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-    else {
-        return false;
-    };
     let helm_ns = std::env::var("PERTISK_HELM_NAMESPACE")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "pertisk-proxy".to_string());
-    service_name == release && namespace == helm_ns
+    if namespace != helm_ns {
+        return false;
+    }
+    if let Ok(service) = std::env::var("PERTISK_HELM_SERVICE_NAME") {
+        let service = service.trim();
+        if !service.is_empty() && service_name == service {
+            return true;
+        }
+    }
+    std::env::var("PERTISK_HELM_RELEASE")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .is_some_and(|release| service_name == release)
 }
 
 fn upstreams_from_backend(

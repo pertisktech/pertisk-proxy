@@ -52,25 +52,41 @@ impl RouteTable {
     }
 
     pub fn match_route_entry(&self, host: &str, path: &str) -> Option<&Route> {
-        let host = normalize_host(host);
-
-        if let Some(routes) = self.routes.get(&host) {
-            if let Some(route) = find_route(routes, path) {
-                return Some(route);
-            }
-        }
-
-        if let Some(routes) = self.routes.get("*") {
-            return find_route(routes, path);
-        }
-
-        None
+        let routes = self.routes_for_host(host)?;
+        find_route(routes, path)
     }
 
-    /// True when the host has at least one route or a `*` catch-all is configured.
+    /// True when the host has at least one route (exact, wildcard, or `*` catch-all).
     pub fn has_host(&self, host: &str) -> bool {
         let host = normalize_host(host);
-        !host.is_empty() && (self.routes.contains_key(&host) || self.routes.contains_key("*"))
+        !host.is_empty() && self.routes_for_host(&host).is_some()
+    }
+
+    fn routes_for_host(&self, host: &str) -> Option<&Vec<Route>> {
+        let host = normalize_host(host);
+        if host.is_empty() {
+            return None;
+        }
+
+        if let Some(routes) = self.routes.get(&host) {
+            return Some(routes);
+        }
+
+        let mut best: Option<(usize, &Vec<Route>)> = None;
+        for (key, routes) in &self.routes {
+            if key.starts_with("*.") && crate::proxy_config::wildcard_covers_host(key, &host) {
+                let suffix = key.strip_prefix('*').unwrap_or(key);
+                let score = suffix.len();
+                if best.as_ref().map(|(s, _)| *s).unwrap_or(0) < score {
+                    best = Some((score, routes));
+                }
+            }
+        }
+        if let Some((_, routes)) = best {
+            return Some(routes);
+        }
+
+        self.routes.get("*")
     }
 
     pub fn all_routes(&self) -> impl Iterator<Item = (&String, &Route)> {
@@ -456,6 +472,63 @@ mod tests {
             }],
         )]));
         assert!(table.match_route("unknown.host", "/any").is_some());
+    }
+
+    #[test]
+    fn subdomain_wildcard_host_routes() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "*.orion.thaidevops.co".into(),
+            vec![Route {
+                path: "/".into(),
+                path_type: PathMatchType::Prefix,
+                backend: Backend {
+                    address: "10.1.1.183:443".into(),
+                    port: 443,
+                    use_tls: true,
+                },
+                middlewares: vec![],
+            }],
+        )]));
+        assert!(table.match_route("app.orion.thaidevops.co", "/").is_some());
+        assert!(table.has_host("app.orion.thaidevops.co"));
+        assert!(!table.match_route("orion.thaidevops.co", "/").is_some());
+        assert!(!table.match_route("a.b.orion.thaidevops.co", "/").is_some());
+    }
+
+    #[test]
+    fn exact_host_beats_wildcard() {
+        let table = RouteTable::from_routes(HashMap::from([
+            (
+                "*.example.com".into(),
+                vec![Route {
+                    path: "/".into(),
+                    path_type: PathMatchType::Prefix,
+                    backend: Backend {
+                        address: "wildcard:80".into(),
+                        port: 80,
+                        use_tls: false,
+                    },
+                    middlewares: vec![],
+                }],
+            ),
+            (
+                "app.example.com".into(),
+                vec![Route {
+                    path: "/".into(),
+                    path_type: PathMatchType::Prefix,
+                    backend: Backend {
+                        address: "exact:80".into(),
+                        port: 80,
+                        use_tls: false,
+                    },
+                    middlewares: vec![],
+                }],
+            ),
+        ]));
+        assert_eq!(
+            table.match_route("app.example.com", "/").unwrap().address,
+            "exact:80"
+        );
     }
 
     #[test]
