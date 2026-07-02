@@ -9,7 +9,9 @@ use tracing_subscriber::{fmt, EnvFilter, Registry};
 use crate::log::{LogLevel, ProxyLog, ProxyLogEntry};
 
 pub fn init(ui_log: Option<Arc<ProxyLog>>) {
-    let filter = env_filter(parse_log_level_from_env());
+    let level = parse_log_level_from_env();
+    crate::log::set_min_ui_log_level(tracing_level_to_log_level(level));
+    let filter = env_filter(level);
     let fmt_layer = fmt::layer();
 
     if let Some(log) = ui_log {
@@ -128,18 +130,26 @@ fn short_target(target: &str) -> String {
         .to_string()
 }
 
-fn env_filter(default_level: Level) -> EnvFilter {
-    if let Ok(raw) = std::env::var("PERTISK_LOG_LEVEL") {
-        if !raw.trim().is_empty() {
-            let level = parse_log_level(&raw);
-            if let Ok(filter) = EnvFilter::try_new(&build_filter_spec(level)) {
-                return filter;
-            }
-        }
+fn env_filter(level: Level) -> EnvFilter {
+    if std::env::var("PERTISK_LOG_LEVEL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .is_some()
+    {
+        return EnvFilter::try_new(&build_filter_spec(level))
+            .unwrap_or_else(|_| EnvFilter::new(build_filter_spec(Level::INFO)));
     }
-
     EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(build_filter_spec(default_level)))
+        .unwrap_or_else(|_| EnvFilter::new(build_filter_spec(level)))
+}
+
+fn tracing_level_to_log_level(level: Level) -> LogLevel {
+    match level {
+        Level::ERROR => LogLevel::Error,
+        Level::WARN => LogLevel::Warn,
+        Level::INFO => LogLevel::Info,
+        Level::DEBUG | Level::TRACE => LogLevel::Debug,
+    }
 }
 
 /// Suppresses Pingora listener noise (TLS/H2 handshake probes, scanners, early client close).
@@ -216,6 +226,7 @@ mod tests {
             build_filter_spec(Level::INFO),
             "info,pingora_core::services::listening=off,pingora_core::apps=off,pingora_proxy=warn"
         );
+        assert_eq!(build_filter_spec(Level::WARN), "warn,pingora_core::services::listening=off,pingora_core::apps=off,pingora_proxy=warn");
         assert_eq!(build_filter_spec(Level::DEBUG), "debug");
     }
 

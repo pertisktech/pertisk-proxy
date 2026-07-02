@@ -824,6 +824,7 @@ async fn get_logs(
 ) -> Json<Vec<ProxyLogEntry>> {
     let mut entries = state.proxy_log.recent(500).await;
     entries.retain(|e| e.entry_type != crate::log::LogEntryType::Request);
+    entries.retain(|e| crate::log::ui_log_enabled(e.level));
 
     if let Some(ref t) = q.log_type {
         match t.as_str() {

@@ -1,9 +1,13 @@
 //! In-memory proxy and system log for the management UI.
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+
+/// Minimum severity stored in the UI log buffer (`PERTISK_LOG_LEVEL`).
+static MIN_UI_LOG_LEVEL: AtomicU8 = AtomicU8::new(LogLevel::Info as u8);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProxyLogEntry {
@@ -25,13 +29,31 @@ pub struct ProxyLogEntry {
     pub method: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Debug,
     Info,
     Warn,
     Error,
+}
+
+/// Apply `PERTISK_LOG_LEVEL` to the in-memory UI log buffer (HTTP + system tabs).
+pub fn set_min_ui_log_level(level: LogLevel) {
+    MIN_UI_LOG_LEVEL.store(level as u8, Ordering::Relaxed);
+}
+
+pub fn min_ui_log_level() -> LogLevel {
+    match MIN_UI_LOG_LEVEL.load(Ordering::Relaxed) {
+        x if x == LogLevel::Debug as u8 => LogLevel::Debug,
+        x if x == LogLevel::Info as u8 => LogLevel::Info,
+        x if x == LogLevel::Warn as u8 => LogLevel::Warn,
+        _ => LogLevel::Error,
+    }
+}
+
+pub fn ui_log_enabled(level: LogLevel) -> bool {
+    level >= min_ui_log_level()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -247,6 +269,9 @@ impl ProxyLog {
     }
 
     pub fn push_sync(&self, entry: ProxyLogEntry) {
+        if !ui_log_enabled(entry.level) {
+            return;
+        }
         if let Ok(mut g) = self.inner.lock() {
             g.entries.push(entry);
             if g.entries.len() > self.max_entries {
@@ -267,5 +292,30 @@ impl ProxyLog {
 
     pub fn len(&self) -> usize {
         self.inner.lock().map(|g| g.entries.len()).unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_log_level_filters_by_severity() {
+        set_min_ui_log_level(LogLevel::Warn);
+        assert!(!ui_log_enabled(LogLevel::Info));
+        assert!(!ui_log_enabled(LogLevel::Debug));
+        assert!(ui_log_enabled(LogLevel::Warn));
+        assert!(ui_log_enabled(LogLevel::Error));
+        set_min_ui_log_level(LogLevel::Info);
+    }
+
+    #[test]
+    fn push_sync_respects_min_level() {
+        set_min_ui_log_level(LogLevel::Warn);
+        let log = ProxyLog::new(10);
+        log.push_sync(ProxyLogEntry::config_reload("reload"));
+        log.push_sync(ProxyLogEntry::error("boom"));
+        assert_eq!(log.len(), 1);
+        set_min_ui_log_level(LogLevel::Info);
     }
 }
