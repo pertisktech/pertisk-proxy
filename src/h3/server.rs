@@ -268,11 +268,34 @@ async fn handle_proxied_request(
     let body = read_request_body(&mut recv).await?;
 
     let mut upstream_req = client.request(req.method().clone(), plan.upstream_url);
+    let oci_registry = crate::proxy::registry::is_oci_registry_path(path);
     for (name, value) in req.headers().iter() {
         if name == http::header::HOST {
             continue;
         }
+        if oci_registry
+            && (name == http::header::COOKIE
+                || name.as_str().eq_ignore_ascii_case("x-forwarded-host")
+                || name.as_str().eq_ignore_ascii_case("x-forwarded-port")
+                || name.as_str().eq_ignore_ascii_case("x-forwarded-proto")
+                || name.as_str().eq_ignore_ascii_case("x-forwarded-ssl")
+                || name.as_str().eq_ignore_ascii_case("x-real-ip")
+                || name.as_str().eq_ignore_ascii_case("x-forwarded-for"))
+        {
+            continue;
+        }
         upstream_req = upstream_req.header(name, value);
+    }
+    if oci_registry {
+        for (name, value) in crate::proxy::registry::registry_upstream_header_pairs(
+            &host,
+            req.method(),
+            path,
+            None,
+            true,
+        ) {
+            upstream_req = upstream_req.header(name, value);
+        }
     }
     for (name, value) in &plan.middleware.request_headers {
         upstream_req = upstream_req.header(name.as_str(), value.as_str());
@@ -303,7 +326,20 @@ async fn handle_proxied_request(
         if name == http::header::SERVER {
             continue;
         }
-        response = response.header(name, value);
+        if oci_registry && name == http::header::SET_COOKIE {
+            continue;
+        }
+        let value_str = value.to_str().unwrap_or_default();
+        let out = if oci_registry && name == http::header::LOCATION {
+            crate::proxy::registry::rewrite_registry_location_value(value_str, true)
+                .unwrap_or_else(|| value_str.to_string())
+        } else {
+            value_str.to_string()
+        };
+        response = response.header(name, out.as_str());
+    }
+    if oci_registry {
+        response = response.header("Alt-Svc", "clear");
     }
     for (name, value) in &plan.middleware.response_headers {
         response = response.header(name.as_str(), value.as_str());

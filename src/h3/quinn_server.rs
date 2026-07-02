@@ -340,12 +340,36 @@ async fn handle_request_inner(
     let body_len = body.len() as u64;
     let bytes_received = bytes_received.saturating_add(body_len);
 
+    let path = req.uri().path();
+    let oci_registry = crate::proxy::registry::is_oci_registry_path(path);
     let mut upstream_req = client.request(req.method().clone(), plan.upstream_url);
     for (name, value) in req.headers().iter() {
         if name == HOST {
             continue;
         }
+        if oci_registry
+            && (name == http::header::COOKIE
+                || name.as_str().eq_ignore_ascii_case("x-forwarded-host")
+                || name.as_str().eq_ignore_ascii_case("x-forwarded-port")
+                || name.as_str().eq_ignore_ascii_case("x-forwarded-proto")
+                || name.as_str().eq_ignore_ascii_case("x-forwarded-ssl")
+                || name.as_str().eq_ignore_ascii_case("x-real-ip")
+                || name.as_str().eq_ignore_ascii_case("x-forwarded-for"))
+        {
+            continue;
+        }
         upstream_req = upstream_req.header(name, value);
+    }
+    if oci_registry {
+        for (name, value) in crate::proxy::registry::registry_upstream_header_pairs(
+            &host,
+            req.method(),
+            path,
+            None,
+            true,
+        ) {
+            upstream_req = upstream_req.header(name, value);
+        }
     }
     for (name, value) in &plan.middleware.request_headers {
         upstream_req = upstream_req.header(name.as_str(), value.as_str());
@@ -378,6 +402,18 @@ async fn handle_request_inner(
     }
     headers.insert(http::header::SERVER, http::HeaderValue::from_static("pertisk-proxy/h3"));
     crate::apply_app_name(&mut headers);
+    if oci_registry {
+        headers.remove(http::header::SET_COOKIE);
+        headers.insert("Alt-Svc", http::HeaderValue::from_static("clear"));
+        if let Some(loc) = headers.get(http::header::LOCATION).and_then(|v| v.to_str().ok()) {
+            if let Some(https) = crate::proxy::registry::rewrite_registry_location_value(loc, true)
+            {
+                if let Ok(v) = http::HeaderValue::from_str(&https) {
+                    headers.insert(http::header::LOCATION, v);
+                }
+            }
+        }
+    }
     for (name, value) in &plan.middleware.response_headers {
         if let (Ok(n), Ok(v)) = (
             http::HeaderName::from_bytes(name.as_bytes()),

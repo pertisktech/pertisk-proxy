@@ -2,6 +2,7 @@ pub mod routes;
 pub mod forward;
 pub mod apply;
 pub mod grpc;
+pub mod registry;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -31,6 +32,7 @@ pub struct RequestCtx {
     pub is_grpc: bool,
     pub is_grpc_web: bool,
     pub is_long_lived_stream: bool,
+    pub is_registry: bool,
     pub log_started: Option<Instant>,
     pub log_upstream: Option<String>,
     pub metrics_counted: bool,
@@ -45,6 +47,7 @@ impl From<crate::proxy::forward::MiddlewareAction> for RequestCtx {
             is_grpc: false,
             is_grpc_web: false,
             is_long_lived_stream: false,
+            is_registry: false,
             log_started: None,
             log_upstream: None,
             metrics_counted: false,
@@ -182,6 +185,10 @@ impl ProxyHttp for Gateway {
         );
         ctx.is_long_lived_stream =
             grpc::is_long_lived_api_stream(&req.method, req.uri.path(), &req.headers);
+        ctx.is_registry = registry::is_oci_registry_path(req.uri.path());
+        if ctx.is_registry {
+            registry::prepare_registry_downstream_session(session);
+        }
         if is_grpc {
             ctx.is_grpc = true;
             ctx.is_grpc_web = is_grpc_web;
@@ -291,10 +298,12 @@ impl ProxyHttp for Gateway {
             let is_grpc = ctx.is_grpc;
             let is_grpc_web = ctx.is_grpc_web;
             let is_long_lived_stream = ctx.is_long_lived_stream;
+            let is_registry = ctx.is_registry;
             *ctx = plan.middleware.into();
             ctx.is_grpc = is_grpc;
             ctx.is_grpc_web = is_grpc_web;
             ctx.is_long_lived_stream = is_long_lived_stream;
+            ctx.is_registry = is_registry;
         }
 
         if ctx.is_grpc {
@@ -332,10 +341,12 @@ impl ProxyHttp for Gateway {
             let is_grpc = ctx.is_grpc;
             let is_grpc_web = ctx.is_grpc_web;
             let is_long_lived_stream = ctx.is_long_lived_stream;
+            let is_registry = ctx.is_registry;
             *ctx = plan.middleware.into();
             ctx.is_grpc = is_grpc;
             ctx.is_grpc_web = is_grpc_web;
             ctx.is_long_lived_stream = is_long_lived_stream;
+            ctx.is_registry = is_registry;
         }
 
         let peer = Box::new(configure_upstream_peer(
@@ -360,7 +371,7 @@ impl ProxyHttp for Gateway {
             upstream_request.insert_header("Host", host.as_str()).ok();
         }
 
-        if is_downstream_tls(session) {
+        if !ctx.is_registry && is_downstream_tls(session) {
             upstream_request.insert_header("X-Forwarded-Proto", "https").ok();
             upstream_request.insert_header("X-Forwarded-Host", host.as_str()).ok();
         }
@@ -393,6 +404,24 @@ impl ProxyHttp for Gateway {
         }
 
         grpc::merge_cookie_headers(upstream_request);
+
+        if registry::is_oci_registry_path(upstream_request.uri.path()) {
+            registry::normalize_registry_token_request(upstream_request);
+            let method = upstream_request.method.clone();
+            let path = upstream_request.uri.path().to_string();
+            let client_ip = session
+                .client_addr()
+                .and_then(|a| a.as_inet().map(|addr| addr.ip().to_string()));
+            let tls = is_downstream_tls(session);
+            registry::prepare_registry_upstream_request(
+                upstream_request,
+                &method,
+                &path,
+                &host,
+                client_ip.as_deref(),
+                tls,
+            );
+        }
 
         if ctx.is_grpc || ctx.is_long_lived_stream {
             grpc::prepare_upstream_streaming_request(upstream_request);
@@ -440,7 +469,13 @@ impl ProxyHttp for Gateway {
             .insert_header("X-App-Name", crate::app_name())
             .ok();
 
-        if let Some(alt_svc) = alt_svc_header_value(self.enable_h3, self.h3_port, &host, ctx) {
+        let path = session.req_header().uri.path();
+        if registry::is_oci_registry_path(path) {
+            registry::prepare_registry_response_headers(
+                upstream_response,
+                is_downstream_tls(session),
+            );
+        } else if let Some(alt_svc) = alt_svc_header_value(self.enable_h3, self.h3_port, &host, ctx) {
             upstream_response.insert_header("Alt-Svc", alt_svc.as_str()).ok();
         } else if is_downstream_tls(session) {
             upstream_response.insert_header("Alt-Svc", "clear").ok();
@@ -605,6 +640,13 @@ fn configure_upstream_peer(
             peer.options.write_timeout = Some(timeout);
             peer.options.idle_timeout = Some(timeout);
         }
+    } else if ctx.is_registry {
+        let timeout = registry::registry_upstream_timeout();
+        if timeout != std::time::Duration::MAX {
+            peer.options.read_timeout = Some(timeout);
+            peer.options.write_timeout = Some(timeout);
+            peer.options.idle_timeout = Some(timeout);
+        }
     }
     peer
 }
@@ -626,6 +668,15 @@ fn protocol_short(label: &str) -> &str {
 }
 
 fn is_downstream_tls(session: &Session) -> bool {
+    if session
+        .as_downstream()
+        .digest()
+        .and_then(|d| d.ssl_digest.as_ref())
+        .is_some()
+    {
+        return true;
+    }
+
     if session.as_downstream().is_http2() {
         return true;
     }
