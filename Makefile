@@ -1,8 +1,8 @@
 .PHONY: build build-ingress build-all run run-release run-ingress run-ingress-release \
 	test check package package-clean package-amd64 package-arm64 package-deb package-rpm \
 	package-proxy package-ingress release release-amd release-arm \
-	deploy-package deploy-package-ingress deploy-remote \
-	deploy-deb deploy-deb-ingress deploy-deb-arm deploy-rpm deploy-rpm-ingress deploy-rpm-arm apply-ingress-rbac \
+	deploy deploy-package deploy-package-ingress deploy-remote \
+	deploy-deb deploy-deb-ingress deploy-deb-arm deploy-rpm deploy-rpm-ingress deploy-rpm-arm deploy-rpm-arm64 apply-ingress-rbac \
 	deploy-ingress-helm deploy-ingress deploy-cloud deploy-285h uninstall-legacy-ingress-helm \
 	docker-ingress docker-ingress-push docker-ingress-multi \
 	install-admin admin-dist fix-perms dev dev-vite dev-serve dev-admin dev-stop
@@ -32,9 +32,9 @@ PACKAGE_TARGET ?= all
 BUILDER_NAME ?= pertisk-proxy-package
 CACHE_DIR ?= .buildx-cache/release
 
-# Remote deploy (make deploy-package DEPLOY_HOST=user@host)
+# Remote deploy — use DEPLOY_HOST=user@host or REMOTE_USER + REMOTE_HOST
 DEPLOY_HOST ?=
-DEPLOY_ARCH ?= amd64
+DEPLOY_ARCH ?= auto
 # Map DEPLOY_ARCH (amd64|arm64) to package arch names
 RPM_ARCH = $(if $(filter arm64,$(DEPLOY_ARCH)),aarch64,x86_64)
 DEB_ARCH = $(DEPLOY_ARCH)
@@ -294,14 +294,33 @@ uninstall-legacy-ingress-helm:
 	helm uninstall pertisk-ingress -n pertisk-rproxy 2>/dev/null || true
 	@echo "If ClusterRole pertisk-ingress remains, delete manually: kubectl delete clusterrole pertisk-ingress clusterrolebinding pertisk-ingress"
 
-# Remote install DEB/RPM over SSH
+# --- Deploy (build package + install on remote host) ---
+# Primary: make deploy DEPLOY_HOST=user@host VERSION=0.1.0
+# AlmaLinux ARM64: make deploy-rpm DEPLOY_HOST=almalinux@10.1.1.233 VERSION=0.2.26
+#   (DEPLOY_ARCH=auto detects aarch64 via SSH; override with DEPLOY_ARCH=amd64|arm64)
+# Or:      make deploy-deb DEPLOY_HOST=user@host
+#          make deploy-rpm DEPLOY_HOST=user@host
+#          make deploy-rpm-arm64 DEPLOY_HOST=almalinux@host VERSION=0.2.26
+
+deploy:
+	@$(MAKE) deploy-package DEPLOY_HOST="$(DEPLOY_HOST)" REMOTE_HOST="$(REMOTE_HOST)" \
+		DEPLOY_ARCH="$(DEPLOY_ARCH)" DEPLOY_PKG="$(DEPLOY_PKG)" \
+		DEPLOY_SSH_OPTS="$(DEPLOY_SSH_OPTS)" VERSION="$(VERSION)" \
+		PACKAGE_BUILD="$(PACKAGE_BUILD)" PACKAGE_CLEAN="$(PACKAGE_CLEAN)"
+
 deploy-package:
-ifndef DEPLOY_HOST
-	$(error DEPLOY_HOST is required. Usage: make deploy-package DEPLOY_HOST=user@host)
-endif
-	chmod +x build/deploy-remote.sh
-	DEPLOY_HOST="$(DEPLOY_HOST)" DEPLOY_ARCH="$(DEPLOY_ARCH)" DEPLOY_BIN="$(DEPLOY_BIN)" \
+	@host="$(DEPLOY_HOST)"; \
+	if [ -z "$$host" ] && [ -n "$(REMOTE_HOST)" ]; then \
+		host="$(REMOTE_USER)@$(REMOTE_HOST)"; \
+	fi; \
+	if [ -z "$$host" ]; then \
+		echo "DEPLOY_HOST is required. Usage: make deploy DEPLOY_HOST=user@host VERSION=0.1.0"; \
+		exit 1; \
+	fi; \
+	chmod +x build/deploy-remote.sh; \
+	DEPLOY_HOST="$$host" DEPLOY_ARCH="$(DEPLOY_ARCH)" DEPLOY_BIN="$(DEPLOY_BIN)" \
 		DEPLOY_PKG="$(DEPLOY_PKG)" DEPLOY_SSH_OPTS="$(DEPLOY_SSH_OPTS)" VERSION="$(VERSION)" \
+		PACKAGE_BUILD="$(PACKAGE_BUILD)" PACKAGE_CLEAN="$(PACKAGE_CLEAN)" \
 		./build/deploy-remote.sh
 
 deploy-package-ingress:
@@ -309,16 +328,14 @@ deploy-package-ingress:
 
 deploy-remote: deploy-package
 
-# Build package + deploy DEB/RPM (primary deployment path)
-#   make deploy-rpm REMOTE_HOST=10.1.1.233 REMOTE_USER=almalinux VERSION=0.1.88
-#   make deploy-rpm-arm REMOTE_HOST=10.1.1.233 REMOTE_USER=almalinux VERSION=0.1.88
-#   make deploy-rpm DEPLOY_ARCH=arm64 REMOTE_HOST=...   # same as deploy-rpm-arm
 deploy-deb:
 	chmod +x build/deploy-deb.sh
-	REMOTE_HOST="$(REMOTE_HOST)" REMOTE_USER="$(REMOTE_USER)" VERSION="$(VERSION)" \
-		PACKAGE_NAME="$(PACKAGE_NAME)" DEB_ARCH="$(DEB_ARCH)" \
+	DEPLOY_HOST="$(DEPLOY_HOST)" REMOTE_HOST="$(REMOTE_HOST)" REMOTE_USER="$(REMOTE_USER)" \
+		VERSION="$(VERSION)" PACKAGE_NAME="$(PACKAGE_NAME)" \
 		REMOTE_PATH="$(REMOTE_PATH)" PACKAGE_CLEAN="$(PACKAGE_CLEAN)" \
-		PACKAGE_BUILD="$(PACKAGE_BUILD)" ./build/deploy-deb.sh
+		PACKAGE_BUILD="$(PACKAGE_BUILD)" DEPLOY_ARCH="$(DEPLOY_ARCH)" \
+		DEPLOY_SSH_OPTS="$(DEPLOY_SSH_OPTS)" \
+		./build/deploy-deb.sh
 
 deploy-deb-ingress:
 	$(MAKE) deploy-deb PACKAGE_NAME=pertisk-proxy-ingress
@@ -328,15 +345,17 @@ deploy-deb-arm:
 
 deploy-rpm:
 	chmod +x build/deploy-rpm.sh
-	REMOTE_HOST="$(REMOTE_HOST)" REMOTE_USER="$(REMOTE_USER)" VERSION="$(VERSION)" \
-		PACKAGE_NAME="$(PACKAGE_NAME)" RPM_ARCH="$(RPM_ARCH)" \
+	DEPLOY_HOST="$(DEPLOY_HOST)" REMOTE_HOST="$(REMOTE_HOST)" REMOTE_USER="$(REMOTE_USER)" \
+		VERSION="$(VERSION)" PACKAGE_NAME="$(PACKAGE_NAME)" \
 		REMOTE_PATH="$(REMOTE_PATH)" PACKAGE_CLEAN="$(PACKAGE_CLEAN)" \
-		PACKAGE_BUILD="$(PACKAGE_BUILD)" ./build/deploy-rpm.sh
+		PACKAGE_BUILD="$(PACKAGE_BUILD)" DEPLOY_ARCH="$(DEPLOY_ARCH)" \
+		DEPLOY_SSH_OPTS="$(DEPLOY_SSH_OPTS)" \
+		./build/deploy-rpm.sh
 
 deploy-rpm-ingress:
 	$(MAKE) deploy-rpm PACKAGE_NAME=pertisk-proxy-ingress
 
-deploy-rpm-arm:
+deploy-rpm-arm deploy-rpm-arm64:
 	$(MAKE) deploy-rpm DEPLOY_ARCH=arm64
 
 # Delete a tag (local and remote).

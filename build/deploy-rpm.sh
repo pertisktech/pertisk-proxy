@@ -2,14 +2,14 @@
 
 set -euo pipefail
 
-# Build amd64 RPM, copy to remote host, install via dnf/yum/rpm.
+# Build RPM, copy to remote host, install via dnf/yum/rpm.
 #
 # Usage:
-#   REMOTE_HOST=10.1.1.15 REMOTE_USER=root VERSION=0.5.66 ./build/deploy-rpm.sh
-#   PACKAGE_TARGET=ingress REMOTE_HOST=10.1.1.15 VERSION=0.5.66 ./build/deploy-rpm.sh
+#   DEPLOY_HOST=user@host VERSION=0.5.66 ./build/deploy-rpm.sh
+#   PACKAGE_TARGET=ingress DEPLOY_HOST=user@host VERSION=0.5.66 ./build/deploy-rpm.sh
 #
 # Env:
-#   REMOTE_HOST      — remote server (default: 10.1.1.8)
+#   REMOTE_HOST      — remote server
 #   REMOTE_USER      — SSH user (default: root)
 #   VERSION          — package version (default: git describe)
 #   PACKAGE_NAME     — pertisk-proxy (default) or pertisk-proxy-ingress
@@ -17,10 +17,12 @@ set -euo pipefail
 #   REMOTE_PATH      — remote upload dir (default: /tmp)
 #   PACKAGE_CLEAN    — 1 (default) run make package-clean before build
 #   PACKAGE_BUILD    — 1 (default) build package; 0 = deploy existing release/*.rpm
-#   RPM_ARCH         — x86_64 (default) or aarch64
-#   DEPLOY_ARCH      — amd64 or arm64 (maps to RPM_ARCH when RPM_ARCH unset)
+#   DEPLOY_ARCH      — auto (default), amd64, or arm64 (auto = detect via SSH)
+#   RPM_ARCH         — x86_64 or aarch64 (derived from DEPLOY_ARCH unless set)
+#   DEPLOY_HOST      — user@host (overrides REMOTE_USER + REMOTE_HOST)
+#   DEPLOY_SSH_OPTS  — extra ssh/scp options
 
-REMOTE_HOST="${REMOTE_HOST:-10.1.1.8}"
+REMOTE_HOST="${REMOTE_HOST:-}"
 REMOTE_USER="${REMOTE_USER:-root}"
 PACKAGE_NAME="${PACKAGE_NAME:-pertisk-proxy}"
 RAW_PACKAGE_VERSION="${1:-${PACKAGE_VERSION:-${VERSION:-$(git describe --tags --always 2>/dev/null | sed 's/^v//' || echo '0.1.0')}}}"
@@ -29,13 +31,21 @@ VERSION="${VERSION#V}"
 REMOTE_PATH="${REMOTE_PATH:-/tmp}"
 PACKAGE_CLEAN="${PACKAGE_CLEAN:-1}"
 PACKAGE_BUILD="${PACKAGE_BUILD:-1}"
-if [[ -z "${RPM_ARCH:-}" && -n "${DEPLOY_ARCH:-}" ]]; then
-  case "$DEPLOY_ARCH" in
-    arm64) RPM_ARCH=aarch64 ;;
-    amd64) RPM_ARCH=x86_64 ;;
-  esac
+DEPLOY_ARCH="${DEPLOY_ARCH:-auto}"
+DEPLOY_SSH_OPTS="${DEPLOY_SSH_OPTS:-}"
+RPM_ARCH="${RPM_ARCH:-}"
+
+# shellcheck source=deploy-common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/deploy-common.sh"
+resolve_deploy_host
+resolve_deploy_arch
+
+if [ -z "${REMOTE_HOST:-}" ]; then
+  echo "REMOTE_HOST or DEPLOY_HOST is required. Usage: DEPLOY_HOST=user@host ./build/deploy-rpm.sh" >&2
+  exit 1
 fi
-RPM_ARCH="${RPM_ARCH:-x86_64}"
+
+REMOTE_HOST="${REMOTE_HOST}"
 
 case "$PACKAGE_NAME" in
   pertisk-proxy-ingress)
@@ -46,6 +56,17 @@ case "$PACKAGE_NAME" in
     PACKAGE_NAME="${PACKAGE_NAME:-pertisk-proxy}"
     ;;
 esac
+
+if [ -z "$RPM_ARCH" ]; then
+  case "$DEPLOY_ARCH" in
+    amd64) RPM_ARCH=x86_64 ;;
+    arm64) RPM_ARCH=aarch64 ;;
+    *)
+      echo "DEPLOY_ARCH must be auto, amd64, or arm64 (got: $DEPLOY_ARCH)" >&2
+      exit 1
+      ;;
+  esac
+fi
 
 case "$RPM_ARCH" in
   x86_64) DEB_ARCH=amd64 ;;
@@ -93,10 +114,12 @@ if [[ ! -f "release/${RPM_FILE}" ]]; then
 fi
 
 log_info "Copying package to ${REMOTE_USER}@${REMOTE_HOST}..."
-scp "release/${RPM_FILE}" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}/"
+# shellcheck disable=SC2086
+scp $DEPLOY_SSH_OPTS "release/${RPM_FILE}" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}/"
 
 log_info "Installing package on remote server..."
-ssh "${REMOTE_USER}@${REMOTE_HOST}" <<EOF
+# shellcheck disable=SC2086
+ssh $DEPLOY_SSH_OPTS "${REMOTE_USER}@${REMOTE_HOST}" <<EOF
 set -euo pipefail
 PKG_PATH="${REMOTE_PATH}/${RPM_FILE}"
 
