@@ -178,12 +178,7 @@ pub async fn run(
     let (endpoint, bound_addr) = bind_quinn_endpoint(Arc::clone(&cert_store), &config.udp_listen)?;
     info!(%bound_addr, "HTTP/3 (QUIC/Quinn) listening");
 
-    let client = Client::builder()
-        .pool_max_idle_per_host(64)
-        .pool_idle_timeout(Duration::from_secs(90))
-        .tcp_keepalive(Duration::from_secs(60))
-        .danger_accept_invalid_certs(true)
-        .build()?;
+    let client = crate::h3::upstream_client::build_upstream_client()?;
 
     loop {
         match endpoint.accept().await {

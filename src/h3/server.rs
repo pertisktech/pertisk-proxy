@@ -115,12 +115,7 @@ pub async fn run(router: Arc<Router>, config: H3Config, runtime_cfg: &RuntimeCon
     )
     .context("failed to create QUIC listener")?;
 
-    let client = Client::builder()
-        .pool_max_idle_per_host(64)
-        .pool_idle_timeout(Duration::from_secs(90))
-        .tcp_keepalive(Duration::from_secs(60))
-        .danger_accept_invalid_certs(true)
-        .build()?;
+    let client = crate::h3::upstream_client::build_upstream_client()?;
 
     for mut accept_stream in listeners {
         let router = Arc::clone(&router);

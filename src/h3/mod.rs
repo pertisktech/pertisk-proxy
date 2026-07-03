@@ -1,5 +1,6 @@
 mod bind;
 mod config;
+mod upstream_client;
 
 #[cfg(feature = "h3-quiche")]
 mod headers;
