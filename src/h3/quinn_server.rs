@@ -517,9 +517,9 @@ async fn send_h3_response(
     body: Bytes,
 ) -> Result<()> {
     stream.send_response(h3_resp).await.context("send h3 response headers")?;
-    if !body.is_empty() {
-        stream.send_data(body).await.context("send h3 response body")?;
-    }
+    // Always send a DATA frame (even empty) so the response ends cleanly; skipping
+    // send_data on empty bodies caused curl/clients to see HTTP/3 stream reset (18).
+    stream.send_data(body).await.context("send h3 response body")?;
     stream.finish().await.context("finish h3 response")?;
     Ok(())
 }
@@ -528,17 +528,22 @@ async fn read_h3_request_body(
     stream: &mut h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
     store_body: bool,
 ) -> Result<Bytes> {
-    if !store_body {
-        return Ok(Bytes::new());
-    }
     let mut body = BytesMut::new();
     loop {
         match stream.recv_data().await.context("recv h3 request body")? {
-            Some(mut chunk) => body.extend_from_slice(&chunk.copy_to_bytes(chunk.remaining())),
+            Some(mut chunk) => {
+                if store_body {
+                    body.extend_from_slice(&chunk.copy_to_bytes(chunk.remaining()));
+                }
+            }
             None => break,
         }
     }
-    Ok(body.freeze())
+    Ok(if store_body {
+        body.freeze()
+    } else {
+        Bytes::new()
+    })
 }
 
 fn request_host(req: &http::Request<()>) -> String {
