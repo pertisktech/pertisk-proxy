@@ -99,8 +99,12 @@ build_binaries_docker() {
     docker buildx create --name "$BUILDER_NAME" --driver docker-container --bootstrap
   fi
 
-  mkdir -p "${CACHE_DIR}/${ARCH}"
   local cache_dir="${CACHE_DIR}/${ARCH}"
+  mkdir -p "$cache_dir"
+  local cache_from=()
+  if [ -f "${cache_dir}/index.json" ]; then
+    cache_from=(--cache-from "type=local,src=${cache_dir}")
+  fi
   local extract_dir
   extract_dir="$(mktemp -d)"
   local build_success=0
@@ -108,8 +112,8 @@ build_binaries_docker() {
     if docker buildx build --builder "$BUILDER_NAME" --platform "linux/$ARCH" \
       -f docker/Dockerfile.release \
       --target artifacts \
-      --cache-from "type=local,src=${cache_dir}" \
-      --cache-to "type=local,dest=${cache_dir},mode=max,ignore-error=true" \
+      "${cache_from[@]}" \
+      --cache-to "type=local,dest=${cache_dir},mode=max" \
       --build-arg TARGETPLATFORM="linux/$ARCH" \
       --build-arg TARGETARCH="$ARCH" \
       --build-arg PACKAGE_TARGET="$TARGET" \
@@ -336,10 +340,12 @@ make_pkg_layout() {
 
   if [ "$bin" = "pertisk-proxy-ingress" ]; then
     mkdir -p "pkg-${bin}/etc/pertisk-proxy/kubernetes"
-    [ -f deploy/kubernetes-rbac.yaml ] && \
+    if [ -f deploy/kubernetes-rbac.yaml ]; then
       cp deploy/kubernetes-rbac.yaml "pkg-${bin}/etc/pertisk-proxy/kubernetes/rbac.yaml"
-    [ -f deploy/example-ingress.yaml ] && \
+    fi
+    if [ -f deploy/example-ingress.yaml ]; then
       cp deploy/example-ingress.yaml "pkg-${bin}/etc/pertisk-proxy/kubernetes/example-ingress.yaml"
+    fi
   fi
 }
 
