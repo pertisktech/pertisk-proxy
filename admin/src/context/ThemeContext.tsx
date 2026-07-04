@@ -19,6 +19,10 @@ function getStoredTheme(): Theme {
 function applyTheme(theme: Theme) {
   document.documentElement.classList.remove('light', 'dark');
   document.documentElement.classList.add(theme);
+  document.documentElement.style.colorScheme = theme;
+  document.documentElement.style.removeProperty('background-color');
+  const meta = document.getElementById('theme-color-meta');
+  if (meta) meta.setAttribute('content', theme === 'light' ? '#f4f4fb' : '#0c0d18');
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {

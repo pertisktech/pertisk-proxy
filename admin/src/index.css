@@ -69,7 +69,8 @@ html {
 body {
   margin: 0;
   min-height: 100%;
-  min-height: 100dvh;
+  min-height: 100vh;
+  min-height: -webkit-fill-available;
   background-color: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
@@ -79,9 +80,8 @@ body {
 #root {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  height: 100dvh;
-  overflow: hidden;
+  min-height: 100vh;
+  min-height: -webkit-fill-available;
   background-color: var(--color-bg);
 }
 
@@ -308,16 +308,47 @@ code, pre, textarea.mono {
   }
 }
 
-.auth-page {
+/* Login — fixed backdrop fills Chrome dynamic viewport (no bottom strip) */
+html.auth-route {
+  --color-surface: var(--color-bg);
+}
+
+html.auth-route::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  min-height: 100lvh;
+  background-color: var(--color-bg);
+  pointer-events: none;
+}
+
+html.auth-route body {
+  position: fixed;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+html.auth-route #root {
   position: relative;
-  flex: 1;
+  z-index: 1;
   display: flex;
-  min-height: 0;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
   overflow: auto;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  background: var(--color-bg);
+  -webkit-overflow-scrolling: touch;
+  background: transparent;
 }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }

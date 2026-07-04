@@ -2,13 +2,24 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0c0d18" id="theme-color-meta" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Pertisk-Proxy Admin</title>
     <script>
       (function () {
         var t = localStorage.getItem('pertisk_theme');
-        document.documentElement.classList.add(t === 'light' ? 'light' : 'dark');
+        var light = t === 'light';
+        var bg = light ? '#f4f4fb' : '#0c0d18';
+        document.documentElement.classList.add(light ? 'light' : 'dark');
+        document.documentElement.style.colorScheme = light ? 'light' : 'dark';
+        var meta = document.getElementById('theme-color-meta');
+        if (meta) meta.setAttribute('content', bg);
+        var path = location.pathname.replace(/\/+$/, '') || '/';
+        if (path === '/login') {
+          document.documentElement.classList.add('auth-route');
+          document.body.style.overflow = 'hidden';
+        }
       })();
     </script>
   </head>
