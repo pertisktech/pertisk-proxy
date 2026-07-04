@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Activity, Globe, RefreshCw } from 'lucide-react';
 import { api, type LogEntry } from '@/api/client';
 import { Card } from '@/components/Card';
 import { formatDateTime } from '@/utils/dateFormat';
@@ -9,7 +10,7 @@ type LogKind = 'system' | 'http';
 function levelClass(level?: string) {
   const l = level?.toLowerCase();
   if (l === 'error') return 'text-red-r1';
-  if (l === 'warn') return 'text-muted';
+  if (l === 'warn') return 'text-yellow-y1';
   return 'text-text-secondary';
 }
 
@@ -45,27 +46,27 @@ function LogsTable({ kind, entries }: { kind: LogKind; entries: LogEntry[] }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-border">
       <table className="min-w-full text-sm">
-        <thead className="bg-hover text-left text-text-secondary">
+        <thead className="border-b border-border bg-surface-elevated text-left text-text-secondary">
           <tr>
-            <th className="px-3 py-2 font-medium">Time</th>
-            <th className="px-3 py-2 font-medium">Level</th>
+            <th className="px-3 py-2.5 font-medium">Time</th>
+            <th className="px-3 py-2.5 font-medium">Level</th>
             {isHttp ? (
               <>
-                <th className="px-3 py-2 font-medium">Method</th>
-                <th className="px-3 py-2 font-medium">Proto</th>
-                <th className="px-3 py-2 font-medium">Host</th>
-                <th className="px-3 py-2 font-medium">Path</th>
-                <th className="px-3 py-2 font-medium">Upstream</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 font-medium">Duration</th>
+                <th className="px-3 py-2.5 font-medium">Method</th>
+                <th className="px-3 py-2.5 font-medium">Proto</th>
+                <th className="px-3 py-2.5 font-medium">Host</th>
+                <th className="px-3 py-2.5 font-medium">Path</th>
+                <th className="px-3 py-2.5 font-medium">Upstream</th>
+                <th className="px-3 py-2.5 font-medium">Status</th>
+                <th className="px-3 py-2.5 font-medium">Duration</th>
               </>
             ) : (
               <>
-                <th className="px-3 py-2 font-medium">Type</th>
-                <th className="px-3 py-2 font-medium">Source</th>
+                <th className="px-3 py-2.5 font-medium">Type</th>
+                <th className="px-3 py-2.5 font-medium">Source</th>
               </>
             )}
-            <th className="px-3 py-2 font-medium">Message</th>
+            <th className="px-3 py-2.5 font-medium">Message</th>
           </tr>
         </thead>
         <tbody>
@@ -160,51 +161,15 @@ export function Logs() {
   return (
     <div className="space-y-4">
       <Card className="space-y-4">
-        <div>
-          <h2 className="text-lg font-semibold">Logs</h2>
-          <p className="text-sm text-text-secondary">
-            Startup, config, TLS/H3 warnings, and other tracing output (same as journalctl).
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex rounded-md border border-border p-1">
-            <button
-              type="button"
-              onClick={() => setKind('http')}
-              className={cn(
-                'rounded px-3 py-1.5 text-sm',
-                kind === 'http' ? 'bg-primary text-bg' : 'text-text-secondary hover:bg-hover',
-              )}
-            >
-              HTTP
-            </button>
-            <button
-              type="button"
-              onClick={() => setKind('system')}
-              className={cn(
-                'rounded px-3 py-1.5 text-sm',
-                kind === 'system' ? 'bg-primary text-bg' : 'text-text-secondary hover:bg-hover',
-              )}
-            >
-              System
-            </button>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold">Logs</h2>
+            <p className="text-sm text-text-secondary">
+              HTTP access and system events from the proxy runtime.
+            </p>
           </div>
-
-          {kind === 'http' ? (
-            <div>
-              <label className="mb-1 block text-xs text-text-secondary">Host filter</label>
-              <input
-                type="text"
-                value={hostFilter}
-                onChange={(e) => setHostFilter(e.target.value)}
-                placeholder="example.com"
-                className="rounded-md border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
-              />
-            </div>
-          ) : null}
-
-          <label className="flex items-center gap-2 text-sm text-text-secondary">
+          <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-text-secondary">
+            <RefreshCw size={14} className={cn(autoRefresh && 'text-primary')} />
             <input
               type="checkbox"
               checked={autoRefresh}
@@ -212,6 +177,44 @@ export function Logs() {
             />
             Auto-refresh 3s
           </label>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-4">
+          <div className="tab-bar" role="tablist" aria-label="Log type">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={kind === 'http'}
+              onClick={() => setKind('http')}
+              className={cn('tab-item', kind === 'http' && 'active')}
+            >
+              <Globe size={15} />
+              HTTP
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={kind === 'system'}
+              onClick={() => setKind('system')}
+              className={cn('tab-item', kind === 'system' && 'active')}
+            >
+              <Activity size={15} />
+              System
+            </button>
+          </div>
+
+          {kind === 'http' ? (
+            <div className="min-w-[12rem] flex-1 sm:max-w-xs">
+              <label className="mb-1 block text-xs font-medium text-text-secondary">Host filter</label>
+              <input
+                type="text"
+                value={hostFilter}
+                onChange={(e) => setHostFilter(e.target.value)}
+                placeholder="example.com"
+                className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
+              />
+            </div>
+          ) : null}
         </div>
       </Card>
 

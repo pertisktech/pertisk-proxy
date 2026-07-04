@@ -229,12 +229,24 @@ export function DnsProviders() {
                 </span>
               </div>
               <p className="mt-3 text-xs text-text-secondary">Created {formatDateTime(row.created_at)}</p>
-              <div className="mt-4 flex gap-2">
-                <button type="button" onClick={() => loadFullThenEdit(row.id)} className="flex-1 rounded-md border border-border px-3 py-2 text-sm hover:bg-hover">
-                  <Pencil size={14} className="mr-1 inline" /> Edit
+              <div className="mt-4 icon-actions">
+                <button
+                  type="button"
+                  onClick={() => loadFullThenEdit(row.id)}
+                  className="icon-action"
+                  title="Edit DNS provider"
+                  aria-label="Edit DNS provider"
+                >
+                  <Pencil size={16} />
                 </button>
-                <button type="button" onClick={() => setDeleteRow(row)} className="rounded-md border border-border px-3 py-2 text-sm text-red-r1 hover:bg-hover">
-                  <Trash2 size={14} />
+                <button
+                  type="button"
+                  onClick={() => setDeleteRow(row)}
+                  className="icon-action danger"
+                  title="Remove DNS provider"
+                  aria-label="Remove DNS provider"
+                >
+                  <Trash2 size={16} />
                 </button>
               </div>
             </div>
@@ -248,7 +260,7 @@ export function DnsProviders() {
                 <th className="px-4 py-3 font-medium">{sortBtn('name', 'Name')}</th>
                 <th className="px-4 py-3 font-medium">{sortBtn('type', 'Type')}</th>
                 <th className="px-4 py-3 font-medium">{sortBtn('created', 'Created')}</th>
-                <th className="px-4 py-3 font-medium text-right">Actions</th>
+                <th className="actions-cell px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -261,13 +273,25 @@ export function DnsProviders() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-text-secondary">{formatDateTime(row.created_at)}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex justify-end gap-2">
-                      <button type="button" onClick={() => loadFullThenEdit(row.id)} className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-hover">
-                        Edit
+                  <td className="actions-cell px-4 py-3">
+                    <div className="icon-actions">
+                      <button
+                        type="button"
+                        onClick={() => loadFullThenEdit(row.id)}
+                        className="icon-action"
+                        title="Edit DNS provider"
+                        aria-label="Edit DNS provider"
+                      >
+                        <Pencil size={16} />
                       </button>
-                      <button type="button" onClick={() => setDeleteRow(row)} className="rounded-md border border-border px-3 py-1.5 text-xs text-red-r1 hover:bg-hover">
-                        Remove
+                      <button
+                        type="button"
+                        onClick={() => setDeleteRow(row)}
+                        className="icon-action danger"
+                        title="Remove DNS provider"
+                        aria-label="Remove DNS provider"
+                      >
+                        <Trash2 size={16} />
                       </button>
                     </div>
                   </td>

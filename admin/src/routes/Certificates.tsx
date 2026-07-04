@@ -503,13 +503,24 @@ export function Certificates() {
                       <span>{challengeLabel(tls)}</span>
                     </div>
                   </div>
-                  <div className="mt-4 flex gap-2">
-                    <button type="button" onClick={() => setExpandedId((prev) => (prev === id ? null : id))} className="flex-1 rounded-md border border-border px-3 py-2 text-sm hover:bg-hover">
-                      {expandedId === id ? <ChevronUp size={14} className="mr-1 inline" /> : <ChevronDown size={14} className="mr-1 inline" />}
-                      Details
+                  <div className="mt-4 icon-actions">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedId((prev) => (prev === id ? null : id))}
+                      className="icon-action"
+                      title={expandedId === id ? 'Hide details' : 'Show details'}
+                      aria-label={expandedId === id ? 'Hide details' : 'Show details'}
+                    >
+                      {expandedId === id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                     </button>
-                    <button type="button" onClick={() => setDeleteTls(tls)} className="rounded-md border border-border px-3 py-2 text-sm text-red-r1 hover:bg-hover">
-                      <Trash2 size={14} />
+                    <button
+                      type="button"
+                      onClick={() => setDeleteTls(tls)}
+                      className="icon-action danger"
+                      title="Delete certificate"
+                      aria-label="Delete certificate"
+                    >
+                      <Trash2 size={16} />
                     </button>
                   </div>
                   {expandedId === id ? <div className="mt-4 border-t border-border pt-4">{renderDetails(tls)}</div> : null}
@@ -529,7 +540,7 @@ export function Certificates() {
                 <th className="px-4 py-3 font-medium">{sortBtn('expires', 'Expires')}</th>
                 <th className="px-4 py-3 font-medium">Next renew</th>
                 <th className="px-4 py-3 font-medium">{sortBtn('sites', 'Sites')}</th>
-                <th className="px-4 py-3 font-medium text-right">Actions</th>
+                <th className="actions-cell px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -553,13 +564,25 @@ export function Certificates() {
                       <td className="px-4 py-3">{formatDate(tls.expires_at)}</td>
                       <td className="px-4 py-3">{tls.source?.type === 'acme' ? formatNextRenew(tls.expires_at) : '—'}</td>
                       <td className="px-4 py-3" title={siteDomains.join(', ')}>{siteLabel}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex justify-end gap-2">
-                          <button type="button" onClick={() => setExpandedId(expandedId === id ? null : id)} className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-hover">
-                            Details
+                      <td className="actions-cell px-4 py-3">
+                        <div className="icon-actions">
+                          <button
+                            type="button"
+                            onClick={() => setExpandedId(expandedId === id ? null : id)}
+                            className="icon-action"
+                            title={expandedId === id ? 'Hide details' : 'Show details'}
+                            aria-label={expandedId === id ? 'Hide details' : 'Show details'}
+                          >
+                            {expandedId === id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                           </button>
-                          <button type="button" onClick={() => setDeleteTls(tls)} className="rounded-md border border-border px-3 py-1.5 text-xs text-red-r1 hover:bg-hover">
-                            Delete
+                          <button
+                            type="button"
+                            onClick={() => setDeleteTls(tls)}
+                            className="icon-action danger"
+                            title="Delete certificate"
+                            aria-label="Delete certificate"
+                          >
+                            <Trash2 size={16} />
                           </button>
                         </div>
                       </td>
