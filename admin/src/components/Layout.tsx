@@ -89,10 +89,18 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
   }, [collapsed]);
 
   return (
-    <div className="flex min-h-screen bg-bg text-text">
+    <div className="flex min-h-dvh bg-bg text-text">
+      {open ? (
+        <button
+          type="button"
+          aria-label="Close menu"
+          className="fixed inset-0 z-30 bg-bg/80 lg:hidden"
+          onClick={() => setOpen(false)}
+        />
+      ) : null}
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-border bg-sidebar transition-all duration-200 lg:static lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-40 flex h-dvh w-64 flex-col border-r border-border bg-sidebar transition-all duration-200 lg:static lg:h-auto lg:min-h-dvh lg:translate-x-0',
           collapsed && 'lg:w-16',
           open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
         )}
@@ -145,8 +153,8 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
         )}
       </aside>
 
-      <div className="flex min-h-screen flex-1 flex-col bg-bg">
-        <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-surface px-4">
+      <div className="flex min-h-dvh flex-1 flex-col bg-bg">
+        <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between border-b border-border bg-bg px-4">
           <div className="flex items-center gap-3">
             <button type="button" className="lg:hidden" onClick={() => setOpen((v) => !v)}>
               {open ? <X size={20} /> : <Menu size={20} />}

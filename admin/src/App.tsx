@@ -53,7 +53,7 @@ function Protected({
 
   if (ok === null) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-bg text-text-secondary">
+      <div className="flex min-h-dvh items-center justify-center bg-bg text-text-secondary">
         Loading…
       </div>
     );

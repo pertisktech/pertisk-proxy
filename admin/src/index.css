@@ -28,8 +28,9 @@
   --color-muted: var(--color-naturals-n9);
   --color-sidebar: #090a14;
   --color-primary: var(--color-primary-p3);
-  --color-bg-gradient-start: var(--color-naturals-n0);
-  --color-bg-gradient-end: var(--color-naturals-n1);
+  --color-usage-cpu: var(--color-primary-p3);
+  --color-usage-memory: var(--color-green-g1);
+  --color-usage-storage: var(--color-blue-b1);
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
@@ -49,25 +50,34 @@ html.light {
   --color-muted: #7a7a9a;
   --color-sidebar: #ebebf5;
   --color-primary: #6d3ef5;
-  --color-bg-gradient-start: #f4f4fb;
-  --color-bg-gradient-end: #ffffff;
+  --color-usage-cpu: var(--color-primary);
+  --color-usage-memory: #22c55e;
+  --color-usage-storage: #3b82f6;
 }
 
 * { box-sizing: border-box; }
 
-html { font-size: 15px; }
+html {
+  font-size: 15px;
+  height: -webkit-fill-available;
+  background-color: var(--color-bg);
+}
 
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
   background-color: var(--color-bg);
-  background-image: linear-gradient(180deg, var(--color-bg-gradient-start), var(--color-bg-gradient-end));
   color: var(--color-text);
   font-family: var(--font-sans);
 }
 
 #root {
   min-height: 100vh;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
+  background-color: var(--color-bg);
 }
 
 input, textarea, select, button {

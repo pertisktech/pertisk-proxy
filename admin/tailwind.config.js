@@ -19,6 +19,7 @@ export default {
         'red-r1': 'var(--color-red-r1)',
         'green-g1': 'var(--color-green-g1)',
         'yellow-y1': 'var(--color-yellow-y1)',
+        'blue-b1': 'var(--color-blue-b1)',
       },
       fontFamily: {
         sans: 'var(--font-sans)',

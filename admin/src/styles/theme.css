@@ -18,3 +18,29 @@
   font-size: 0.75rem;
   font-weight: 600;
 }
+
+.usage-bar {
+  margin-top: 0.375rem;
+  height: 0.5rem;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--color-border) 70%, transparent);
+}
+
+.usage-bar-fill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 500ms ease;
+}
+
+.usage-bar-fill--cpu {
+  background: linear-gradient(90deg, var(--color-usage-cpu), color-mix(in srgb, var(--color-usage-cpu) 55%, transparent));
+}
+
+.usage-bar-fill--memory {
+  background: linear-gradient(90deg, var(--color-usage-memory), color-mix(in srgb, var(--color-usage-memory) 55%, transparent));
+}
+
+.usage-bar-fill--storage {
+  background: linear-gradient(90deg, var(--color-usage-storage), color-mix(in srgb, var(--color-usage-storage) 55%, transparent));
+}

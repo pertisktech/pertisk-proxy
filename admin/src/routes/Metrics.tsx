@@ -20,11 +20,13 @@ const POLL_INTERVAL_MS = 5000;
 const MAX_POINTS = 60;
 
 const CHART = {
-  primary: '#9a7bf7',
-  secondary: '#60a5fa',
-  tertiary: '#4ade9b',
-  quaternary: '#fbbf24',
-  warning: '#ff5c56',
+  primary: 'var(--color-primary-p3)',
+  secondary: 'var(--color-blue-b1)',
+  tertiary: 'var(--color-green-g1)',
+  quaternary: 'var(--color-yellow-y1)',
+  cpu: 'var(--color-usage-cpu)',
+  memory: 'var(--color-usage-memory)',
+  storage: 'var(--color-usage-storage)',
 };
 
 interface MetricPoint {
@@ -371,10 +373,10 @@ export function Metrics() {
                 <Area yAxisId="left" type="monotone" dataKey="active_connections" name="Active connections" stroke={CHART.primary} fill="url(#connFill)" strokeWidth={2} isAnimationActive={false} />
                 <Area yAxisId="right" type="monotone" dataKey="log_entries" name="Log entries" stroke={CHART.secondary} fill="url(#logFill)" strokeWidth={2} isAnimationActive={false} />
                 {hasCpu ? (
-                  <Line yAxisId="left" type="monotone" dataKey="cpu_percent" name="CPU %" stroke={CHART.warning} strokeWidth={2} dot={false} isAnimationActive={false} />
+                  <Line yAxisId="left" type="monotone" dataKey="cpu_percent" name="CPU %" stroke={CHART.cpu} strokeWidth={2} dot={false} isAnimationActive={false} />
                 ) : null}
                 {hasMemory ? (
-                  <Line yAxisId="right" type="monotone" dataKey="memory_used_mb" name="Memory (MB)" stroke={CHART.tertiary} strokeWidth={2} dot={false} isAnimationActive={false} />
+                  <Line yAxisId="right" type="monotone" dataKey="memory_used_mb" name="Memory (MB)" stroke={CHART.memory} strokeWidth={2} dot={false} isAnimationActive={false} />
                 ) : null}
               </AreaChart>
             </ResponsiveContainer>

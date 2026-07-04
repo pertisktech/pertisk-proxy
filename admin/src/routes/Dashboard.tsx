@@ -77,18 +77,16 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 }
 
 function UsageBar({ percent, tone }: { percent: number; tone: 'cpu' | 'memory' | 'storage' }) {
-  const fill =
-    tone === 'cpu' ? 'bg-primary' : tone === 'storage' ? 'bg-yellow-y1' : 'bg-green-g1';
   const width = clampPercent(percent).toFixed(1);
   return (
     <div
-      className="mt-1.5 h-2 overflow-hidden rounded-full bg-border"
+      className="usage-bar"
       role="progressbar"
       aria-valuenow={Number(width)}
       aria-valuemin={0}
       aria-valuemax={100}
     >
-      <div className={`h-full rounded-full transition-all duration-500 ${fill}`} style={{ width: `${width}%` }} />
+      <div className={`usage-bar-fill usage-bar-fill--${tone}`} style={{ width: `${width}%` }} />
     </div>
   );
 }
