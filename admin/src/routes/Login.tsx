@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, Lock, Moon, Sun, User } from 'lucide-react';
+import { Check, Eye, EyeOff, Lock, Moon, Sun, User } from 'lucide-react';
 import { api } from '@/api/client';
 import {
   clearToken,
@@ -147,10 +147,14 @@ export function Login() {
                 <label className={styles.remember}>
                   <input
                     type="checkbox"
+                    className={styles.rememberInput}
                     checked={remember}
                     onChange={(e) => setRemember(e.target.checked)}
                   />
-                  Remember password
+                  <span className={styles.rememberBox} aria-hidden="true">
+                    <Check size={12} strokeWidth={3} className={styles.rememberCheck} />
+                  </span>
+                  <span className={styles.rememberLabel}>Remember password</span>
                 </label>
               </div>
 

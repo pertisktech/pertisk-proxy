@@ -174,19 +174,74 @@
 }
 
 .remember {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  font-size: 0.8125rem;
-  color: var(--color-text-secondary);
+  gap: 0.625rem;
   cursor: pointer;
   user-select: none;
 }
 
-.remember input {
-  width: 1rem;
-  height: 1rem;
-  accent-color: var(--color-primary);
+.rememberInput {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 1.125rem;
+  height: 1.125rem;
+  margin: 0;
+  opacity: 0;
+  transform: translateY(-50%);
+  cursor: pointer;
+  z-index: 1;
+}
+
+.rememberBox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  flex-shrink: 0;
+  border: 1.5px solid var(--color-border);
+  border-radius: 0.35rem;
+  background: var(--color-bg);
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.remember:hover .rememberBox {
+  border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-border));
+}
+
+.rememberInput:focus-visible + .rememberBox {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 18%, transparent);
+}
+
+.rememberInput:checked + .rememberBox {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.rememberCheck {
+  color: #fff;
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.rememberInput:checked + .rememberBox .rememberCheck {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.rememberLabel {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  transition: color 0.15s;
+}
+
+.remember:hover .rememberLabel {
+  color: var(--color-text);
 }
 
 .button {
