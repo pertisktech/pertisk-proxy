@@ -48,7 +48,7 @@ export function Login() {
   }
 
   return (
-    <div className="relative flex min-h-dvh items-center justify-center bg-bg p-4">
+    <div className="auth-page">
       <button
         type="button"
         onClick={toggleTheme}

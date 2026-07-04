@@ -65,7 +65,7 @@ function ingressNav(gatewayApiEnabled: boolean): NavItem[] {
   return items;
 }
 
-export function Layout({ onLogout }: { onLogout: () => void }) {
+export function Layout({ onLogout, loading = false }: { onLogout: () => void; loading?: boolean }) {
   const { toggleTheme, isDark } = useTheme();
   const location = useLocation();
   const mode = useMode();
@@ -85,44 +85,40 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
   }, [mode, location.pathname]);
 
   useEffect(() => {
+    setOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
   }, [collapsed]);
 
   return (
-    <div className="flex min-h-dvh bg-bg text-text">
-      {open ? (
-        <button
-          type="button"
-          aria-label="Close menu"
-          className="fixed inset-0 z-30 bg-bg/80 lg:hidden"
-          onClick={() => setOpen(false)}
-        />
-      ) : null}
+    <div className="app-shell text-text">
+      <div
+        className={open ? 'app-sidebar-backdrop open' : 'app-sidebar-backdrop'}
+        aria-hidden={!open}
+        onClick={() => setOpen(false)}
+      />
+
       <aside
-        className={cn(
-          'fixed inset-y-0 left-0 z-40 flex h-dvh w-64 flex-col border-r border-border bg-sidebar transition-all duration-200 lg:static lg:h-auto lg:min-h-dvh lg:translate-x-0',
-          collapsed && 'lg:w-16',
-          open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
-        )}
+        id="app-sidebar"
+        className={cn('app-sidebar', open && 'open', collapsed && 'collapsed')}
       >
-        <div className="relative flex h-16 shrink-0 items-center justify-center border-b border-border px-10">
-          <div className={cn('text-center', collapsed && 'lg:hidden')}>
+        <div className="app-sidebar-header">
+          <div className="app-sidebar-brand-text text-center">
             <div className="font-semibold leading-tight">Pertisk-Proxy</div>
             <div className="text-xs text-text-secondary">{modeLabel}</div>
           </div>
           <button
             type="button"
             onClick={() => setCollapsed((v) => !v)}
-            className={cn(
-              'hidden rounded-md p-1.5 text-text-secondary hover:bg-hover hover:text-text lg:block',
-              !collapsed && 'absolute right-2 top-1/2 -translate-y-1/2',
-            )}
+            className={cn('app-sidebar-collapse-btn', !collapsed && 'anchor-right')}
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             {collapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
           </button>
         </div>
-        <nav className={cn('flex-1 space-y-1 p-3', collapsed && 'lg:px-2')}>
+        <nav className="app-sidebar-nav">
           {nav.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
@@ -130,61 +126,62 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
               end={end}
               title={collapsed ? label : undefined}
               onClick={() => setOpen(false)}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
-                  collapsed && 'lg:justify-center lg:gap-0 lg:px-2',
-                  isActive
-                    ? 'bg-hover font-semibold text-primary'
-                    : 'text-text-secondary hover:bg-hover hover:text-text',
-                )
-              }
+              className={({ isActive }) => cn('app-sidebar-link', isActive && 'active')}
             >
               <Icon size={18} className="shrink-0" />
-              <span className={cn('truncate', collapsed && 'lg:hidden')}>{label}</span>
+              <span className={cn('truncate app-sidebar-link-label')}>{label}</span>
             </NavLink>
           ))}
         </nav>
-        {mode === 'ingress' && management?.ingress_class && (
-          <div className={cn('border-t border-border px-4 py-3 text-xs text-text-secondary', collapsed && 'lg:hidden')}>
+        {mode === 'ingress' && management?.ingress_class ? (
+          <div className="app-sidebar-footer">
             Class: {management.ingress_class}
             {gatewayApiEnabled && management.gateway_class ? ` · GW: ${management.gateway_class}` : null}
           </div>
-        )}
+        ) : null}
       </aside>
 
-      <div className="flex min-h-dvh flex-1 flex-col bg-bg">
-        <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center justify-between border-b border-border bg-bg px-4">
-          <div className="flex items-center gap-3">
-            <button type="button" className="lg:hidden" onClick={() => setOpen((v) => !v)}>
-              {open ? <X size={20} /> : <Menu size={20} />}
-            </button>
-            <h1 className="text-lg font-semibold">{title}</h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="hidden rounded border border-border px-2 py-1 text-xs text-text-secondary sm:inline">
-              {modeLabel}
-            </span>
-            <button
-              type="button"
-              onClick={toggleTheme}
-              className="rounded-md border border-border p-2 hover:bg-hover"
-              title="Toggle theme"
-            >
-              {isDark ? <Sun size={18} /> : <Moon size={18} />}
-            </button>
-            <button
-              type="button"
-              onClick={onLogout}
-              className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-hover"
-            >
-              <LogOut size={16} />
-              Logout
-            </button>
+      <div className={cn('app-content', open && 'sidebar-open')}>
+        <header className="app-content-top">
+          <div className="app-content-top-inner">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                className="inline-flex items-center justify-center lg:hidden"
+                aria-controls="app-sidebar"
+                aria-expanded={open}
+                aria-label={open ? 'Close menu' : 'Open menu'}
+                onClick={() => setOpen((v) => !v)}
+              >
+                {open ? <X size={20} /> : <Menu size={20} />}
+              </button>
+              <h1 className="text-lg font-semibold">{title}</h1>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="hidden rounded border border-border px-2 py-1 text-xs text-text-secondary sm:inline">
+                {modeLabel}
+              </span>
+              <button
+                type="button"
+                onClick={toggleTheme}
+                className="rounded-md border border-border p-2 hover:bg-hover"
+                title="Toggle theme"
+              >
+                {isDark ? <Sun size={18} /> : <Moon size={18} />}
+              </button>
+              <button
+                type="button"
+                onClick={onLogout}
+                className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-hover"
+              >
+                <LogOut size={16} />
+                Logout
+              </button>
+            </div>
           </div>
         </header>
-        <main className="flex-1 overflow-auto bg-bg p-4">
-          <Outlet />
+        <main className="app-main">
+          {loading ? <p className="app-main-status">Loading…</p> : <Outlet />}
         </main>
       </div>
     </div>

@@ -157,7 +157,7 @@ export function Dashboard() {
   );
 
   if (error) return <p className="text-red-r1">{error}</p>;
-  if (!info) return <p className="text-text-secondary">Loading…</p>;
+  if (!info) return <p className="app-main-status">Loading…</p>;
 
   const isIngress = info.mode === 'ingress';
   const systemMemoryPercent =

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { ModeContext, type ApiMode } from '@/context/ModeContext';
@@ -19,12 +19,12 @@ import { Backup } from '@/routes/Backup';
 import { api, type ManagementInfo } from '@/api/client';
 import { clearToken, getToken } from '@/auth';
 
-function Protected({
-  children,
+function AuthGate({
   onAuthed,
+  onLogout,
 }: {
-  children: React.ReactNode;
   onAuthed?: () => void;
+  onLogout: () => void;
 }) {
   const [ok, setOk] = useState<boolean | null>(null);
 
@@ -51,15 +51,9 @@ function Protected({
     if (ok) onAuthed?.();
   }, [ok, onAuthed]);
 
-  if (ok === null) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center bg-bg text-text-secondary">
-        Loading…
-      </div>
-    );
-  }
-  if (!ok) return <Navigate to="/login" replace />;
-  return <>{children}</>;
+  if (ok === false) return <Navigate to="/login" replace />;
+  if (ok === null) return <Layout onLogout={onLogout} loading />;
+  return <Outlet />;
 }
 
 export default function App() {
@@ -98,25 +92,21 @@ export default function App() {
           >
             <Routes>
               <Route path="/login" element={<Login />} />
-              <Route
-                element={
-                  <Protected onAuthed={refreshManagement}>
-                    <Layout onLogout={logout} />
-                  </Protected>
-                }
-              >
-                <Route index element={<Dashboard />} />
-                <Route path="sites" element={<Sites />} />
-                <Route path="sites/ingress" element={<K8sSites k8sPageKind="ingress" />} />
-                <Route path="sites/gateway" element={<Navigate to="/sites/gateway/gateways" replace />} />
-                <Route path="sites/gateway/gateways" element={<Gateways />} />
-                <Route path="sites/gateway/sites" element={<K8sSites k8sPageKind="gateway" />} />
-                <Route path="certificates" element={<Certificates />} />
-                <Route path="dns-providers" element={<DnsProviders />} />
-                <Route path="logs" element={<Logs />} />
-                <Route path="metrics" element={<Metrics />} />
-                <Route path="backup" element={<Backup />} />
-                <Route path="settings" element={<Settings />} />
+              <Route element={<AuthGate onAuthed={refreshManagement} onLogout={logout} />}>
+                <Route element={<Layout onLogout={logout} />}>
+                  <Route index element={<Dashboard />} />
+                  <Route path="sites" element={<Sites />} />
+                  <Route path="sites/ingress" element={<K8sSites k8sPageKind="ingress" />} />
+                  <Route path="sites/gateway" element={<Navigate to="/sites/gateway/gateways" replace />} />
+                  <Route path="sites/gateway/gateways" element={<Gateways />} />
+                  <Route path="sites/gateway/sites" element={<K8sSites k8sPageKind="gateway" />} />
+                  <Route path="certificates" element={<Certificates />} />
+                  <Route path="dns-providers" element={<DnsProviders />} />
+                  <Route path="logs" element={<Logs />} />
+                  <Route path="metrics" element={<Metrics />} />
+                  <Route path="backup" element={<Backup />} />
+                  <Route path="settings" element={<Settings />} />
+                </Route>
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
