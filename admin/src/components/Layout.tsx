@@ -15,12 +15,13 @@ import {
   GitBranch,
   DoorOpen,
   LineChart,
-  PanelLeftClose,
-  PanelLeft,
+  ChevronsLeft,
+  ChevronsRight,
   Archive,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { cn } from '@/utils';
+import { Logo } from '@/components/Logo';
 import { useTheme } from '@/context/ThemeContext';
 import { useGatewayApiEnabled, useManagementInfo } from '@/context/ManagementContext';
 import { useMode } from '@/context/ModeContext';
@@ -105,17 +106,18 @@ export function Layout({ onLogout, loading = false }: { onLogout: () => void; lo
         className={cn('app-sidebar', open && 'open', collapsed && 'collapsed')}
       >
         <div className="app-sidebar-header">
-          <div className="app-sidebar-brand-text text-center">
-            <div className="font-semibold leading-tight">Pertisk-Proxy</div>
-            <div className="text-xs text-text-secondary">{modeLabel}</div>
+          <div className="app-sidebar-brand">
+            <Logo className="app-sidebar-logo" alt="" />
+            <span className="app-sidebar-brand-text">Pertisk-Proxy</span>
           </div>
           <button
             type="button"
             onClick={() => setCollapsed((v) => !v)}
             className={cn('app-sidebar-collapse-btn', !collapsed && 'anchor-right')}
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
-            {collapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
+            {collapsed ? <ChevronsRight size={16} strokeWidth={2.25} /> : <ChevronsLeft size={16} strokeWidth={2.25} />}
           </button>
         </div>
         <nav className="app-sidebar-nav">

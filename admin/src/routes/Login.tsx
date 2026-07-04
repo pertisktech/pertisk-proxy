@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, Lock, Moon, Shield, Sun, User } from 'lucide-react';
+import { Eye, EyeOff, Lock, Moon, Sun, User } from 'lucide-react';
 import { api } from '@/api/client';
 import {
   clearToken,
@@ -11,6 +11,7 @@ import {
   setToken,
 } from '@/auth';
 import { useTheme } from '@/context/ThemeContext';
+import { Logo } from '@/components/Logo';
 import styles from './Login.module.css';
 
 export function Login() {
@@ -89,9 +90,7 @@ export function Login() {
       <div className={styles.content}>
         <div className={styles.card}>
           <div className={styles.brand}>
-            <div className={styles.brandIcon}>
-              <Shield size={22} />
-            </div>
+            <Logo className={styles.brandLogo} alt="" />
             <div>
               <h1 className={styles.title}>Pertisk-Proxy</h1>
               <p className={styles.subtitle}>Management console</p>

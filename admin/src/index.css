@@ -151,26 +151,54 @@ code, pre, textarea.mono {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 4rem;
+  height: 3.5rem;
   padding: 0 2.5rem;
   border-bottom: 1px solid var(--color-border);
+}
+
+.app-sidebar-brand {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.app-sidebar-logo {
+  width: 1.5rem;
+  height: 1.5rem;
+  flex-shrink: 0;
+}
+
+.app-sidebar-brand-text {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .app-sidebar-collapse-btn {
   display: none;
   align-items: center;
   justify-content: center;
-  width: 2rem;
-  height: 2rem;
+  width: 1.75rem;
+  height: 1.75rem;
   flex-shrink: 0;
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   color: var(--color-text-secondary);
   background: transparent;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 
 .app-sidebar-collapse-btn:hover {
-  color: var(--color-text);
+  color: var(--color-primary);
   background: var(--color-hover);
+  border-color: color-mix(in srgb, var(--color-primary) 34%, var(--color-border));
 }
 
 .app-sidebar-nav {
@@ -249,6 +277,11 @@ code, pre, textarea.mono {
 
   .app-sidebar.collapsed .app-sidebar-header {
     padding: 0 0.5rem;
+  }
+
+  .app-sidebar.collapsed .app-sidebar-logo {
+    width: 1.75rem;
+    height: 1.75rem;
   }
 
   .app-sidebar.collapsed .app-sidebar-brand-text,
