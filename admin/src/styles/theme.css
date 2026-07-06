@@ -117,3 +117,86 @@
   color: var(--color-red-r1);
   border-color: color-mix(in srgb, var(--color-red-r1) 34%, var(--color-border));
 }
+
+.checkbox {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.checkbox.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.checkbox-input {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 1.125rem;
+  height: 1.125rem;
+  margin: 0;
+  opacity: 0;
+  transform: translateY(-50%);
+  cursor: pointer;
+  z-index: 1;
+}
+
+.checkbox.disabled .checkbox-input {
+  cursor: not-allowed;
+}
+
+.checkbox-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  flex-shrink: 0;
+  border: 1.5px solid var(--color-border);
+  border-radius: 0.35rem;
+  background: var(--color-bg);
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.checkbox:hover:not(.disabled) .checkbox-box {
+  border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-border));
+}
+
+.checkbox-input:focus-visible + .checkbox-box {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 18%, transparent);
+}
+
+.checkbox-input:checked + .checkbox-box {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.checkbox-check {
+  color: #fff;
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.checkbox-input:checked + .checkbox-box .checkbox-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  transition: color 0.15s;
+}
+
+.checkbox:hover:not(.disabled) .checkbox-label {
+  color: var(--color-text);
+}

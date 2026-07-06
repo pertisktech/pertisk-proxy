@@ -11,6 +11,7 @@ import {
   type TlsSource,
 } from '@/api/client';
 import { Modal } from '@/components/Modal';
+import { Checkbox } from '@/components/Checkbox';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Pagination } from '@/components/Pagination';
 import { ListToolbar, type ViewMode } from '@/components/ListToolbar';
@@ -623,10 +624,12 @@ export function Sites() {
                     </select>
                   </label>
                 ) : null}
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={formWildcard} onChange={(e) => setFormWildcard(e.target.checked)} />
-                  Wildcard certificate ({formHost.trim() ? hostToWildcard(formHost.trim()) : '*.domain'})
-                </label>
+                <Checkbox
+                  checked={formWildcard}
+                  onChange={setFormWildcard}
+                  className="text-sm"
+                  label={`Wildcard certificate (${formHost.trim() ? hostToWildcard(formHost.trim()) : '*.domain'})`}
+                />
               </div>
             ) : null}
           </div>

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Download, Upload, Archive } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card } from '@/components/Card';
+import { Checkbox } from '@/components/Checkbox';
 import { useMode } from '@/context/ModeContext';
 import { useManagementInfo } from '@/context/ManagementContext';
 import { api } from '@/api/client';
@@ -128,14 +129,12 @@ export function Backup() {
           </p>
         )}
 
-        <label className="mt-4 flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={mergeMode}
-            onChange={(e) => setMergeMode(e.target.checked)}
-          />
-          Merge with existing data (add from backup; skip duplicates unless merge updates ingress)
-        </label>
+        <Checkbox
+          checked={mergeMode}
+          onChange={setMergeMode}
+          className="mt-4 text-sm"
+          label="Merge with existing data (add from backup; skip duplicates unless merge updates ingress)"
+        />
 
         <button
           type="button"

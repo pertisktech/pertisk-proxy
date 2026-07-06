@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Activity, Globe, RefreshCw } from 'lucide-react';
 import { api, type LogEntry } from '@/api/client';
 import { Card } from '@/components/Card';
+import { Checkbox } from '@/components/Checkbox';
 import { formatDateTime } from '@/utils/dateFormat';
 import { cn } from '@/utils';
 
@@ -168,15 +169,17 @@ export function Logs() {
               HTTP access and system events from the proxy runtime.
             </p>
           </div>
-          <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-text-secondary">
-            <RefreshCw size={14} className={cn(autoRefresh && 'text-primary')} />
-            <input
-              type="checkbox"
-              checked={autoRefresh}
-              onChange={(e) => setAutoRefresh(e.target.checked)}
-            />
-            Auto-refresh 3s
-          </label>
+          <Checkbox
+            checked={autoRefresh}
+            onChange={setAutoRefresh}
+            className="rounded-md border border-border px-3 py-2 text-sm"
+            label={
+              <>
+                <RefreshCw size={14} className={cn('inline', autoRefresh && 'text-primary')} />
+                Auto-refresh 3s
+              </>
+            }
+          />
         </div>
 
         <div className="flex flex-wrap items-end gap-4">
