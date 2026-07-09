@@ -33,6 +33,7 @@ FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
     cargo chef cook --release --locked --recipe-path recipe.json --no-default-features --features ingress,acme,h3-quinn,prometheus
 
 COPY Cargo.toml Cargo.lock build.rs ./
@@ -41,11 +42,13 @@ COPY --from=admin /admin/dist ./admin/dist
 ENV RUST_MIN_STACK=16777216
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --release --locked --no-default-features --features ingress,acme,h3-quinn,prometheus --bin pertisk-proxy-ingress
+    --mount=type=cache,target=/app/target \
+    cargo build --release --locked --no-default-features --features ingress,acme,h3-quinn,prometheus --bin pertisk-proxy-ingress \
+    && install -D /app/target/release/pertisk-proxy-ingress /usr/local/bin/pertisk-proxy-ingress
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates openssl
-COPY --from=builder /app/target/release/pertisk-proxy-ingress /usr/local/bin/pertisk-proxy-ingress
+COPY --from=builder /usr/local/bin/pertisk-proxy-ingress /usr/local/bin/pertisk-proxy-ingress
 COPY --from=admin /admin/dist /usr/share/pertisk-proxy/admin/dist
 USER 65532:65532
 EXPOSE 8080 8443 8443/udp 9080
