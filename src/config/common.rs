@@ -83,10 +83,6 @@ impl ServerConfig {
     }
 }
 
-pub fn env_or(key: &str, default: &str) -> String {
-    std::env::var(key).unwrap_or_else(|_| default.into())
-}
-
 /// Read listen address from `LISTEN_*` or legacy `PERTISK_*_ADDR` (Helm chart).
 pub fn env_listen(listen_key: &str, pertisk_key: &str, default: &str) -> String {
     std::env::var(listen_key)

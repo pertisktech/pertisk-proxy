@@ -28,7 +28,6 @@ COPY --from=admin /admin/dist ./admin/dist
 ENV RUST_MIN_STACK=16777216
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/app/target \
     cargo build --release --locked --bin pertisk-proxy-ingress --features ingress
 
 FROM alpine:3.21

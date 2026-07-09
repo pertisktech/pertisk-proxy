@@ -82,7 +82,7 @@ struct IngressBackup {
 pub async fn backup_export(
     State(state): State<AdminState>,
     headers: HeaderMap,
-    query: Query<BackupExportQuery>,
+    _query: Query<BackupExportQuery>,
 ) -> Response {
     if !super::is_authorized(&state, &headers).await {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -91,7 +91,7 @@ pub async fn backup_export(
     if state.viewer_mode {
         #[cfg(feature = "ingress")]
         {
-            return ingress_backup_export(&state, query.namespace.as_deref()).await;
+            return ingress_backup_export(&state, _query.namespace.as_deref()).await;
         }
         #[cfg(not(feature = "ingress"))]
         {

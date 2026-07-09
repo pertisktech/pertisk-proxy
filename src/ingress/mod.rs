@@ -69,7 +69,7 @@ pub fn run() -> anyhow::Result<()> {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::api::{self, AdminState, LeaderElectionState};
+    use crate::api::{self, LeaderElectionState};
     use crate::config::IngressConfig;
     use crate::h3::{self, H3Config};
     use crate::log::{ProxyLog, ProxyLogEntry};
