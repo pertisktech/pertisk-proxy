@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
+ARG TARGETPLATFORM
+
 FROM node:22-alpine AS admin
 WORKDIR /admin
 COPY admin/package.json admin/pnpm-lock.yaml ./
@@ -30,20 +32,23 @@ COPY src ./src
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
+ARG TARGETPLATFORM
 COPY --from=planner /app/recipe.json recipe.json
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/app/target \
-    cargo chef cook --release --locked --recipe-path recipe.json --no-default-features --features ingress,acme,h3-quinn,prometheus
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-ingress-registry-${TARGETPLATFORM} \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-ingress-git-${TARGETPLATFORM} \
+    --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-ingress-target-${TARGETPLATFORM} \
+    cargo chef cook --release --locked --recipe-path recipe.json \
+    --no-default-features --features ingress,acme,h3-quinn,prometheus
 
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 COPY --from=admin /admin/dist ./admin/dist
 ENV RUST_MIN_STACK=16777216
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/app/target \
-    cargo build --release --locked --no-default-features --features ingress,acme,h3-quinn,prometheus --bin pertisk-proxy-ingress \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-ingress-registry-${TARGETPLATFORM} \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-ingress-git-${TARGETPLATFORM} \
+    --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-ingress-target-${TARGETPLATFORM} \
+    cargo build --release --locked --no-default-features \
+    --features ingress,acme,h3-quinn,prometheus --bin pertisk-proxy-ingress \
     && install -D /app/target/release/pertisk-proxy-ingress /usr/local/bin/pertisk-proxy-ingress
 
 FROM alpine:3.21
