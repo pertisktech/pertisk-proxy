@@ -9,7 +9,7 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 COPY admin/ ./
 RUN pnpm build
 
-FROM rust:1-alpine AS builder
+FROM rust:1-alpine AS chef
 RUN apk add --no-cache \
     build-base \
     pkgconfig \
@@ -21,7 +21,20 @@ RUN apk add --no-cache \
     go \
     nasm \
     musl-dev
+RUN cargo install cargo-chef --locked
 WORKDIR /app
+
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY src ./src
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo chef cook --release --locked --recipe-path recipe.json --bin pertisk-proxy-ingress --features ingress
+
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 COPY --from=admin /admin/dist ./admin/dist
