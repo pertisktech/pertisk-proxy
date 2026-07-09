@@ -64,7 +64,6 @@ fn load_controller_config() -> IngressControllerConfig {
 
 #[cfg(feature = "ingress")]
 pub fn run() -> anyhow::Result<()> {
-    use std::net::SocketAddr;
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
     use std::time::Duration;

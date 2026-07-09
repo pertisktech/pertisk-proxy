@@ -33,7 +33,7 @@ FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo chef cook --release --locked --recipe-path recipe.json --bin pertisk-proxy-ingress --features ingress
+    cargo chef cook --release --locked --recipe-path recipe.json --no-default-features --features ingress,acme,h3-quinn,prometheus
 
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
@@ -41,7 +41,7 @@ COPY --from=admin /admin/dist ./admin/dist
 ENV RUST_MIN_STACK=16777216
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --release --locked --bin pertisk-proxy-ingress --features ingress
+    cargo build --release --locked --no-default-features --features ingress,acme,h3-quinn,prometheus --bin pertisk-proxy-ingress
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates openssl

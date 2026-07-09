@@ -5,7 +5,7 @@ mod sni;
 mod store;
 mod validate;
 
-#[cfg(any(feature = "acme", feature = "dns-challenge"))]
+#[cfg(feature = "dns-challenge")]
 mod dns_01;
 mod acme;
 
