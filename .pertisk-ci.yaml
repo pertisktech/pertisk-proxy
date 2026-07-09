@@ -1,0 +1,32 @@
+on:
+  push:
+    branches: [main, release/*]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-docker:
+    runs-on: docker
+    timeout_minutes: 120
+    steps:
+      - name: docker login
+        run: |
+          test -n "$CI_REGISTRY" || (echo "CI_REGISTRY is empty" && exit 1)
+          test -n "$CI_REGISTRY_USER" || (echo "CI_REGISTRY_USER is empty" && exit 1)
+          test -n "$CI_REGISTRY_PASSWORD" || (echo "CI_REGISTRY_PASSWORD is empty" && exit 1)
+          echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
+          docker buildx create --use --name mybuilder
+          docker buildx inspect --bootstrap mybuilder
+      - name: build and push docker
+        run: |
+          IMAGE="$CI_REGISTRY/$CI_PROJECT_PATH:v0.1.${{ secrets.CI_PIPELINE_IID }}"
+          CACHE_REF="$CI_REGISTRY/$CI_PROJECT_PATH:buildcache"
+          #docker build -t "$IMAGE" .
+          #docker push "$IMAGE"
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --provenance=false \
+            --cache-from type=registry,ref="$CACHE_REF" \
+            --cache-to type=registry,ref="$CACHE_REF",mode=max \
+            -t "$IMAGE" \
+            --push .

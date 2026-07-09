@@ -1,7 +1,11 @@
+# syntax=docker/dockerfile:1.7
+
 FROM node:22-alpine AS admin
 WORKDIR /admin
 COPY admin/package.json admin/pnpm-lock.yaml ./
-RUN corepack enable && pnpm install --frozen-lockfile
+RUN corepack enable
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
 COPY admin/ ./
 RUN pnpm build
 
@@ -22,7 +26,10 @@ COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 COPY --from=admin /admin/dist ./admin/dist
 ENV RUST_MIN_STACK=16777216
-RUN cargo build --release --locked --bin pertisk-proxy-ingress --features ingress
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --locked --bin pertisk-proxy-ingress --features ingress
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates openssl
