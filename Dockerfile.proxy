@@ -7,7 +7,7 @@ RUN apk add --no-cache \
     musl-dev \
     cmake
 WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 RUN cargo build --release --bin pertisk-proxy --features admin,acme,dns-challenge,h3-quinn
 
