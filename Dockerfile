@@ -1,8 +1,11 @@
 # syntax=docker/dockerfile:1.7
 
-ARG TARGETPLATFORM
+# All RUN steps execute on BUILDPLATFORM (native speed, no QEMU emulation).
+# Cross-compilation to the target arch uses cargo-zigbuild (arm64<->amd64).
+# BUILDPLATFORM/TARGETPLATFORM/TARGETARCH/BUILDARCH are auto-provided by buildx;
+# do NOT redeclare them globally (shadows the built-in values with empty strings).
 
-FROM node:22-alpine AS admin
+FROM --platform=$BUILDPLATFORM node:22-alpine AS admin
 WORKDIR /admin
 COPY admin/package.json admin/pnpm-lock.yaml ./
 RUN corepack enable
@@ -11,7 +14,10 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 COPY admin/ ./
 RUN pnpm build
 
-FROM rust:1-alpine AS chef
+FROM --platform=$BUILDPLATFORM rust:1-alpine AS builder
+ARG TARGETPLATFORM
+ARG TARGETARCH
+ARG BUILDARCH
 RUN apk add --no-cache \
     build-base \
     pkgconfig \
@@ -22,34 +28,38 @@ RUN apk add --no-cache \
     clang-dev \
     go \
     nasm \
-    musl-dev
-RUN cargo install cargo-chef --locked
+    musl-dev \
+    zig \
+    && cargo install cargo-zigbuild --locked
 WORKDIR /app
 
-FROM chef AS planner
 COPY Cargo.toml Cargo.lock build.rs ./
-COPY src ./src
-RUN cargo chef prepare --recipe-path recipe.json
-
-FROM chef AS builder
-ARG TARGETPLATFORM
-COPY --from=planner /app/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-ingress-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-ingress-git-${TARGETPLATFORM} \
-    --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-ingress-target-${TARGETPLATFORM} \
-    cargo chef cook --release --locked --recipe-path recipe.json \
-    --no-default-features --features ingress,acme,h3-quinn,prometheus
+    cargo fetch --locked
 
-COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 COPY --from=admin /admin/dist ./admin/dist
 ENV RUST_MIN_STACK=16777216
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-ingress-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-ingress-git-${TARGETPLATFORM} \
     --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-ingress-target-${TARGETPLATFORM} \
-    cargo build --release --locked --no-default-features \
-    --features ingress,acme,h3-quinn,prometheus --bin pertisk-proxy-ingress \
-    && install -D /app/target/release/pertisk-proxy-ingress /usr/local/bin/pertisk-proxy-ingress
+    case "${TARGETARCH}" in \
+      amd64) RUST_TARGET=x86_64-unknown-linux-musl ;; \
+      arm64) RUST_TARGET=aarch64-unknown-linux-musl ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && rustup target add "${RUST_TARGET}" \
+    && if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
+         cargo zigbuild --release --locked --target "${RUST_TARGET}" \
+           --no-default-features --features ingress,acme,h3-quinn,prometheus \
+           --bin pertisk-proxy-ingress; \
+       else \
+         cargo build --release --locked --target "${RUST_TARGET}" \
+           --no-default-features --features ingress,acme,h3-quinn,prometheus \
+           --bin pertisk-proxy-ingress; \
+       fi \
+    && install -D "/app/target/${RUST_TARGET}/release/pertisk-proxy-ingress" /usr/local/bin/pertisk-proxy-ingress
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates openssl
