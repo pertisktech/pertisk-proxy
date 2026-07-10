@@ -20,9 +20,22 @@ jobs:
           fi
           docker buildx use mybuilder
           docker buildx inspect --bootstrap mybuilder
-      - name: build and push docker
+      - name: build and push docker proxy
         run: |
           IMAGE_REPO="${IMAGE_REPO:-gitdev.tools.pertisk.com/pertisktech/pertisk-proxy}"
+          IMAGE_TAG="${IMAGE_TAG:-v0.1.${{ secrets.CI_PIPELINE_IID }}}"
+          IMAGE="$IMAGE_REPO:$IMAGE_TAG"
+          CACHE_REF="$IMAGE_REPO:buildcache"
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --provenance=false \
+            -t "$IMAGE" \
+            --cache-from type=registry,ref="$CACHE_REF" \
+            --cache-to type=registry,ref="$CACHE_REF",mode=max \
+            -f Dockerfile --push .
+      - name: build and push docker ingress
+        run: |
+          IMAGE_REPO="${IMAGE_REPO:-gitdev.tools.pertisk.com/pertisktech/pertisk-ingress}"
           IMAGE_TAG="${IMAGE_TAG:-v0.1.${{ secrets.CI_PIPELINE_IID }}}"
           IMAGE="$IMAGE_REPO:$IMAGE_TAG"
           CACHE_REF="$IMAGE_REPO:buildcache"
