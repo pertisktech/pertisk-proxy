@@ -23,28 +23,58 @@ jobs:
           
       - name: build and push docker proxy
         run: |
-          IMAGE_REPO="${PROXY_IMAGE_REPO:-${CI_REGISTRY}/${CI_PROJECT_PATH}/proxy}"
-          IMAGE_TAG="${IMAGE_TAG:-v0.1.${{ secrets.CI_PIPELINE_IID }}}"
+          case "$(uname -m)" in
+            x86_64|amd64) NATIVE_ARCH=amd64 ;;
+            aarch64|arm64) NATIVE_ARCH=arm64 ;;
+            *) echo "unsupported runner arch: $(uname -m)" && exit 1 ;;
+          esac
+          IMAGE_REPO="${PROXY_IMAGE_REPO:-${CI_REGISTRY_IMAGE:-${CI_REGISTRY}/${CI_PROJECT_PATH}}}"
+          IMAGE_TAG="${IMAGE_TAG:-proxy-v0.1.${{ secrets.CI_PIPELINE_IID }}}"
           IMAGE="$IMAGE_REPO:$IMAGE_TAG"
-          CACHE_REF="$IMAGE_REPO:buildcache"
+          CACHE_DIR=".buildx-cache/proxy"
+          CACHE_IMAGE="${CACHE_IMAGE_PROXY:-${IMAGE_REPO}:proxy-buildcache}"
+          CACHE_FROM_ARGS=""
+          mkdir -p "$CACHE_DIR"
+          if [ -f "$CACHE_DIR/index.json" ]; then
+            CACHE_FROM_ARGS="--cache-from type=local,src=$CACHE_DIR"
+          fi
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --provenance=false \
             -t "$IMAGE" \
-            --cache-from type=registry,ref="$CACHE_REF" \
-            --cache-to type=registry,ref="$CACHE_REF",mode=max \
+            --cache-from type=registry,ref="$CACHE_IMAGE" \
+            $CACHE_FROM_ARGS \
+            --cache-to type=registry,ref="$CACHE_IMAGE",mode=max,ignore-error=true \
+            --cache-to type=local,dest="$CACHE_DIR",mode=max \
+            --build-arg BUILDPLATFORM="linux/$NATIVE_ARCH" \
+            --build-arg BUILDARCH="$NATIVE_ARCH" \
             -f Dockerfile.proxy --push .
 
       - name: build and push docker ingress
         run: |
-          IMAGE_REPO="${INGRESS_IMAGE_REPO:-${CI_REGISTRY}/${CI_PROJECT_PATH}/ingress}"
-          IMAGE_TAG="${IMAGE_TAG:-v0.1.${{ secrets.CI_PIPELINE_IID }}}"
+          case "$(uname -m)" in
+            x86_64|amd64) NATIVE_ARCH=amd64 ;;
+            aarch64|arm64) NATIVE_ARCH=arm64 ;;
+            *) echo "unsupported runner arch: $(uname -m)" && exit 1 ;;
+          esac
+          IMAGE_REPO="${INGRESS_IMAGE_REPO:-${CI_REGISTRY_IMAGE:-${CI_REGISTRY}/${CI_PROJECT_PATH}}}"
+          IMAGE_TAG="${IMAGE_TAG:-ingress-v0.1.${{ secrets.CI_PIPELINE_IID }}}"
           IMAGE="$IMAGE_REPO:$IMAGE_TAG"
-          CACHE_REF="$IMAGE_REPO:buildcache"
+          CACHE_DIR=".buildx-cache/ingress"
+          CACHE_IMAGE="${CACHE_IMAGE_INGRESS:-${IMAGE_REPO}:ingress-buildcache}"
+          CACHE_FROM_ARGS=""
+          mkdir -p "$CACHE_DIR"
+          if [ -f "$CACHE_DIR/index.json" ]; then
+            CACHE_FROM_ARGS="--cache-from type=local,src=$CACHE_DIR"
+          fi
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --provenance=false \
             -t "$IMAGE" \
-            --cache-from type=registry,ref="$CACHE_REF" \
-            --cache-to type=registry,ref="$CACHE_REF",mode=max \
+            --cache-from type=registry,ref="$CACHE_IMAGE" \
+            $CACHE_FROM_ARGS \
+            --cache-to type=registry,ref="$CACHE_IMAGE",mode=max,ignore-error=true \
+            --cache-to type=local,dest="$CACHE_DIR",mode=max \
+            --build-arg BUILDPLATFORM="linux/$NATIVE_ARCH" \
+            --build-arg BUILDARCH="$NATIVE_ARCH" \
             -f Dockerfile --push .

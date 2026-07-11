@@ -1,20 +1,54 @@
-FROM rust:1-alpine AS builder
+# syntax=docker/dockerfile:1.7
+
+# Keep RUN steps on BUILDPLATFORM for native speed; cross-compile target arch with zig.
+FROM --platform=$BUILDPLATFORM rust:1-alpine AS builder
+ARG TARGETPLATFORM
+ARG TARGETARCH
+ARG BUILDARCH
+
 RUN apk add --no-cache \
     build-base \
     pkgconfig \
     openssl-dev \
     perl \
     musl-dev \
-    cmake
+    cmake \
+    clang \
+    clang-dev \
+    go \
+    zig \
+    && cargo install cargo-zigbuild --locked
+
 WORKDIR /app
+
 COPY Cargo.toml Cargo.lock build.rs ./
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-proxy-registry-${TARGETPLATFORM} \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-proxy-git-${TARGETPLATFORM} \
+    cargo fetch --locked
+
 COPY src ./src
-RUN cargo build --release --bin pertisk-proxy --features admin,acme,dns-challenge,h3-quinn
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-proxy-registry-${TARGETPLATFORM} \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-proxy-git-${TARGETPLATFORM} \
+    --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-proxy-target-${TARGETPLATFORM} \
+    case "${TARGETARCH}" in \
+      amd64) RUST_TARGET=x86_64-unknown-linux-musl ;; \
+      arm64) RUST_TARGET=aarch64-unknown-linux-musl ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && rustup target add "${RUST_TARGET}" \
+    && if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
+         cargo zigbuild --release --locked --target "${RUST_TARGET}" \
+           --bin pertisk-proxy --features admin,acme,dns-challenge,h3-quinn; \
+       else \
+         cargo build --release --locked --target "${RUST_TARGET}" \
+           --bin pertisk-proxy --features admin,acme,dns-challenge,h3-quinn; \
+       fi \
+    && install -D "/app/target/${RUST_TARGET}/release/pertisk-proxy" /usr/local/bin/pertisk-proxy
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates openssl \
     && mkdir -p /var/lib/pertisk-proxy/certs
-COPY --from=builder /app/target/release/pertisk-proxy /usr/local/bin/pertisk-proxy
+COPY --from=builder /usr/local/bin/pertisk-proxy /usr/local/bin/pertisk-proxy
 COPY build/pertisk-proxy.conf /etc/pertisk-proxy/pertisk-proxy.conf
 USER 65532:65532
 VOLUME /var/lib/pertisk-proxy
