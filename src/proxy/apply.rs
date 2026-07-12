@@ -44,7 +44,13 @@ pub fn config_to_route_table(config: &Config) -> Result<RouteTable> {
         })?;
 
         let routes = if site.routes.is_empty() {
-            vec![site_route("/", ConfigPathMatchType::Prefix, None, &target)]
+            vec![site_route(
+                "/",
+                ConfigPathMatchType::Prefix,
+                None,
+                &target,
+                site.forward_client_ip,
+            )]
         } else {
             site
                 .routes
@@ -55,6 +61,7 @@ pub fn config_to_route_table(config: &Config) -> Result<RouteTable> {
                         r.path_type,
                         r.rewrite.as_deref(),
                         &target,
+                        site.forward_client_ip,
                     )
                 })
                 .collect()
@@ -71,6 +78,7 @@ fn site_route(
     path_type: ConfigPathMatchType,
     _rewrite: Option<&str>,
     target: &crate::router::Backend,
+    forward_client_ip: bool,
 ) -> Route {
     Route {
         path: path.to_string(),
@@ -81,6 +89,7 @@ fn site_route(
         },
         backend: target.clone(),
         middlewares: Vec::<Middleware>::new(),
+        forward_client_ip,
     }
 }
 
@@ -119,6 +128,7 @@ pub fn migrate_from_routes_yaml(yaml: &str) -> Result<Config> {
             ingress_name: None,
             k8s_resource_kind: None,
             http3_alt_svc_enabled: true,
+            forward_client_ip: false,
         });
     }
 

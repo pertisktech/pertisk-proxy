@@ -10,6 +10,7 @@ pub struct MiddlewareAction {
     pub strip_prefix: Option<String>,
     pub request_headers: Vec<(String, String)>,
     pub response_headers: Vec<(String, String)>,
+    pub forward_client_ip: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -54,7 +55,8 @@ pub fn resolve_forward(
         )
     })?;
 
-    let middleware = apply_middlewares(&route.middlewares);
+    let mut middleware = apply_middlewares(&route.middlewares);
+    middleware.forward_client_ip = route.forward_client_ip;
     let upstream_path = if let Some(ref prefix) = middleware.strip_prefix {
         strip_path_prefix(path_and_query, prefix)
     } else {
@@ -136,6 +138,7 @@ mod tests {
                 middlewares: vec![Middleware::StripPrefix {
                     prefix: "/api".into(),
                 }],
+                forward_client_ip: false,
             }],
         )]));
 
@@ -156,6 +159,7 @@ mod tests {
                     use_tls: false,
                 },
                 middlewares: vec![],
+                forward_client_ip: false,
             }],
         )]));
         let plan = resolve_forward(&table, "app.example.com", "/api/status").unwrap();
@@ -238,11 +242,32 @@ mod tests {
                     use_tls: true,
                 },
                 middlewares: vec![],
+                forward_client_ip: false,
             }],
         )]));
         let plan = resolve_forward(&table, "proxmox.example.com", "/").unwrap();
         assert_eq!(plan.upstream_url, "https://10.1.1.65:8006/");
         assert!(plan.use_tls);
+    }
+
+    #[test]
+    fn resolve_forward_forwards_client_ip_flag() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "git.example.com".into(),
+            vec![Route {
+                path: "/".into(),
+                path_type: PathMatchType::Prefix,
+                backend: Backend {
+                    address: "127.0.0.1:8080".into(),
+                    port: 8080,
+                    use_tls: false,
+                },
+                middlewares: vec![],
+                forward_client_ip: true,
+            }],
+        )]));
+        let plan = resolve_forward(&table, "git.example.com", "/").unwrap();
+        assert!(plan.middleware.forward_client_ip);
     }
 
     #[test]

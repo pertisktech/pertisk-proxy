@@ -93,6 +93,8 @@ export type Site = {
   ingress_namespace?: string | null;
   ingress_name?: string | null;
   k8s_resource_kind?: string | null;
+  /** Inject X-Real-IP and X-Forwarded-For for upstream apps. */
+  forward_client_ip?: boolean;
 };
 
 export type K8sNamespaceRow = { name: string; created_at?: string | null };

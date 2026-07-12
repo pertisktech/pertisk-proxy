@@ -29,6 +29,7 @@ pub struct RequestCtx {
     pub strip_prefix: Option<String>,
     pub request_headers: Vec<(String, String)>,
     pub response_headers: Vec<(String, String)>,
+    pub forward_client_ip: bool,
     pub is_grpc: bool,
     pub is_grpc_web: bool,
     pub is_long_lived_stream: bool,
@@ -44,6 +45,7 @@ impl From<crate::proxy::forward::MiddlewareAction> for RequestCtx {
             strip_prefix: mw.strip_prefix,
             request_headers: mw.request_headers,
             response_headers: mw.response_headers,
+            forward_client_ip: mw.forward_client_ip,
             is_grpc: false,
             is_grpc_web: false,
             is_long_lived_stream: false,
@@ -376,6 +378,15 @@ impl ProxyHttp for Gateway {
             upstream_request.insert_header("X-Forwarded-Host", host.as_str()).ok();
         }
 
+        if ctx.forward_client_ip && !ctx.is_registry {
+            if let Some(ip) = session
+                .client_addr()
+                .and_then(|a| a.as_inet().map(|addr| addr.ip().to_string()))
+            {
+                inject_forwarded_client_ip(upstream_request, &ip);
+            }
+        }
+
         if let Some(prefix) = &ctx.strip_prefix {
             let skip_strip = ctx.is_grpc_web;
             if !skip_strip {
@@ -665,6 +676,19 @@ fn protocol_short(label: &str) -> &str {
         "http/1.1" => "1.1",
         other => other,
     }
+}
+
+/// Set `X-Real-IP` and `X-Forwarded-For` for upstream apps that need the client address.
+fn inject_forwarded_client_ip(upstream_request: &mut RequestHeader, client_ip: &str) {
+    upstream_request.insert_header("X-Real-IP", client_ip).ok();
+    let xff = upstream_request
+        .headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.trim().is_empty())
+        .map(|existing| format!("{existing}, {client_ip}"))
+        .unwrap_or_else(|| client_ip.to_string());
+    upstream_request.insert_header("X-Forwarded-For", xff).ok();
 }
 
 fn is_downstream_tls(session: &Session) -> bool {

@@ -99,6 +99,7 @@ fn build_table(specs: Vec<RouteSpec>) -> Result<RouteTable> {
                 path_type: path_type.clone(),
                 backend: backend.clone(),
                 middlewares: spec.middlewares.clone(),
+                forward_client_ip: false,
             });
         }
     }

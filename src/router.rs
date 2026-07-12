@@ -38,6 +38,8 @@ pub struct Route {
     pub path_type: PathMatchType,
     pub backend: Backend,
     pub middlewares: Vec<Middleware>,
+    /// Inject X-Real-IP / X-Forwarded-For from the downstream client address.
+    pub forward_client_ip: bool,
 }
 
 #[derive(Debug, Default)]
@@ -282,6 +284,7 @@ fn add_ingress_to_table(by_host: &mut HashMap<String, Vec<Route>>, ingress: &Ing
                 path_type: PathMatchType::Prefix,
                 backend,
                 middlewares: vec![],
+                forward_client_ip: false,
             });
         }
     }
@@ -332,6 +335,7 @@ fn collect_http_paths(
             path_type,
             backend,
             middlewares: vec![],
+            forward_client_ip: false,
         });
     }
 }
@@ -390,6 +394,7 @@ mod tests {
                         use_tls: false,
                     },
                     middlewares: vec![],
+                    forward_client_ip: false,
                 }],
             )]),
         };
@@ -413,6 +418,7 @@ mod tests {
                             use_tls: false,
                         },
                         middlewares: vec![],
+                        forward_client_ip: false,
                     }],
                 ),
                 (
@@ -426,6 +432,7 @@ mod tests {
                             use_tls: false,
                         },
                         middlewares: vec![],
+                        forward_client_ip: false,
                     }],
                 ),
             ]),
@@ -450,6 +457,7 @@ mod tests {
                     use_tls: false,
                 },
                 middlewares: vec![],
+                forward_client_ip: false,
             }],
         )]));
         assert!(table.match_route("app.example.com", "/api").is_some());
@@ -469,6 +477,7 @@ mod tests {
                     use_tls: false,
                 },
                 middlewares: vec![],
+                forward_client_ip: false,
             }],
         )]));
         assert!(table.match_route("unknown.host", "/any").is_some());
@@ -487,6 +496,7 @@ mod tests {
                     use_tls: true,
                 },
                 middlewares: vec![],
+                forward_client_ip: false,
             }],
         )]));
         assert!(table.match_route("app.orion.thaidevops.co", "/").is_some());
@@ -509,6 +519,7 @@ mod tests {
                         use_tls: false,
                     },
                     middlewares: vec![],
+                    forward_client_ip: false,
                 }],
             ),
             (
@@ -522,6 +533,7 @@ mod tests {
                         use_tls: false,
                     },
                     middlewares: vec![],
+                    forward_client_ip: false,
                 }],
             ),
         ]));
@@ -545,6 +557,7 @@ mod tests {
                         use_tls: false,
                     },
                     middlewares: vec![],
+                    forward_client_ip: false,
                 },
                 Route {
                     path: "/api/v2".into(),
@@ -555,6 +568,7 @@ mod tests {
                         use_tls: false,
                     },
                     middlewares: vec![],
+                    forward_client_ip: false,
                 },
             ],
         )]));
@@ -597,6 +611,7 @@ mod tests {
                     use_tls: false,
                 },
                 middlewares: vec![],
+                forward_client_ip: false,
             }],
         )]));
         assert_eq!(table.route_count(), 1);
@@ -618,6 +633,7 @@ mod tests {
                     use_tls: false,
                 },
                 middlewares: vec![],
+                forward_client_ip: false,
             }],
         )]));
         router.replace(table);
@@ -707,6 +723,7 @@ mod tests {
                     use_tls: false,
                 },
                 middlewares: vec![],
+                forward_client_ip: false,
             }],
         )]));
         assert!(table.match_route("app.example.com", "/api/v1").is_some());
@@ -727,6 +744,7 @@ mod tests {
                     use_tls: false,
                 },
                 middlewares: vec![],
+                forward_client_ip: false,
             }],
         )]));
         router.replace_all(
@@ -804,6 +822,7 @@ mod tests {
                     use_tls: false,
                 },
                 middlewares: vec![],
+                forward_client_ip: false,
             }],
         )]));
         assert!(table.match_route("app.example.com", "/custom/path").is_some());

@@ -293,7 +293,7 @@ PERTISK_MANAGEMENT_ADDR=0.0.0.0:9080
 # TLS_CERT_PATH=/etc/pertisk-proxy/tls.crt
 # TLS_KEY_PATH=/etc/pertisk-proxy/tls.key
 
-PERTISK_PROXY_MODE=performance
+PERTISK_PROXY_MODE=auto
 PERTISK_LOG_LEVEL=info
 
 # ACME (Let's Encrypt)

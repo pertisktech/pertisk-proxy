@@ -85,10 +85,18 @@ pub struct Site {
     /// When false, responses include `Alt-Svc: clear` for this site.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub http3_alt_svc_enabled: bool,
+    /// When true, inject `X-Real-IP` and `X-Forwarded-For` from the client address
+    /// so upstream apps (e.g. Git login notifications) see the real client IP.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub forward_client_ip: bool,
 }
 
 fn is_true(value: &bool) -> bool {
     *value
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// TLS certificate source.
@@ -526,6 +534,7 @@ mod upstream_parse_tests {
             routes: vec![],
             security_headers: None,
             http3_alt_svc_enabled: true,
+            forward_client_ip: false,
             ingress_namespace: None,
             ingress_name: None,
             k8s_resource_kind: None,
@@ -681,6 +690,7 @@ backends:
             ingress_name: None,
             k8s_resource_kind: None,
             http3_alt_svc_enabled: true,
+            forward_client_ip: false,
         };
         let value = serde_json::to_value(&site).unwrap();
         assert!(

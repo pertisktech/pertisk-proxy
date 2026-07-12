@@ -77,6 +77,11 @@ case "$RPM_ARCH" in
     ;;
 esac
 
+  if [ "$PACKAGE_NAME" = "pertisk-proxy" ]; then
+    PROXY_MODE_DROPIN_DIR="/etc/systemd/system/${PACKAGE_NAME}.service.d"
+    PROXY_MODE_DROPIN="${PROXY_MODE_DROPIN_DIR}/12-proxy-mode.conf"
+  fi
+
 RPM_FILE="${PACKAGE_NAME}-${VERSION}-1.${RPM_ARCH}.rpm"
 
 RED='\033[0;31m'
@@ -133,6 +138,17 @@ fi
 
 sudo systemctl enable "${PACKAGE_NAME}" --now
 sudo systemctl restart "${PACKAGE_NAME}"
+
+if [ "${PACKAGE_NAME}" = "pertisk-proxy" ]; then
+  sudo mkdir -p "${PROXY_MODE_DROPIN_DIR}"
+  sudo tee "${PROXY_MODE_DROPIN}" >/dev/null <<'DROPIN'
+[Service]
+Environment=PERTISK_PROXY_MODE=auto
+DROPIN
+  sudo systemctl daemon-reload
+  sudo systemctl restart "${PACKAGE_NAME}"
+fi
+
 sudo systemctl is-active --quiet "${PACKAGE_NAME}"
 echo "Service status:"
 sudo systemctl status "${PACKAGE_NAME}" --no-pager

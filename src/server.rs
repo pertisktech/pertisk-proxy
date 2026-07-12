@@ -160,7 +160,7 @@ pub fn run(
                 .spawn(move || {
                     let rt = match tokio::runtime::Builder::new_multi_thread()
                         .enable_all()
-                        .worker_threads(2)
+                        .worker_threads(crate::runtime::h3_worker_threads(&runtime_cfg))
                         .thread_name("h3-worker")
                         .build()
                     {

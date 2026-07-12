@@ -87,6 +87,7 @@ export function Sites() {
   const [formAcmeChallenge, setFormAcmeChallenge] = useState<'http01' | 'dns01'>('http01');
   const [formDnsProviderId, setFormDnsProviderId] = useState('');
   const [formWildcard, setFormWildcard] = useState(false);
+  const [formForwardClientIp, setFormForwardClientIp] = useState(false);
   const [siteSaving, setSiteSaving] = useState(false);
   const [siteError, setSiteError] = useState('');
 
@@ -179,6 +180,7 @@ export function Sites() {
     setFormAcmeChallenge('http01');
     setFormDnsProviderId('');
     setFormWildcard(false);
+    setFormForwardClientIp(false);
     setSiteError('');
     setSiteModal(true);
   }
@@ -209,6 +211,7 @@ export function Sites() {
     setFormAcmeChallenge(acmeSource ? acmeChallengeFromSource(acmeSource) : 'http01');
     setFormAcmeEmail(acmeSource?.email ?? '');
     setFormWildcard(tlsForHost ? siteUsesWildcardInTls(site.host, tlsForHost) : false);
+    setFormForwardClientIp(!!site.forward_client_ip);
     setFormDnsProviderId(
       acmeSource && acmeChallengeFromSource(acmeSource) === 'dns01'
         ? resolveDnsProviderId(acmeSource, dnsProviders)
@@ -372,7 +375,12 @@ export function Sites() {
       }
     }
 
-    const newSite: Site = { host, backend: backendName, routes };
+    const newSite: Site = {
+      host,
+      backend: backendName,
+      routes,
+      forward_client_ip: formForwardClientIp || undefined,
+    };
     const newSites =
       editingIndex !== null ? sites.map((s, i) => (i === editingIndex ? newSite : s)) : [...sites, newSite];
 
@@ -556,6 +564,12 @@ export function Sites() {
                 />
               </label>
             </div>
+            <Checkbox
+              checked={formForwardClientIp}
+              onChange={setFormForwardClientIp}
+              className="text-sm"
+              label="Forward client IP (X-Real-IP / X-Forwarded-For)"
+            />
           </div>
 
           <div className={sectionCls}>
