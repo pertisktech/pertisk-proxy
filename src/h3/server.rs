@@ -23,7 +23,9 @@ use crate::deny;
 use crate::h3::headers::{error_response, h3_to_request, pseudo_authority, request_host, response_to_h3};
 use crate::h3::health;
 use crate::h3::settings::{listener_count, quic_settings};
-use crate::proxy::forward::resolve_forward;
+use crate::proxy::forward::{
+    client_ip_from_http_headers, forwarded_client_ip_header_pairs, resolve_client_ip, resolve_forward,
+};
 use crate::router::Router;
 use crate::runtime::RuntimeConfig;
 
@@ -294,6 +296,27 @@ async fn handle_proxied_request(
     }
     for (name, value) in &plan.middleware.request_headers {
         upstream_req = upstream_req.header(name.as_str(), value.as_str());
+    }
+    if !oci_registry {
+        let xff = req
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok());
+        let x_real_ip = req
+            .headers()
+            .get("x-real-ip")
+            .and_then(|value| value.to_str().ok());
+        if let Some(client_ip) = resolve_client_ip(None, xff, x_real_ip)
+            .or_else(|| client_ip_from_http_headers(req.headers()))
+        {
+            let existing = req
+                .headers()
+                .get("x-forwarded-for")
+                .and_then(|value| value.to_str().ok());
+            for (name, value) in forwarded_client_ip_header_pairs(&client_ip, existing) {
+                upstream_req = upstream_req.header(name, value);
+            }
+        }
     }
     upstream_req = upstream_req.header(HOST, host);
     upstream_req = upstream_req.body(body);

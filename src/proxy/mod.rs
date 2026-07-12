@@ -379,11 +379,14 @@ impl ProxyHttp for Gateway {
         }
 
         if !ctx.is_registry {
-            if let Some(ip) = session
-                .client_addr()
-                .and_then(|a| a.as_inet().map(|addr| addr.ip().to_string()))
-            {
+            if let Some(ip) = session_client_ip(session) {
                 inject_forwarded_client_ip(upstream_request, &ip);
+            } else {
+                tracing::debug!(
+                    host = %host,
+                    path = %upstream_request.uri.path(),
+                    "no client IP for upstream forwarding"
+                );
             }
         }
 
@@ -676,6 +679,32 @@ fn protocol_short(label: &str) -> &str {
         "http/1.1" => "1.1",
         other => other,
     }
+}
+
+fn session_client_ip(session: &Session) -> Option<String> {
+    let socket_ip = session
+        .client_addr()
+        .or_else(|| {
+            session
+                .as_downstream()
+                .digest()
+                .and_then(|digest| digest.socket_digest.as_ref())
+                .and_then(|socket| socket.peer_addr())
+        })
+        .and_then(|addr| addr.as_inet())
+        .map(|addr| addr.ip().to_string());
+
+    let req = session.req_header();
+    let xff = req
+        .headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok());
+    let x_real_ip = req
+        .headers
+        .get("x-real-ip")
+        .and_then(|value| value.to_str().ok());
+
+    crate::proxy::forward::resolve_client_ip(socket_ip.as_deref(), xff, x_real_ip)
 }
 
 /// Set `X-Real-IP` and `X-Forwarded-For` for upstream apps that need the client address.

@@ -49,6 +49,67 @@ pub fn forwarded_client_ip_header_pairs(
     ]
 }
 
+fn first_hop_from_xff(xff: Option<&str>) -> Option<String> {
+    let ip = xff?
+        .split(',')
+        .next()?
+        .trim()
+        .trim_matches('"');
+    if ip.is_empty() {
+        None
+    } else {
+        Some(ip.to_string())
+    }
+}
+
+/// Resolve the best-known client IP from the downstream socket and proxy headers.
+pub fn resolve_client_ip(
+    socket_ip: Option<&str>,
+    xff: Option<&str>,
+    x_real_ip: Option<&str>,
+) -> Option<String> {
+    if let Some(ip) = socket_ip.map(str::trim).filter(|value| !value.is_empty()) {
+        return Some(ip.to_string());
+    }
+    if let Some(ip) = x_real_ip.map(str::trim).filter(|value| !value.is_empty()) {
+        return Some(ip.to_string());
+    }
+    first_hop_from_xff(xff)
+}
+
+pub fn client_ip_from_http_headers(headers: &http::HeaderMap) -> Option<String> {
+    for name in [
+        "cf-connecting-ip",
+        "true-client-ip",
+        "x-client-ip",
+        "x-real-ip",
+        "x-forwarded-for",
+    ] {
+        if let Some(value) = headers.get(name).and_then(|v| v.to_str().ok()) {
+            if name == "x-forwarded-for" {
+                if let Some(ip) = first_hop_from_xff(Some(value)) {
+                    return Some(ip);
+                }
+            } else if !value.trim().is_empty() {
+                return Some(value.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Append `X-Real-IP` / `X-Forwarded-For` to a header map (HTTP/3 upstream hops).
+pub fn apply_forwarded_client_ip_headers(headers: &mut http::HeaderMap, client_ip: &str) {
+    let existing = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok());
+    for (name, value) in forwarded_client_ip_header_pairs(client_ip, existing) {
+        if let Ok(header_value) = http::HeaderValue::from_str(&value) {
+            headers.insert(name, header_value);
+        }
+    }
+}
+
 pub fn apply_middlewares(middlewares: &[Middleware]) -> MiddlewareAction {
     let mut action = MiddlewareAction::default();
     for mw in middlewares {
@@ -254,6 +315,18 @@ mod tests {
     fn strip_prefix_empty_becomes_root() {
         assert_eq!(strip_path_prefix("/api", "/api"), "/");
         assert_eq!(strip_path_prefix("/api?x=1", "/api"), "/?x=1");
+    }
+
+    #[test]
+    fn resolve_client_ip_prefers_socket() {
+        let ip = resolve_client_ip(Some("203.0.113.9"), Some("198.51.100.1"), None);
+        assert_eq!(ip.as_deref(), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn resolve_client_ip_falls_back_to_xff() {
+        let ip = resolve_client_ip(None, Some("203.0.113.9, 10.0.0.1"), None);
+        assert_eq!(ip.as_deref(), Some("203.0.113.9"));
     }
 
     #[test]

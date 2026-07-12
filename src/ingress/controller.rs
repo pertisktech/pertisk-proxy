@@ -163,7 +163,7 @@ impl IngressController {
                         ingress_name: Some(ingress_name.clone()),
                         k8s_resource_kind: Some("ingress".to_string()),
                         http3_alt_svc_enabled: true,
-                        forward_client_ip: false,
+                        forward_client_ip: true,
                     });
                 }
             }
@@ -585,7 +585,7 @@ impl IngressController {
                                 ingress_name: Some(route_name.clone()),
                                 k8s_resource_kind: Some("httproute".to_string()),
                                 http3_alt_svc_enabled: true,
-                                forward_client_ip: false,
+                                forward_client_ip: true,
                             });
                         }
                     }

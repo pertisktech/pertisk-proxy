@@ -1,5 +1,6 @@
 //! HTTP/3 server via Quinn + rustls (compatible with ACME/OpenSSL in the same binary).
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ use crate::health::{is_health_path, is_json_health_path, API_HEALTH_BODY};
 use crate::h3::bind::h3_bind_candidates;
 use crate::h3::config::H3Config;
 use crate::metrics::ProxyMetrics;
-use crate::proxy::forward::resolve_forward;
+use crate::proxy::forward::{forwarded_client_ip_header_pairs, resolve_client_ip, resolve_forward};
 use crate::proxy::grpc;
 use crate::router::Router;
 use crate::runtime::RuntimeConfig;
@@ -189,9 +190,11 @@ pub async fn run(
                 tokio::spawn(async move {
                     match connecting.await {
                         Ok(connection) => {
+                            let remote_addr = connection.remote_address();
                             let h3_conn = h3_quinn::Connection::new(connection);
                             if let Err(err) =
-                                serve_h3_connection(router, client, h3_conn, metrics).await
+                                serve_h3_connection(router, client, h3_conn, remote_addr, metrics)
+                                    .await
                             {
                                 if is_benign_h3_disconnect(&err) {
                                     tracing::debug!(error = %err, "HTTP/3 client closed connection");
@@ -214,6 +217,7 @@ async fn serve_h3_connection(
     router: Arc<Router>,
     client: Client,
     conn: h3_quinn::Connection,
+    remote_addr: SocketAddr,
     metrics: ProxyMetrics,
 ) -> Result<()> {
     let mut h3 = h3::server::Connection::new(conn)
@@ -228,8 +232,15 @@ async fn serve_h3_connection(
                 tokio::spawn(async move {
                     match resolver.resolve_request().await {
                         Ok((req, stream)) => {
-                            if let Err(err) =
-                                handle_request(router, client, req, stream, metrics).await
+                            if let Err(err) = handle_request(
+                                router,
+                                client,
+                                req,
+                                stream,
+                                remote_addr,
+                                metrics,
+                            )
+                            .await
                             {
                                 warn!(error = %err, "HTTP/3 request failed");
                             }
@@ -250,10 +261,12 @@ async fn handle_request(
     client: Client,
     req: http::Request<()>,
     mut stream: h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
+    remote_addr: SocketAddr,
     metrics: ProxyMetrics,
 ) -> Result<()> {
     metrics.inc_active_connections();
-    let result = handle_request_inner(router, client, req, &mut stream, &metrics).await;
+    let result =
+        handle_request_inner(router, client, req, &mut stream, remote_addr, &metrics).await;
     metrics.dec_active_connections();
     result
 }
@@ -263,6 +276,7 @@ async fn handle_request_inner(
     client: Client,
     req: http::Request<()>,
     stream: &mut h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
+    remote_addr: SocketAddr,
     metrics: &ProxyMetrics,
 ) -> Result<()> {
     if try_serve_health(&req, stream).await? {
@@ -368,6 +382,26 @@ async fn handle_request_inner(
     }
     for (name, value) in &plan.middleware.request_headers {
         upstream_req = upstream_req.header(name.as_str(), value.as_str());
+    }
+    if !oci_registry {
+        let socket_ip = remote_addr.ip().to_string();
+        let xff = req
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok());
+        let x_real_ip = req
+            .headers()
+            .get("x-real-ip")
+            .and_then(|value| value.to_str().ok());
+        if let Some(client_ip) = resolve_client_ip(Some(&socket_ip), xff, x_real_ip) {
+            let existing = req
+                .headers()
+                .get("x-forwarded-for")
+                .and_then(|value| value.to_str().ok());
+            for (name, value) in forwarded_client_ip_header_pairs(&client_ip, existing) {
+                upstream_req = upstream_req.header(name, value);
+            }
+        }
     }
     upstream_req = upstream_req.header(HOST, &host);
     upstream_req = upstream_req.body(body);
