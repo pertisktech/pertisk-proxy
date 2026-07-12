@@ -85,9 +85,9 @@ pub struct Site {
     /// When false, responses include `Alt-Svc: clear` for this site.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub http3_alt_svc_enabled: bool,
-    /// When true, inject `X-Real-IP` and `X-Forwarded-For` from the client address
+    /// When true (default), inject `X-Real-IP` and `X-Forwarded-For` from the client address
     /// so upstream apps (e.g. Git login notifications) see the real client IP.
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub forward_client_ip: bool,
 }
 

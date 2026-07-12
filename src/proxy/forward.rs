@@ -5,12 +5,23 @@ use pingora_error::ErrorType::HTTPStatus;
 
 use crate::router::{Middleware, RouteTable};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct MiddlewareAction {
     pub strip_prefix: Option<String>,
     pub request_headers: Vec<(String, String)>,
     pub response_headers: Vec<(String, String)>,
     pub forward_client_ip: bool,
+}
+
+impl Default for MiddlewareAction {
+    fn default() -> Self {
+        Self {
+            strip_prefix: None,
+            request_headers: Vec::new(),
+            response_headers: Vec::new(),
+            forward_client_ip: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -20,6 +31,22 @@ pub struct ForwardPlan {
     pub upstream_url: String,
     pub use_tls: bool,
     pub middleware: MiddlewareAction,
+}
+
+/// Header pairs for upstream apps that need the client address.
+pub fn forwarded_client_ip_header_pairs(
+    client_ip: &str,
+    existing_xff: Option<&str>,
+) -> Vec<(&'static str, String)> {
+    let xff = existing_xff
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|existing| format!("{existing}, {client_ip}"))
+        .unwrap_or_else(|| client_ip.to_string());
+    vec![
+        ("X-Real-IP", client_ip.to_string()),
+        ("X-Forwarded-For", xff),
+    ]
 }
 
 pub fn apply_middlewares(middlewares: &[Middleware]) -> MiddlewareAction {
@@ -227,6 +254,19 @@ mod tests {
     fn strip_prefix_empty_becomes_root() {
         assert_eq!(strip_path_prefix("/api", "/api"), "/");
         assert_eq!(strip_path_prefix("/api?x=1", "/api"), "/?x=1");
+    }
+
+    #[test]
+    fn forwarded_client_ip_header_pairs_appends_existing_xff() {
+        let pairs = forwarded_client_ip_header_pairs(
+            "203.0.113.5",
+            Some("198.51.100.1"),
+        );
+        assert_eq!(pairs[0], ("X-Real-IP", "203.0.113.5".to_string()));
+        assert_eq!(
+            pairs[1],
+            ("X-Forwarded-For", "198.51.100.1, 203.0.113.5".to_string())
+        );
     }
 
     #[test]

@@ -87,7 +87,7 @@ export function Sites() {
   const [formAcmeChallenge, setFormAcmeChallenge] = useState<'http01' | 'dns01'>('http01');
   const [formDnsProviderId, setFormDnsProviderId] = useState('');
   const [formWildcard, setFormWildcard] = useState(false);
-  const [formForwardClientIp, setFormForwardClientIp] = useState(false);
+  const [formForwardClientIp, setFormForwardClientIp] = useState(true);
   const [siteSaving, setSiteSaving] = useState(false);
   const [siteError, setSiteError] = useState('');
 
@@ -180,7 +180,7 @@ export function Sites() {
     setFormAcmeChallenge('http01');
     setFormDnsProviderId('');
     setFormWildcard(false);
-    setFormForwardClientIp(false);
+    setFormForwardClientIp(true);
     setSiteError('');
     setSiteModal(true);
   }
@@ -211,7 +211,7 @@ export function Sites() {
     setFormAcmeChallenge(acmeSource ? acmeChallengeFromSource(acmeSource) : 'http01');
     setFormAcmeEmail(acmeSource?.email ?? '');
     setFormWildcard(tlsForHost ? siteUsesWildcardInTls(site.host, tlsForHost) : false);
-    setFormForwardClientIp(!!site.forward_client_ip);
+    setFormForwardClientIp(site.forward_client_ip !== false);
     setFormDnsProviderId(
       acmeSource && acmeChallengeFromSource(acmeSource) === 'dns01'
         ? resolveDnsProviderId(acmeSource, dnsProviders)

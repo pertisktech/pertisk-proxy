@@ -378,7 +378,7 @@ impl ProxyHttp for Gateway {
             upstream_request.insert_header("X-Forwarded-Host", host.as_str()).ok();
         }
 
-        if ctx.forward_client_ip && !ctx.is_registry {
+        if !ctx.is_registry {
             if let Some(ip) = session
                 .client_addr()
                 .and_then(|a| a.as_inet().map(|addr| addr.ip().to_string()))
@@ -680,15 +680,13 @@ fn protocol_short(label: &str) -> &str {
 
 /// Set `X-Real-IP` and `X-Forwarded-For` for upstream apps that need the client address.
 fn inject_forwarded_client_ip(upstream_request: &mut RequestHeader, client_ip: &str) {
-    upstream_request.insert_header("X-Real-IP", client_ip).ok();
-    let xff = upstream_request
+    let existing = upstream_request
         .headers
         .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.trim().is_empty())
-        .map(|existing| format!("{existing}, {client_ip}"))
-        .unwrap_or_else(|| client_ip.to_string());
-    upstream_request.insert_header("X-Forwarded-For", xff).ok();
+        .and_then(|v| v.to_str().ok());
+    for (name, value) in crate::proxy::forward::forwarded_client_ip_header_pairs(client_ip, existing) {
+        upstream_request.insert_header(name, value).ok();
+    }
 }
 
 fn is_downstream_tls(session: &Session) -> bool {
