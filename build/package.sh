@@ -109,10 +109,11 @@ build_binaries_docker() {
   extract_dir="$(mktemp -d)"
   local build_success=0
   for attempt in 1 2 3; do
+    # ${arr[@]+"${arr[@]}"} avoids "unbound variable" under set -u when arr is empty (bash 3.2 / macOS).
     if docker buildx build --builder "$BUILDER_NAME" --platform "linux/$ARCH" \
       -f docker/Dockerfile.release \
       --target artifacts \
-      "${cache_from[@]}" \
+      ${cache_from[@]+"${cache_from[@]}"} \
       --cache-to "type=local,dest=${cache_dir},mode=max" \
       --build-arg TARGETPLATFORM="linux/$ARCH" \
       --build-arg TARGETARCH="$ARCH" \
