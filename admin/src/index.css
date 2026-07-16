@@ -33,6 +33,8 @@
   --color-usage-storage: var(--color-blue-b1);
   --color-bg-gradient-start: var(--color-naturals-n0);
   --color-bg-gradient-end: var(--color-naturals-n1);
+  --color-theme-meta: var(--color-naturals-n0);
+  --app-topbar-height: 3.25rem;
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
@@ -41,22 +43,29 @@
   --font-mono: "JetBrains Mono", monospace;
 }
 
+/* Cool slate neutrals + violet accent (no lavender wash on chrome) */
 html.light {
-  --color-bg: #f4f4fb;
+  --color-bg: #f4f5f7;
   --color-surface: #ffffff;
-  --color-surface-elevated: #f8f8ff;
-  --color-hover: #ececf8;
-  --color-border: #d8d8ea;
-  --color-text: #1a1a2e;
-  --color-text-secondary: #5c5c7a;
-  --color-muted: #7a7a9a;
-  --color-sidebar: #ebebf5;
-  --color-primary: #6d3ef5;
+  --color-surface-elevated: #eef0f3;
+  --color-hover: #e6e8ed;
+  --color-border: #d5d9e2;
+  --color-text: #15171f;
+  --color-text-secondary: #5a6172;
+  --color-muted: #858b9c;
+  --color-sidebar: #eceef2;
+  --color-primary: #6344e5;
+  --color-green-g1: #16a34a;
+  --color-red-r1: #dc2626;
+  --color-yellow-y1: #ca8a04;
+  --color-blue-b1: #2563eb;
   --color-usage-cpu: var(--color-primary);
-  --color-usage-memory: #22c55e;
-  --color-usage-storage: #3b82f6;
-  --color-bg-gradient-start: #f4f4fb;
+  --color-usage-memory: var(--color-green-g1);
+  --color-usage-storage: var(--color-blue-b1);
+  --color-bg-gradient-start: #f4f5f7;
   --color-bg-gradient-end: #ffffff;
+  --color-theme-meta: #f4f5f7;
+  --shadow-md: 0 8px 24px rgba(21, 23, 31, 0.08);
 }
 
 * { box-sizing: border-box; }
@@ -116,9 +125,15 @@ code, pre, textarea.mono {
 
 .app-content-top {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: var(--app-topbar-height);
+  min-height: var(--app-topbar-height);
+  max-height: var(--app-topbar-height);
   background: var(--color-bg);
   border-bottom: 1px solid var(--color-border);
   z-index: 10;
+  overflow: hidden;
 }
 
 .app-content-top-inner {
@@ -127,8 +142,9 @@ code, pre, textarea.mono {
   justify-content: space-between;
   gap: 0.75rem;
   width: 100%;
-  height: 4rem;
+  height: 100%;
   padding: 0 1rem;
+  min-width: 0;
 }
 
 .app-sidebar-backdrop {
@@ -151,9 +167,12 @@ code, pre, textarea.mono {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 3.5rem;
+  height: var(--app-topbar-height);
+  min-height: var(--app-topbar-height);
+  max-height: var(--app-topbar-height);
   padding: 0 2.5rem;
   border-bottom: 1px solid var(--color-border);
+  overflow: hidden;
 }
 
 .app-sidebar-brand {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import { Toaster } from 'sonner';
-import { ThemeProvider } from '@/context/ThemeContext';
+import { ThemeProvider, useTheme } from '@/context/ThemeContext';
 import { ModeContext, type ApiMode } from '@/context/ModeContext';
 import { ManagementContext } from '@/context/ManagementContext';
 import { Layout } from '@/components/Layout';
@@ -54,6 +54,11 @@ function AuthGate({
   if (ok === false) return <Navigate to="/login" replace />;
   if (ok === null) return <Layout onLogout={onLogout} loading />;
   return <Outlet />;
+}
+
+function ThemedToaster() {
+  const { isDark } = useTheme();
+  return <Toaster theme={isDark ? 'dark' : 'light'} richColors position="top-right" />;
 }
 
 export default function App() {
@@ -113,7 +118,7 @@ export default function App() {
           </BrowserRouter>
         </ManagementContext.Provider>
       </ModeContext.Provider>
-      <Toaster theme="dark" richColors position="top-right" />
+      <ThemedToaster />
     </ThemeProvider>
   );
 }

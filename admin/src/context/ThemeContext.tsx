@@ -22,7 +22,12 @@ function applyTheme(theme: Theme) {
   document.documentElement.style.colorScheme = theme;
   document.documentElement.style.removeProperty('background-color');
   const meta = document.getElementById('theme-color-meta');
-  if (meta) meta.setAttribute('content', theme === 'light' ? '#f4f4fb' : '#0c0d18');
+  if (meta) {
+    const bg = getComputedStyle(document.documentElement)
+      .getPropertyValue('--color-theme-meta')
+      .trim();
+    meta.setAttribute('content', bg || (theme === 'light' ? '#f4f5f7' : '#0c0d18'));
+  }
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {

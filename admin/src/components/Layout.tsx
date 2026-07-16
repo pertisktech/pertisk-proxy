@@ -157,24 +157,24 @@ export function Layout({ onLogout, loading = false }: { onLogout: () => void; lo
               >
                 {open ? <X size={20} /> : <Menu size={20} />}
               </button>
-              <h1 className="text-lg font-semibold">{title}</h1>
+              <h1 className="text-base font-semibold leading-none">{title}</h1>
             </div>
             <div className="flex items-center gap-2">
-              <span className="hidden rounded border border-border px-2 py-1 text-xs text-text-secondary sm:inline">
+              <span className="hidden rounded border border-border px-2 py-0.5 text-xs text-text-secondary sm:inline">
                 {modeLabel}
               </span>
               <button
                 type="button"
                 onClick={toggleTheme}
-                className="rounded-md border border-border p-2 hover:bg-hover"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border hover:bg-hover"
                 title="Toggle theme"
               >
-                {isDark ? <Sun size={18} /> : <Moon size={18} />}
+                {isDark ? <Sun size={16} /> : <Moon size={16} />}
               </button>
               <button
                 type="button"
                 onClick={onLogout}
-                className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-hover"
+                className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2.5 text-sm hover:bg-hover"
               >
                 <LogOut size={16} />
                 Logout
