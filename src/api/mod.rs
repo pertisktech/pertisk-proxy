@@ -455,6 +455,7 @@ struct ManagementInfo {
     enable_h3: bool,
     auto_https: bool,
     runtime_mode: String,
+    tuning: TuningInfo,
     listeners: ListenerInfo,
     http3: crate::http3_options::Http3Options,
     hostname: Option<String>,
@@ -496,6 +497,173 @@ struct ListenerInfo {
     http: String,
     https: String,
     h3_udp: String,
+}
+
+#[derive(Serialize)]
+struct TuningInfo {
+    requested_mode: String,
+    resolved_mode: String,
+    tokio_worker_threads: usize,
+    max_blocking_threads: usize,
+    pingora_service_threads: usize,
+    pingora_listener_tasks_per_fd: usize,
+    pingora_upstream_keepalive_pool_size: usize,
+    h3_worker_threads: usize,
+    tcp_listen_backlog: i32,
+    h3_stack: &'static str,
+    udp_offload: &'static str,
+    h3_upstream_pool: H3UpstreamPoolInfo,
+    /// Effective transport for the compiled HTTP/3 stack (Quinn by default).
+    /// Distinct from `ManagementInfo.http3`, which is route/config storage used by tokio-quiche.
+    effective_quic: Option<EffectiveQuicInfo>,
+    kernel: KernelTuningInfo,
+}
+
+#[derive(Serialize)]
+struct H3UpstreamPoolInfo {
+    max_idle_per_host: usize,
+    idle_timeout_secs: u64,
+    tcp_keepalive_secs: u64,
+}
+
+#[derive(Serialize)]
+struct EffectiveQuicInfo {
+    source: &'static str,
+    idle_timeout_secs: u64,
+    keepalive_secs: Option<u64>,
+    max_streams_bidi: u64,
+    stream_receive_window: u64,
+    conn_receive_window: u64,
+    udp_buffer_bytes: Option<usize>,
+    congestion_control: Option<String>,
+    enable_0rtt: Option<bool>,
+    enable_pacing: Option<bool>,
+    listeners: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct KernelTuningInfo {
+    cpu_affinity: Option<String>,
+    open_files_limit: Option<u64>,
+    rmem_max: Option<u64>,
+    wmem_max: Option<u64>,
+    somaxconn: Option<u64>,
+    netdev_max_backlog: Option<u64>,
+    tcp_max_syn_backlog: Option<u64>,
+    tcp_congestion_control: Option<String>,
+    default_qdisc: Option<String>,
+    ip_local_port_range: Option<String>,
+    tcp_tw_reuse: Option<String>,
+}
+
+fn read_trimmed(path: &str) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn read_u64(path: &str) -> Option<u64> {
+    read_trimmed(path)?.parse().ok()
+}
+
+fn process_cpu_affinity() -> Option<String> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status.lines().find_map(|line| {
+        line.strip_prefix("Cpus_allowed_list:")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn process_open_files_limit() -> Option<u64> {
+    let limits = std::fs::read_to_string("/proc/self/limits").ok()?;
+    limits.lines().find_map(|line| {
+        let rest = line.strip_prefix("Max open files")?.trim();
+        let soft = rest.split_whitespace().next()?;
+        if soft.eq_ignore_ascii_case("unlimited") {
+            Some(u64::MAX)
+        } else {
+            soft.parse().ok()
+        }
+    })
+}
+
+fn kernel_tuning_info() -> KernelTuningInfo {
+    KernelTuningInfo {
+        cpu_affinity: process_cpu_affinity(),
+        open_files_limit: process_open_files_limit(),
+        rmem_max: read_u64("/proc/sys/net/core/rmem_max"),
+        wmem_max: read_u64("/proc/sys/net/core/wmem_max"),
+        somaxconn: read_u64("/proc/sys/net/core/somaxconn"),
+        netdev_max_backlog: read_u64("/proc/sys/net/core/netdev_max_backlog"),
+        tcp_max_syn_backlog: read_u64("/proc/sys/net/ipv4/tcp_max_syn_backlog"),
+        tcp_congestion_control: read_trimmed("/proc/sys/net/ipv4/tcp_congestion_control"),
+        default_qdisc: read_trimmed("/proc/sys/net/core/default_qdisc"),
+        ip_local_port_range: read_trimmed("/proc/sys/net/ipv4/ip_local_port_range"),
+        tcp_tw_reuse: read_trimmed("/proc/sys/net/ipv4/tcp_tw_reuse"),
+    }
+}
+
+fn effective_quic_info() -> Option<EffectiveQuicInfo> {
+    #[cfg(feature = "h3-quinn")]
+    {
+        let q = crate::h3::effective_transport_config();
+        Some(EffectiveQuicInfo {
+            source: "env (Quinn)",
+            idle_timeout_secs: q.idle_timeout_secs,
+            keepalive_secs: Some(q.keepalive_secs),
+            max_streams_bidi: u64::from(q.max_streams_bidi),
+            stream_receive_window: u64::from(q.stream_receive_window),
+            conn_receive_window: u64::from(q.conn_receive_window),
+            udp_buffer_bytes: Some(q.udp_buffer_bytes),
+            congestion_control: None,
+            enable_0rtt: None,
+            enable_pacing: None,
+            listeners: None,
+        })
+    }
+    #[cfg(not(feature = "h3-quinn"))]
+    {
+        None
+    }
+}
+
+fn tuning_info(runtime_cfg: &RuntimeConfig) -> TuningInfo {
+    let pingora = crate::runtime::pingora_server_conf(runtime_cfg);
+    let h3_pool = crate::h3::upstream_pool_config(runtime_cfg);
+    let h3_stack = if cfg!(feature = "h3-quinn") {
+        "quinn"
+    } else if cfg!(feature = "h3-quiche") {
+        "tokio-quiche"
+    } else {
+        "disabled"
+    };
+    TuningInfo {
+        requested_mode: runtime_cfg.requested_mode.as_str().to_string(),
+        resolved_mode: runtime_cfg.resolved_mode.as_str().to_string(),
+        tokio_worker_threads: runtime_cfg.worker_threads,
+        max_blocking_threads: runtime_cfg.max_blocking_threads,
+        pingora_service_threads: pingora.threads,
+        pingora_listener_tasks_per_fd: pingora.listener_tasks_per_fd,
+        pingora_upstream_keepalive_pool_size: pingora.upstream_keepalive_pool_size,
+        h3_worker_threads: crate::runtime::h3_worker_threads(runtime_cfg),
+        tcp_listen_backlog: crate::runtime::tcp_listen_backlog(runtime_cfg),
+        h3_stack,
+        udp_offload: if cfg!(target_os = "linux") {
+            "automatic (GSO/GRO when supported)"
+        } else {
+            "platform dependent"
+        },
+        h3_upstream_pool: H3UpstreamPoolInfo {
+            max_idle_per_host: h3_pool.max_idle_per_host,
+            idle_timeout_secs: h3_pool.idle_timeout_secs,
+            tcp_keepalive_secs: h3_pool.tcp_keepalive_secs,
+        },
+        effective_quic: effective_quic_info(),
+        kernel: kernel_tuning_info(),
+    }
 }
 
 #[cfg(feature = "ingress")]
@@ -648,6 +816,7 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
         enable_h3: server.enable_h3,
         auto_https: state.proxy_config.auto_https,
         runtime_mode: state.runtime_cfg.resolved_mode.as_str().to_string(),
+        tuning: tuning_info(&state.runtime_cfg),
         listeners: ListenerInfo {
             http: crate::h3::effective_listen_display(&server.http_listen),
             https: crate::h3::effective_listen_display(&server.https_listen),

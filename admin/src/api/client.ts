@@ -40,8 +40,18 @@ export type ManagementInfo = {
   enable_h3: boolean;
   auto_https: boolean;
   runtime_mode: string;
+  tuning: TuningInfo;
   listeners: { http: string; https: string; h3_udp: string };
-  http3: Record<string, unknown>;
+  http3: {
+    max_data?: number | null;
+    max_stream_data?: number | null;
+    max_streams_bidi?: number | null;
+    max_idle_timeout_ms?: number | null;
+    congestion_control?: string | null;
+    enable_0rtt?: boolean | null;
+    listeners?: number | null;
+    enable_pacing?: boolean | null;
+  };
   hostname?: string | null;
   os?: string | null;
   cpu_count?: number | null;
@@ -66,6 +76,51 @@ export type ManagementInfo = {
     namespace: string;
     lease_name: string;
   } | null;
+};
+
+export type TuningInfo = {
+  requested_mode: string;
+  resolved_mode: string;
+  tokio_worker_threads: number;
+  max_blocking_threads: number;
+  pingora_service_threads: number;
+  pingora_listener_tasks_per_fd: number;
+  pingora_upstream_keepalive_pool_size: number;
+  h3_worker_threads: number;
+  tcp_listen_backlog: number;
+  h3_stack: string;
+  udp_offload: string;
+  h3_upstream_pool: {
+    max_idle_per_host: number;
+    idle_timeout_secs: number;
+    tcp_keepalive_secs: number;
+  };
+  effective_quic?: {
+    source: string;
+    idle_timeout_secs: number;
+    keepalive_secs?: number | null;
+    max_streams_bidi: number;
+    stream_receive_window: number;
+    conn_receive_window: number;
+    udp_buffer_bytes?: number | null;
+    congestion_control?: string | null;
+    enable_0rtt?: boolean | null;
+    enable_pacing?: boolean | null;
+    listeners?: number | null;
+  } | null;
+  kernel: {
+    cpu_affinity?: string | null;
+    open_files_limit?: number | null;
+    rmem_max?: number | null;
+    wmem_max?: number | null;
+    somaxconn?: number | null;
+    netdev_max_backlog?: number | null;
+    tcp_max_syn_backlog?: number | null;
+    tcp_congestion_control?: string | null;
+    default_qdisc?: string | null;
+    ip_local_port_range?: string | null;
+    tcp_tw_reuse?: string | null;
+  };
 };
 
 export type Metrics = {

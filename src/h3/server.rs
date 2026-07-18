@@ -20,11 +20,14 @@ use tokio_quiche::ServerH3Driver;
 use tracing::{error, info, warn};
 
 use crate::deny;
-use crate::h3::headers::{error_response, h3_to_request, pseudo_authority, request_host, response_to_h3};
+use crate::h3::headers::{
+    error_response, h3_to_request, pseudo_authority, request_host, response_to_h3,
+};
 use crate::h3::health;
 use crate::h3::settings::{listener_count, quic_settings};
 use crate::proxy::forward::{
-    client_ip_from_http_headers, forwarded_client_ip_header_pairs, resolve_client_ip, resolve_forward,
+    client_ip_from_http_headers, forwarded_client_ip_header_pairs, resolve_client_ip,
+    resolve_forward,
 };
 use crate::router::Router;
 use crate::runtime::RuntimeConfig;
@@ -95,13 +98,14 @@ pub async fn run(router: Arc<Router>, config: H3Config, runtime_cfg: &RuntimeCon
         enable_0rtt = quic.enable_early_data,
         enable_pacing = quic.enable_pacing,
         idle_timeout_secs = quic.max_idle_timeout.map(|d| d.as_secs()),
-        "HTTP/3 listener started"
+        "HTTP/3 listener started (Linux: tokio-quiche listen() enables GSO/GRO)"
     );
 
     let sockets = bind_udp_sockets(&config.udp_listen, listeners_n)
         .await
         .with_context(|| format!("failed to bind UDP {}", config.udp_listen))?;
 
+    // `listen()` calls `apply_max_capabilities()` on Linux (UDP_SEGMENT GSO, UDP_GRO, SO_TXTIME).
     let listeners = listen(
         sockets,
         ConnectionParams::new_server(
@@ -117,7 +121,7 @@ pub async fn run(router: Arc<Router>, config: H3Config, runtime_cfg: &RuntimeCon
     )
     .context("failed to create QUIC listener")?;
 
-    let client = crate::h3::upstream_client::build_upstream_client()?;
+    let client = crate::h3::upstream_client::build_upstream_client(runtime_cfg)?;
 
     for mut accept_stream in listeners {
         let router = Arc::clone(&router);
@@ -133,12 +137,9 @@ pub async fn run(router: Arc<Router>, config: H3Config, runtime_cfg: &RuntimeCon
                         let router = Arc::clone(&router);
                         let client = client.clone();
                         tokio::spawn(async move {
-                            if let Err(err) = serve_connection(
-                                router,
-                                client,
-                                controller.event_receiver_mut(),
-                            )
-                            .await
+                            if let Err(err) =
+                                serve_connection(router, client, controller.event_receiver_mut())
+                                    .await
                             {
                                 warn!(error = %err, "HTTP/3 connection closed with error");
                             }
@@ -167,8 +168,7 @@ async fn serve_connection(
             }
             ServerH3Event::Core(H3Event::ConnectionShutdown(_)) => break,
             ServerH3Event::Headers {
-                incoming_headers,
-                ..
+                incoming_headers, ..
             } => {
                 if health::matches_request(&incoming_headers.headers) {
                     health::try_serve(incoming_headers).await;
@@ -189,7 +189,8 @@ async fn serve_connection(
                 let router = Arc::clone(&router);
                 let client = client.clone();
                 tokio::spawn(async move {
-                    if let Err(err) = handle_proxied_request(router, client, incoming_headers).await {
+                    if let Err(err) = handle_proxied_request(router, client, incoming_headers).await
+                    {
                         warn!(error = %err, "HTTP/3 proxied request failed");
                     }
                 });
@@ -201,7 +202,9 @@ async fn serve_connection(
 }
 
 async fn deny_h3(headers: IncomingH3Headers) {
-    let IncomingH3Headers { mut send, mut recv, .. } = headers;
+    let IncomingH3Headers {
+        mut send, mut recv, ..
+    } = headers;
     drain_request_body(&mut recv).await;
     send_error(&mut send, deny::h3_response(true)).await;
 }
@@ -229,8 +232,11 @@ async fn handle_proxied_request(
     let req = match h3_to_request(h3_headers) {
         Ok(req) => req,
         Err(err) => {
-            send_error(&mut send, error_response(http::StatusCode::BAD_REQUEST, &err.to_string()))
-                .await;
+            send_error(
+                &mut send,
+                error_response(http::StatusCode::BAD_REQUEST, &err.to_string()),
+            )
+            .await;
             return Ok(());
         }
     };
@@ -376,7 +382,9 @@ async fn handle_proxied_request(
     Ok(())
 }
 
-async fn read_request_body(recv: &mut tokio_quiche::http3::driver::InboundFrameStream) -> Result<Vec<u8>> {
+async fn read_request_body(
+    recv: &mut tokio_quiche::http3::driver::InboundFrameStream,
+) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     while let Some(frame) = recv.recv().await {
         match frame {

@@ -164,6 +164,8 @@ jobs:
           chmod +x pkg/usr/bin/${{ env.BINARY_NAME }}
           cp -r admin/dist pkg/usr/share/pertisk-proxy/admin/
           cp build/pertisk-proxy.conf pkg/etc/pertisk-proxy/pertisk-proxy.conf
+          cp build/99-pertisk-proxy.conf pkg/etc/sysctl.d/99-pertisk-proxy.conf
+          cp build/cpu-affinity.conf.example pkg/usr/share/pertisk-proxy/cpu-affinity.conf.example
 
       - name: Create systemd service files
         run: |
@@ -173,6 +175,8 @@ jobs:
           [Unit]
           Description=pertisk-proxy reverse proxy (root)
           After=network.target
+          After=network-online.target
+          Wants=network-online.target
 
           [Service]
           Type=simple
@@ -183,7 +187,8 @@ jobs:
           ExecStart=/usr/bin/pertisk-proxy
           Restart=always
           RestartSec=5
-          LimitNOFILE=65535
+          LimitNOFILE=1048576
+          TasksMax=infinity
           StandardOutput=append:/var/log/pertisk-proxy/pertisk-proxy.log
           StandardError=append:/var/log/pertisk-proxy/pertisk-proxy.log
           ProtectSystem=full
@@ -194,14 +199,6 @@ jobs:
 
           [Install]
           WantedBy=multi-user.target
-          EOF
-
-      - name: Create sysctl file
-        run: |
-          cat > pkg/etc/sysctl.d/99-pertisk-proxy.conf << 'EOF'
-          # pertisk-proxy UDP buffer sizes for QUIC/HTTP3
-          net.core.rmem_max=7500000
-          net.core.wmem_max=7500000
           EOF
 
       - name: Create pre/post install scripts
@@ -237,7 +234,7 @@ jobs:
           fi
           if [ -f /etc/sysctl.d/99-pertisk-proxy.conf ]; then
             sysctl -p /etc/sysctl.d/99-pertisk-proxy.conf 2>/dev/null || true
-            echo "Applied UDP buffer settings for QUIC/HTTP3"
+            echo "Applied kernel tuning (UDP/TCP buffers, somaxconn, BBR) for pertisk-proxy"
           fi
           if command -v systemctl >/dev/null 2>&1; then
             systemctl daemon-reload
@@ -245,6 +242,7 @@ jobs:
             echo "pertisk-proxy has been installed successfully!"
             echo "  sudo systemctl start pertisk-proxy"
             echo "  sudo systemctl enable pertisk-proxy"
+            echo "Optional CPU pin: see /usr/share/pertisk-proxy/cpu-affinity.conf.example"
           fi
           EOF
 

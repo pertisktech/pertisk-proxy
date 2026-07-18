@@ -7,15 +7,16 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use bytes::{Buf, Bytes, BytesMut};
 use http::header::HOST;
-use quinn::Endpoint;
+use quinn::{Endpoint, EndpointConfig};
 use reqwest::Client;
 use rustls::pki_types::CertificateDer;
+use socket2::{Domain, Protocol, Socket, Type};
 use tracing::{info, warn};
 
 use crate::deny;
-use crate::health::{is_health_path, is_json_health_path, API_HEALTH_BODY};
 use crate::h3::bind::h3_bind_candidates;
 use crate::h3::config::H3Config;
+use crate::health::{is_health_path, is_json_health_path, API_HEALTH_BODY};
 use crate::metrics::ProxyMetrics;
 use crate::proxy::forward::{forwarded_client_ip_header_pairs, resolve_client_ip, resolve_forward};
 use crate::proxy::grpc;
@@ -24,6 +25,7 @@ use crate::runtime::RuntimeConfig;
 use crate::tls::{CertStore, CertStoreResolver};
 
 const ALPN_H3: &[u8] = b"h3";
+const UDP_BUFFER_BYTES: usize = 7 * 1024 * 1024;
 
 fn is_benign_h3_disconnect(err: &anyhow::Error) -> bool {
     let msg = err.to_string().to_ascii_lowercase();
@@ -44,6 +46,28 @@ fn env_u64(name: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+/// Effective Quinn transport values (env-driven; not `Config.http3`).
+#[derive(Debug, Clone, Copy)]
+pub struct QuinnTransportConfig {
+    pub idle_timeout_secs: u64,
+    pub keepalive_secs: u64,
+    pub max_streams_bidi: u32,
+    pub stream_receive_window: u32,
+    pub conn_receive_window: u32,
+    pub udp_buffer_bytes: usize,
+}
+
+pub fn effective_transport_config() -> QuinnTransportConfig {
+    QuinnTransportConfig {
+        idle_timeout_secs: env_u64("PERTISK_HTTP3_IDLE_TIMEOUT_SECS", 300),
+        keepalive_secs: env_u64("PERTISK_HTTP3_KEEPALIVE_SECS", 30),
+        max_streams_bidi: env_u64("PERTISK_HTTP3_MAX_STREAMS", 1024) as u32,
+        stream_receive_window: env_u64("PERTISK_HTTP3_STREAM_RECEIVE_WINDOW", 8 * 1024 * 1024) as u32,
+        conn_receive_window: env_u64("PERTISK_HTTP3_CONN_RECEIVE_WINDOW", 64 * 1024 * 1024) as u32,
+        udp_buffer_bytes: UDP_BUFFER_BYTES,
+    }
+}
+
 fn build_rustls_config(cert_store: Arc<CertStore>) -> Result<rustls::ServerConfig> {
     if cert_store.host_count() > 0 {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
@@ -60,10 +84,7 @@ fn build_rustls_config(cert_store: Arc<CertStore>) -> Result<rustls::ServerConfi
     let paths = cert_store
         .default_paths()
         .ok_or_else(|| anyhow::anyhow!("no TLS certificates available for HTTP/3"))?;
-    build_rustls_config_from_paths(
-        &paths.cert.to_string_lossy(),
-        &paths.key.to_string_lossy(),
-    )
+    build_rustls_config_from_paths(&paths.cert.to_string_lossy(), &paths.key.to_string_lossy())
 }
 
 fn build_rustls_config_from_paths(cert_path: &str, key_path: &str) -> Result<rustls::ServerConfig> {
@@ -87,31 +108,49 @@ fn build_rustls_config_from_paths(cert_path: &str, key_path: &str) -> Result<rus
 
 fn build_quinn_server_config(cert_store: Arc<CertStore>) -> Result<quinn::ServerConfig> {
     let rustls_config = build_rustls_config(cert_store)?;
-    let quic_crypto =
-        quinn::crypto::rustls::QuicServerConfig::try_from(Arc::new(rustls_config))
-            .context("QuicServerConfig from rustls")?;
+    let quic_crypto = quinn::crypto::rustls::QuicServerConfig::try_from(Arc::new(rustls_config))
+        .context("QuicServerConfig from rustls")?;
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_crypto));
 
-    let idle_secs = env_u64("PERTISK_HTTP3_IDLE_TIMEOUT_SECS", 300);
-    let keepalive_secs = env_u64("PERTISK_HTTP3_KEEPALIVE_SECS", 30);
-    let max_streams = env_u64("PERTISK_HTTP3_MAX_STREAMS", 1024) as u32;
-    let stream_window = env_u64("PERTISK_HTTP3_STREAM_RECEIVE_WINDOW", 8 * 1024 * 1024) as u32;
-    let conn_window = env_u64("PERTISK_HTTP3_CONN_RECEIVE_WINDOW", 64 * 1024 * 1024) as u32;
+    let cfg = effective_transport_config();
 
     let mut transport = quinn::TransportConfig::default();
-    transport.max_concurrent_bidi_streams(max_streams.into());
-    transport.stream_receive_window(stream_window.into());
-    transport.receive_window(conn_window.into());
-    if idle_secs > 0 {
-        if let Ok(v) = Duration::from_secs(idle_secs).try_into() {
+    transport.max_concurrent_bidi_streams(cfg.max_streams_bidi.into());
+    transport.stream_receive_window(cfg.stream_receive_window.into());
+    transport.receive_window(cfg.conn_receive_window.into());
+    if cfg.idle_timeout_secs > 0 {
+        if let Ok(v) = Duration::from_secs(cfg.idle_timeout_secs).try_into() {
             transport.max_idle_timeout(Some(v));
         }
     }
-    if keepalive_secs > 0 {
-        transport.keep_alive_interval(Some(Duration::from_secs(keepalive_secs)));
+    if cfg.keepalive_secs > 0 {
+        transport.keep_alive_interval(Some(Duration::from_secs(cfg.keepalive_secs)));
     }
     server_config.transport_config(Arc::new(transport));
     Ok(server_config)
+}
+
+/// Bind a UDP socket with large buffers + SO_REUSEPORT.
+/// Quinn's `quinn-udp` enables Linux UDP GSO/GRO automatically when wrapping the socket.
+fn create_tuned_udp_socket(addr: SocketAddr) -> std::io::Result<std::net::UdpSocket> {
+    let domain = if addr.is_ipv6() {
+        Domain::IPV6
+    } else {
+        Domain::IPV4
+    };
+    let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+    let _ = socket.set_reuse_address(true);
+    #[cfg(all(unix, not(target_os = "solaris")))]
+    let _ = socket.set_reuse_port(true);
+    #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "fuchsia")))]
+    if addr.is_ipv6() {
+        let _ = socket.set_only_v6(false);
+    }
+    let _ = socket.set_recv_buffer_size(UDP_BUFFER_BYTES);
+    let _ = socket.set_send_buffer_size(UDP_BUFFER_BYTES);
+    socket.bind(&addr.into())?;
+    socket.set_nonblocking(true)?;
+    Ok(socket.into())
 }
 
 fn bind_quinn_endpoint(
@@ -123,11 +162,14 @@ fn bind_quinn_endpoint(
         anyhow::bail!("invalid HTTP/3 UDP listen address {:?}", listen);
     }
 
+    let runtime = quinn::default_runtime()
+        .ok_or_else(|| anyhow::anyhow!("no async runtime found for Quinn HTTP/3"))?;
+
     let mut last_err: Option<anyhow::Error> = None;
     for addr in candidates {
         let server_config = build_quinn_server_config(Arc::clone(&cert_store))?;
-        match Endpoint::server(server_config, addr) {
-            Ok(endpoint) => return Ok((endpoint, addr)),
+        let socket = match create_tuned_udp_socket(addr) {
+            Ok(s) => s,
             Err(e) => {
                 let addr_in_use = matches!(e.raw_os_error(), Some(48 | 98));
                 let is_unspecified_v4 = addr.ip().is_unspecified() && addr.is_ipv4();
@@ -153,6 +195,32 @@ fn bind_quinn_endpoint(
                     );
                 }
                 last_err = Some(e.into());
+                continue;
+            }
+        };
+        match Endpoint::new(
+            EndpointConfig::default(),
+            Some(server_config),
+            socket,
+            Arc::clone(&runtime),
+        ) {
+            Ok(endpoint) => {
+                let bound = endpoint.local_addr().unwrap_or(addr);
+                info!(
+                    %bound,
+                    udp_rcvbuf_target = UDP_BUFFER_BYTES,
+                    "HTTP/3 UDP socket tuned (large buffers; Linux GSO/GRO via quinn-udp)"
+                );
+                return Ok((endpoint, bound));
+            }
+            Err(e) => {
+                warn!(
+                    %addr,
+                    error = %e,
+                    os_error = ?e.raw_os_error(),
+                    "HTTP/3 Quinn endpoint failed, trying next address"
+                );
+                last_err = Some(e.into());
             }
         }
     }
@@ -165,7 +233,7 @@ pub async fn run(
     router: Arc<Router>,
     config: H3Config,
     cert_store: Arc<CertStore>,
-    _runtime_cfg: &RuntimeConfig,
+    runtime_cfg: &RuntimeConfig,
     metrics: ProxyMetrics,
 ) -> Result<()> {
     while !cert_store.has_any_cert() {
@@ -177,9 +245,13 @@ pub async fn run(
     }
 
     let (endpoint, bound_addr) = bind_quinn_endpoint(Arc::clone(&cert_store), &config.udp_listen)?;
-    info!(%bound_addr, "HTTP/3 (QUIC/Quinn) listening");
+    info!(
+        %bound_addr,
+        runtime_mode = runtime_cfg.resolved_mode.as_str(),
+        "HTTP/3 (QUIC/Quinn) listening"
+    );
 
-    let client = crate::h3::upstream_client::build_upstream_client()?;
+    let client = crate::h3::upstream_client::build_upstream_client(runtime_cfg)?;
 
     loop {
         match endpoint.accept().await {
@@ -232,15 +304,9 @@ async fn serve_h3_connection(
                 tokio::spawn(async move {
                     match resolver.resolve_request().await {
                         Ok((req, stream)) => {
-                            if let Err(err) = handle_request(
-                                router,
-                                client,
-                                req,
-                                stream,
-                                remote_addr,
-                                metrics,
-                            )
-                            .await
+                            if let Err(err) =
+                                handle_request(router, client, req, stream, remote_addr, metrics)
+                                    .await
                             {
                                 warn!(error = %err, "HTTP/3 request failed");
                             }
@@ -429,12 +495,18 @@ async fn handle_request_inner(
     if let Ok(v) = http::HeaderValue::from_str(&body.len().to_string()) {
         headers.insert(http::header::CONTENT_LENGTH, v);
     }
-    headers.insert(http::header::SERVER, http::HeaderValue::from_static("pertisk-proxy/h3"));
+    headers.insert(
+        http::header::SERVER,
+        http::HeaderValue::from_static("pertisk-proxy/h3"),
+    );
     crate::apply_app_name(&mut headers);
     if oci_registry {
         headers.remove(http::header::SET_COOKIE);
         headers.insert("Alt-Svc", http::HeaderValue::from_static("clear"));
-        if let Some(loc) = headers.get(http::header::LOCATION).and_then(|v| v.to_str().ok()) {
+        if let Some(loc) = headers
+            .get(http::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+        {
             if let Some(https) = crate::proxy::registry::rewrite_registry_location_value(loc, true)
             {
                 if let Ok(v) = http::HeaderValue::from_str(&https) {
@@ -452,10 +524,7 @@ async fn handle_request_inner(
         }
     }
 
-    let h3_resp = http::Response::builder()
-        .status(status)
-        .body(())
-        .unwrap();
+    let h3_resp = http::Response::builder().status(status).body(()).unwrap();
     let mut h3_resp = h3_resp;
     *h3_resp.headers_mut() = headers;
     send_h3_response(stream, h3_resp, body.clone()).await?;
@@ -483,8 +552,7 @@ fn record_h3_request(
     }
     metrics.inc_h3_requests();
     metrics.inc_https_requests();
-    metrics
-        .inc_site_protocol_requests(host, http::Version::HTTP_3);
+    metrics.inc_site_protocol_requests(host, http::Version::HTTP_3);
     if is_grpc {
         metrics.inc_grpc_requests();
     }
@@ -524,7 +592,9 @@ async fn try_serve_health(
         .unwrap();
     if !body.is_empty() {
         if let Ok(v) = http::HeaderValue::from_str(&body.len().to_string()) {
-            h3_resp.headers_mut().insert(http::header::CONTENT_LENGTH, v);
+            h3_resp
+                .headers_mut()
+                .insert(http::header::CONTENT_LENGTH, v);
         }
     }
     send_h3_response(stream, h3_resp, body).await?;
@@ -550,10 +620,16 @@ async fn send_h3_response(
     h3_resp: http::Response<()>,
     body: Bytes,
 ) -> Result<()> {
-    stream.send_response(h3_resp).await.context("send h3 response headers")?;
+    stream
+        .send_response(h3_resp)
+        .await
+        .context("send h3 response headers")?;
     // Always send a DATA frame (even empty) so the response ends cleanly; skipping
     // send_data on empty bodies caused curl/clients to see HTTP/3 stream reset (18).
-    stream.send_data(body).await.context("send h3 response body")?;
+    stream
+        .send_data(body)
+        .await
+        .context("send h3 response body")?;
     stream.finish().await.context("finish h3 response")?;
     Ok(())
 }

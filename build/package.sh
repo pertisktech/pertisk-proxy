@@ -219,6 +219,8 @@ cat > build/pertisk-proxy.service << 'SVC'
 [Unit]
 Description=pertisk-proxy reverse proxy
 After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -230,7 +232,8 @@ ExecStart=/usr/bin/pertisk-proxy
 Restart=always
 RestartSec=5
 TimeoutStopSec=30
-LimitNOFILE=65535
+LimitNOFILE=1048576
+TasksMax=infinity
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ProtectSystem=strict
@@ -238,6 +241,8 @@ ProtectHome=true
 ReadWritePaths=/var/lib/pertisk-proxy /var/log/pertisk-proxy
 PrivateTmp=true
 NoNewPrivileges=true
+# Optional: pin to dedicated cores (see /usr/share/pertisk-proxy/cpu-affinity.conf.example)
+# CPUAffinity=2-7
 
 [Install]
 WantedBy=multi-user.target
@@ -247,6 +252,8 @@ cat > build/pertisk-proxy-ingress.service << 'SVC'
 [Unit]
 Description=pertisk-proxy Kubernetes Ingress controller
 After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -258,7 +265,8 @@ ExecStart=/usr/bin/pertisk-proxy-ingress
 Restart=always
 RestartSec=5
 TimeoutStopSec=30
-LimitNOFILE=65535
+LimitNOFILE=1048576
+TasksMax=infinity
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ProtectSystem=strict
@@ -266,6 +274,8 @@ ProtectHome=true
 ReadWritePaths=/var/lib/pertisk-proxy /var/log/pertisk-proxy
 PrivateTmp=true
 NoNewPrivileges=true
+# Optional: pin to dedicated cores (see /usr/share/pertisk-proxy/cpu-affinity.conf.example)
+# CPUAffinity=2-7
 
 [Install]
 WantedBy=multi-user.target
@@ -297,6 +307,11 @@ PERTISK_MANAGEMENT_ADDR=0.0.0.0:9080
 PERTISK_PROXY_MODE=auto
 PERTISK_LOG_LEVEL=info
 
+# H3 → upstream connection pool (defaults scale with performance mode)
+# PERTISK_H3_UPSTREAM_POOL_MAX_IDLE=256
+# PERTISK_H3_UPSTREAM_POOL_IDLE_TIMEOUT_SECS=120
+# PERTISK_H3_UPSTREAM_TCP_KEEPALIVE_SECS=60
+
 # ACME (Let's Encrypt)
 # PERTISK_ACME_STAGING=true
 CONF
@@ -313,6 +328,8 @@ TLS_CERT_PATH=/etc/pertisk-proxy/tls.crt
 TLS_KEY_PATH=/etc/pertisk-proxy/tls.key
 PERTISK_INGRESS_MODE=performance
 PERTISK_LOG_LEVEL=info
+# H3 → upstream pool (optional overrides; performance mode defaults to 256 idle/host)
+# PERTISK_H3_UPSTREAM_POOL_MAX_IDLE=256
 # Required when running outside the cluster (DEB/RPM on a VM/bare-metal node):
 # KUBECONFIG=/etc/pertisk-proxy/kubeconfig
 CONF
@@ -325,6 +342,8 @@ make_pkg_layout() {
   rm -rf "pkg-${bin}"
   mkdir -p "pkg-${bin}/usr/bin" \
     "pkg-${bin}/etc/pertisk-proxy" \
+    "pkg-${bin}/etc/sysctl.d" \
+    "pkg-${bin}/usr/share/pertisk-proxy" \
     "pkg-${bin}/var/lib/pertisk-proxy" \
     "pkg-${bin}/var/log/pertisk-proxy" \
     "pkg-${bin}/lib/systemd/system"
@@ -333,6 +352,8 @@ make_pkg_layout() {
   chmod +x "pkg-${bin}/usr/bin/${bin}"
   cp "$conf" "pkg-${bin}/etc/pertisk-proxy/${bin}.conf"
   cp "$unit" "pkg-${bin}/lib/systemd/system/${bin}.service"
+  cp build/99-pertisk-proxy.conf "pkg-${bin}/etc/sysctl.d/99-pertisk-proxy.conf"
+  cp build/cpu-affinity.conf.example "pkg-${bin}/usr/share/pertisk-proxy/cpu-affinity.conf.example"
 
   if [ "$bin" = "pertisk-proxy" ] && [ -d admin/dist ]; then
     mkdir -p "pkg-${bin}/usr/share/pertisk-proxy/admin"
@@ -385,6 +406,12 @@ for bin in pertisk-proxy pertisk-proxy-ingress; do
     command -v setcap >/dev/null 2>&1 && setcap 'cap_net_bind_service=+ep' "/usr/bin/$bin" 2>/dev/null || true
   fi
 done
+# Apply kernel buffer / backlog ceilings so QUIC SO_RCVBUF requests are not clamped.
+if [ -f /etc/sysctl.d/99-pertisk-proxy.conf ]; then
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl -p /etc/sysctl.d/99-pertisk-proxy.conf >/dev/null 2>&1 || true
+  fi
+fi
 command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload || true
 POST
 

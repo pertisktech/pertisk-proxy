@@ -116,6 +116,13 @@ routes:
 
 Health: `/healthz`, `/readyz`
 
+### Performance tuning
+
+The admin dashboard reports effective runtime, connection-pool, CPU-affinity,
+file-limit, and Linux network settings. See
+[`docs/performance-tuning.md`](docs/performance-tuning.md) for production
+defaults, systemd/sysctl setup, HTTP/3 offload, and benchmark guidance.
+
 ## Project layout
 
 ```

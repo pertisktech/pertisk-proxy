@@ -19,7 +19,10 @@ pub use bind::effective_udp_listen_display;
 pub use bind::h3_bind_addrs;
 pub use bind::tcp_bind_addrs;
 pub use config::H3Config;
+pub(crate) use upstream_client::upstream_pool_config;
 
+#[cfg(feature = "h3-quinn")]
+pub(crate) use quinn_server::effective_transport_config;
 #[cfg(feature = "h3-quinn")]
 pub use quinn_server::run;
 

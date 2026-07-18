@@ -330,6 +330,48 @@ export function Dashboard() {
         </div>
       </Card>
 
+      <Card>
+        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <h2 className="text-lg font-semibold">Performance tuning</h2>
+            <p className="text-sm text-text-secondary">Effective process and Linux network settings</p>
+          </div>
+          <Link to="/settings#performance-tuning" className="text-sm text-primary hover:underline">
+            View configuration and guide →
+          </Link>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-lg border border-border bg-surface-elevated p-4">
+            <div className="text-sm text-text-secondary">Runtime mode</div>
+            <div className="mt-1 text-lg font-semibold capitalize">{info.tuning.resolved_mode}</div>
+            <div className="mt-1 text-xs text-muted">
+              Requested: {info.tuning.requested_mode}
+            </div>
+          </div>
+          <div className="rounded-lg border border-border bg-surface-elevated p-4">
+            <div className="text-sm text-text-secondary">Workers</div>
+            <div className="mt-1 text-lg font-semibold">{info.tuning.pingora_service_threads} Pingora</div>
+            <div className="mt-1 text-xs text-muted">
+              {info.tuning.h3_worker_threads} H3 · {info.tuning.tokio_worker_threads} Tokio
+            </div>
+          </div>
+          <div className="rounded-lg border border-border bg-surface-elevated p-4">
+            <div className="text-sm text-text-secondary">HTTP/3 data plane</div>
+            <div className="mt-1 text-lg font-semibold">{info.tuning.h3_stack}</div>
+            <div className="mt-1 text-xs text-muted">{info.tuning.udp_offload}</div>
+          </div>
+          <div className="rounded-lg border border-border bg-surface-elevated p-4">
+            <div className="text-sm text-text-secondary">Linux TCP</div>
+            <div className="mt-1 text-lg font-semibold uppercase">
+              {info.tuning.kernel.tcp_congestion_control ?? 'n/a'}
+            </div>
+            <div className="mt-1 text-xs text-muted">
+              qdisc {info.tuning.kernel.default_qdisc ?? 'n/a'} · backlog {info.tuning.tcp_listen_backlog}
+            </div>
+          </div>
+        </div>
+      </Card>
+
       {isIngress ? (
         <Card>
           <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">

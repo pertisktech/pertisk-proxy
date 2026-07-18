@@ -503,15 +503,14 @@ impl ProxyHttp for Gateway {
     }
 
     fn suppress_error_log(&self, session: &Session, ctx: &Self::CTX, error: &Error) -> bool {
-        if !ctx.is_grpc && !ctx.is_long_lived_stream {
-            return false;
-        }
+        // Browser/admin SPA cancels are normal after restart or tab navigation.
         if !grpc::is_benign_downstream_disconnect(error) {
             return false;
         }
         tracing::debug!(
             path = session.req_header().uri.path(),
-            "client closed gRPC/Connect stream"
+            grpc = ctx.is_grpc,
+            "client closed downstream stream"
         );
         true
     }

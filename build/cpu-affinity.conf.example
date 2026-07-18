@@ -1,0 +1,14 @@
+# Optional systemd drop-in: pin the proxy to dedicated cores.
+#
+# Install:
+#   mkdir -p /etc/systemd/system/pertisk-proxy.service.d
+#   cp cpu-affinity.conf.example /etc/systemd/system/pertisk-proxy.service.d/cpu-affinity.conf
+#   # edit CPUAffinity= for this host (isolate from load generators / other apps)
+#   systemctl daemon-reload && systemctl restart pertisk-proxy
+#
+# Same path works for pertisk-proxy-ingress.service.d/
+#
+# Example: reserve cores 2–7 on an 8-core host (leave 0–1 for the OS).
+
+[Service]
+CPUAffinity=2-7
