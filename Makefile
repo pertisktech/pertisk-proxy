@@ -234,7 +234,7 @@ apply-ingress-rbac:
 # Kubelet/containerd auto-selects the node arch when pulling a multi-arch tag (no nodeSelector).
 INGRESS_BUILD_PLATFORMS ?= linux/amd64,linux/arm64
 CACHE_BACKEND ?= registry
-HARBOR_INGRESS_IMAGE ?= harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress
+HARBOR_INGRESS_IMAGE ?= harbor.homelab.pertisk.com/pertisksoft/pertisk-proxy/ingress
 INGRESS_DOCKERFILE ?= docker/Dockerfile.ingress
 
 docker-ingress: admin-dist

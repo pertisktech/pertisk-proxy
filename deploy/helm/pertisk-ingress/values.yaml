@@ -22,9 +22,9 @@ autoscaling:
   #         value: 10
   #         periodSeconds: 60
 
-# -- Controller image (Harbor: docker pull harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress:$version)
+# -- Controller image (Harbor: docker pull harbor.homelab.pertisk.com/pertisksoft/pertisk-proxy/ingress:$version)
 image:
-  registry: harbor.tools.thaidevops.co
+  registry: harbor.homelab.pertisk.com
   repository: pertisksoft/pertisk-proxy/ingress
   tag: "1.0.55" # defaults to Chart appVersion (e.g. 0.1.0) when empty
   pullPolicy: Always # IfNotPresent, Always, Never

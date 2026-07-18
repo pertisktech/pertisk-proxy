@@ -17,7 +17,7 @@ CRD_DIR="${CRD_DIR:-./deploy/helm/pertisk-ingress/crds}"
 CRD_TIMEOUT="${CRD_TIMEOUT:-180s}"
 APPLY_CRDS="${APPLY_CRDS:-1}"
 WAIT_FOR_CRDS="${WAIT_FOR_CRDS:-0}"
-ADMIN_HOST="${ADMIN_HOST:-admin.talos.pertisksoft.net}"
+ADMIN_HOST="${ADMIN_HOST:-admin.talos.pertisk.com}"
 ADMIN_TLS_SECRET="${ADMIN_TLS_SECRET:-admin-talos-tls}"
 HELM_TIMEOUT="${HELM_TIMEOUT:-20m}"
 # Build both architectures so arm64 clusters (e.g. Hetzner CAX) and amd64 nodes both work.
