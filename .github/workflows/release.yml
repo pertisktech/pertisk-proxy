@@ -13,9 +13,9 @@ permissions:
 
 env:
   BINARY_NAME: pertisk-proxy
-  HARBOR_BUILD_IMAGE: harbor.homelab.pertisk.com/pertisksoft/pertisk-proxy-build
-  HARBOR_PROXY_IMAGE: harbor.homelab.pertisk.com/pertisksoft/pertisk-proxy/proxy
-  HARBOR_INGRESS_IMAGE: harbor.homelab.pertisk.com/pertisksoft/pertisk-proxy/ingress
+  HARBOR_BUILD_IMAGE: harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy-build
+  HARBOR_PROXY_IMAGE: harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/proxy
+  HARBOR_INGRESS_IMAGE: harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress
   HELM_CHART_REPO_URL: https://chart.cloud.pertisksoft.net
 
 jobs:
@@ -345,7 +345,7 @@ jobs:
         run: |
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
           AUTH=$(echo -n "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" | base64)
-          REGISTRY="harbor.homelab.pertisk.com"
+          REGISTRY="harbor.tools.thaidevops.co"
           mkdir -p "$DOCKER_CONFIG"
           echo "{\"auths\":{\"$REGISTRY\":{\"auth\":\"$AUTH\"}},\"credsStore\":\"\",\"credHelpers\":{}}" > "$DOCKER_CONFIG/config.json"
 
@@ -400,7 +400,7 @@ jobs:
         run: |
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
           AUTH=$(echo -n "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" | base64)
-          REGISTRY="harbor.homelab.pertisk.com"
+          REGISTRY="harbor.tools.thaidevops.co"
           mkdir -p "$DOCKER_CONFIG"
           echo "{\"auths\":{\"$REGISTRY\":{\"auth\":\"$AUTH\"}},\"credsStore\":\"\",\"credHelpers\":{}}" > "$DOCKER_CONFIG/config.json"
 

@@ -90,7 +90,7 @@ HTTP_CODE="$(curl -sS -o "$WORKDIR/upload.json" -w '%{http_code}' \
 if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
   cat "$WORKDIR/upload.json"
   echo ""
-  echo "Published pertisk-ingress ${VERSION} (image: harbor.homelab.pertisk.com/pertisksoft/pertisk-proxy/ingress:v${VERSION})"
+  echo "Published pertisk-ingress ${VERSION} (image: harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress:v${VERSION})"
   echo "Install: helm repo add pertisk ${HELM_CHART_REPO_URL%/} && helm upgrade --install pertisk-proxy-ingress pertisk/pertisk-ingress --version ${VERSION} -n pertisk-proxy --create-namespace"
   exit 0
 fi
