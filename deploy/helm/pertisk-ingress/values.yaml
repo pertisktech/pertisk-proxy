@@ -117,6 +117,12 @@ runtime:
   maxBlockingThreads: 2048
   # -- Optional stack size per runtime thread in KiB (null to omit)
   threadStackSizeKb: null
+  # -- Override Pingora service threads (null = derive from CPU limit / mode)
+  pingoraThreads: null
+  # -- Parallel accept tasks per listener fd (performance default: 4)
+  listenerTasks: 4
+  # -- TCP listen backlog (performance default: 8192)
+  tcpListenBacklog: 8192
   # -- Enable proxy access logging (per-request log entries). Disable for high-throughput ingress
   # deployments: Kubernetes already captures stdout/stderr and per-request logging adds lock contention.
   proxyLog: false
@@ -141,6 +147,15 @@ upstream:
   h2KeepaliveSecs: 20
   # -- HTTP/2 PING ack timeout (seconds).
   h2KeepaliveTimeoutSecs: 10
+
+# -- HTTP/3 → upstream connection pool (Quinn/reqwest hop)
+h3Upstream:
+  # -- Max idle connections per upstream host (performance default: 256)
+  poolMaxIdlePerHost: 256
+  # -- Idle pool timeout in seconds
+  poolIdleTimeoutSecs: 120
+  # -- TCP keepalive interval in seconds
+  tcpKeepaliveSecs: 60
 
 # -- HTTP/3 (QUIC) tuning
 # IMPORTANT: HTTP/3 with multiple replicas requires the LoadBalancer to maintain UDP session

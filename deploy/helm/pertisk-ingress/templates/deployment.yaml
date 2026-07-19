@@ -135,6 +135,18 @@ spec:
             - name: PERTISK_THREAD_STACK_SIZE_KB
               value: {{ .Values.runtime.threadStackSizeKb | quote }}
             {{- end }}
+            {{- if .Values.runtime.pingoraThreads }}
+            - name: PERTISK_PINGORA_THREADS
+              value: {{ .Values.runtime.pingoraThreads | quote }}
+            {{- end }}
+            {{- if .Values.runtime.listenerTasks }}
+            - name: PERTISK_PINGORA_LISTENER_TASKS
+              value: {{ .Values.runtime.listenerTasks | quote }}
+            {{- end }}
+            {{- if .Values.runtime.tcpListenBacklog }}
+            - name: PERTISK_TCP_LISTEN_BACKLOG
+              value: {{ .Values.runtime.tcpListenBacklog | quote }}
+            {{- end }}
             - name: PERTISK_PROXY_LOG
               value: {{ .Values.runtime.proxyLog | quote }}
             - name: PERTISK_LOG_LEVEL
@@ -154,6 +166,14 @@ spec:
               value: {{ .Values.upstream.h2KeepaliveSecs | quote }}
             - name: PERTISK_UPSTREAM_H2_KEEPALIVE_TIMEOUT_SECS
               value: {{ .Values.upstream.h2KeepaliveTimeoutSecs | quote }}
+            {{- end }}
+            {{- if .Values.h3Upstream }}
+            - name: PERTISK_H3_UPSTREAM_POOL_MAX_IDLE
+              value: {{ .Values.h3Upstream.poolMaxIdlePerHost | quote }}
+            - name: PERTISK_H3_UPSTREAM_POOL_IDLE_TIMEOUT_SECS
+              value: {{ .Values.h3Upstream.poolIdleTimeoutSecs | quote }}
+            - name: PERTISK_H3_UPSTREAM_TCP_KEEPALIVE_SECS
+              value: {{ .Values.h3Upstream.tcpKeepaliveSecs | quote }}
             {{- end }}
             - name: PERTISK_AUTH_MODE
               value: {{ .Values.auth.mode | quote }}

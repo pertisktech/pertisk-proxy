@@ -184,7 +184,9 @@ pub fn pingora_service_threads(cfg: &RuntimeConfig) -> usize {
         }
     }
 
-    let cpus = available_cpus();
+    // Prefer the container/pod CPU limit when present (ingress sets
+    // PERTISK_CPU_LIMIT_MILLICORES from resources.limits.cpu).
+    let cpus = worker_threads_from_cpu_limit().unwrap_or_else(available_cpus);
     match cfg.resolved_mode {
         RuntimeMode::Performance => cpus,
         RuntimeMode::Standard => std::cmp::max(1, cpus / 2),

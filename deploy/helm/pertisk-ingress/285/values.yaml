@@ -1,14 +1,15 @@
-# cloud (Hetzner + floating-IP LB) — IngressClass mode.
-# Deploy: make deploy-cloud VERSION=x.y.z
+# 285h (Talos) — IngressClass mode.
+# Deploy: VERSION=x.y.z ./deploy/285h.sh
 #
 # TPS / latency tuning:
 # - runtime.mode=performance, proxyLog=false, logging.level=warn
-# - upstream HTTP/2 pool keeps connections warm to backends
+# - CPU limit >= 2000m so autoWorkerThreads / Pingora get at least 2 workers
+# - upstream HTTP/2 + H3 pools keep connections warm
 # - http3.maxStreams >= concurrent clients (k6 VUs)
 #
 # HTTP/3 (QUIC): UDP must reach the same pod for a connection.
-# Use externalTrafficPolicy: Local + sessionAffinity. For k6 HTTP/3 benchmarks
-# pin one replica: REPLICA_COUNT=1 VERSION=x.y.z make deploy-cloud
+# Use sessionAffinity. For k6 HTTP/3 benchmarks pin one replica:
+#   REPLICA_COUNT=1 VERSION=x.y.z ./deploy/285h.sh
 
 http3Addr: "0.0.0.0:8443"
 
@@ -23,6 +24,8 @@ runtime:
   mode: performance
   autoWorkerThreads: true
   maxBlockingThreads: 2048
+  listenerTasks: 4
+  tcpListenBacklog: 8192
   proxyLog: false
 
 logging:
@@ -30,18 +33,27 @@ logging:
   format: json
 
 upstream:
-  poolMaxIdlePerHost: 256
+  poolMaxIdlePerHost: 512
   poolIdleTimeoutSecs: 90
   h2KeepaliveSecs: 20
   h2KeepaliveTimeoutSecs: 10
 
+h3Upstream:
+  poolMaxIdlePerHost: 256
+  poolIdleTimeoutSecs: 120
+  tcpKeepaliveSecs: 60
+
 http3:
   maxStreams: 2048
+  streamReceiveWindow: 8388608
+  connReceiveWindow: 67108864
+  idleTimeoutSecs: 300
+  keepaliveSecs: 10
 
 resources:
   limits:
-    cpu: 750m
-    memory: 768Mi
+    cpu: "2"
+    memory: 1Gi
   requests:
-    cpu: 500m
-    memory: 256Mi
+    cpu: "1"
+    memory: 512Mi
