@@ -7,6 +7,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -69,6 +70,23 @@ function prometheusMetricsURL(metricsAddr: string | undefined, hostname: string 
   const host =
     bindHost === '0.0.0.0' || bindHost === '[::]' || bindHost === '::' ? displayHost : bindHost.replace(/^\[|\]$/g, '');
   return `http://${host.includes(':') ? `[${host}]` : host}:${port}/metrics`;
+}
+
+const PROTOCOL_COLORS: Record<string, string> = {
+  HTTP: 'var(--color-yellow-y1)',
+  HTTPS: 'var(--color-green-g1)',
+  H2: 'var(--color-blue-b1)',
+  H3: 'var(--color-primary)',
+  gRPC: 'var(--color-red-r1)',
+};
+
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
+      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+      {label}
+    </span>
+  );
 }
 
 const chartTooltipStyle = {
@@ -338,18 +356,50 @@ export function Metrics() {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <h2 className="mb-3 text-lg font-semibold">Protocol totals</h2>
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold">Protocol totals</h2>
+            <div className="flex flex-wrap items-center gap-3">
+              {protocolBars.map((row) => (
+                <LegendDot key={row.name} color={PROTOCOL_COLORS[row.name]} label={row.name} />
+              ))}
+            </div>
+          </div>
+          <p className="mb-3 text-xs text-text-secondary">
+            Cumulative request counts per protocol since process start.
+          </p>
           {protocolBars.length === 0 ? (
             <EmptyChart message={loading ? 'Loading…' : 'No protocol counters yet.'} />
           ) : (
             <div className="h-56 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={protocolBars} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <defs>
+                    {protocolBars.map((row) => (
+                      <linearGradient key={row.name} id={`protoFill-${row.name}`} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={PROTOCOL_COLORS[row.name]} stopOpacity={0.9} />
+                        <stop offset="100%" stopColor={PROTOCOL_COLORS[row.name]} stopOpacity={0.25} />
+                      </linearGradient>
+                    ))}
+                  </defs>
                   <CartesianGrid stroke="var(--color-border)" strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="name" tick={{ fill: 'var(--color-text-secondary)', fontSize: 11 }} />
                   <YAxis allowDecimals={false} tick={{ fill: 'var(--color-text-secondary)', fontSize: 11 }} width={48} />
-                  <Tooltip contentStyle={chartTooltipStyle} formatter={(value: number) => [value.toLocaleString(), 'Count']} />
-                  <Bar dataKey="count" fill="var(--color-blue-b1)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                  <Tooltip
+                    contentStyle={chartTooltipStyle}
+                    labelStyle={{ color: 'var(--color-text-secondary)' }}
+                    cursor={{ fill: 'var(--color-hover)', opacity: 0.4 }}
+                    formatter={(value: number) => [value.toLocaleString(), 'Requests']}
+                  />
+                  <Bar dataKey="count" radius={[4, 4, 0, 0]} isAnimationActive={false}>
+                    {protocolBars.map((row) => (
+                      <Cell
+                        key={row.name}
+                        fill={`url(#protoFill-${row.name})`}
+                        stroke={PROTOCOL_COLORS[row.name]}
+                        strokeWidth={1.5}
+                      />
+                    ))}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -357,7 +407,16 @@ export function Metrics() {
         </Card>
 
         <Card>
-          <h2 className="mb-3 text-lg font-semibold">Network throughput</h2>
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold">Network throughput</h2>
+            <div className="flex flex-wrap items-center gap-3">
+              <LegendDot color="var(--color-green-g1)" label="Sent" />
+              <LegendDot color="var(--color-yellow-y1)" label="Received" />
+            </div>
+          </div>
+          <p className="mb-3 text-xs text-text-secondary">
+            KiB/s derived from successive snapshots{live ? ' (live every 3s)' : ''}.
+          </p>
           {rates.length === 0 ? (
             <EmptyChart message={loading ? 'Loading…' : 'No throughput samples yet.'} />
           ) : (
@@ -379,6 +438,7 @@ export function Metrics() {
                   <YAxis tick={{ fill: 'var(--color-text-secondary)', fontSize: 11 }} width={48} />
                   <Tooltip
                     contentStyle={chartTooltipStyle}
+                    labelStyle={{ color: 'var(--color-text-secondary)' }}
                     formatter={(value: number, name: string) => [`${value.toFixed(2)} KiB/s`, name === 'sent_kibps' ? 'Sent' : 'Received']}
                   />
                   <Area type="monotone" dataKey="sent_kibps" stroke="var(--color-green-g1)" fill="url(#sentFill)" strokeWidth={2} isAnimationActive={false} />
