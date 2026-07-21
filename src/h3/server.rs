@@ -261,6 +261,68 @@ async fn handle_proxied_request(
         }
     };
 
+    if plan.middleware.geoip.is_active() {
+        let xff = req
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok());
+        let x_real_ip = req
+            .headers()
+            .get("x-real-ip")
+            .and_then(|value| value.to_str().ok());
+        let client_ip = resolve_client_ip(None, xff, x_real_ip)
+            .or_else(|| client_ip_from_http_headers(req.headers()));
+        match crate::geoip::evaluate_ip(&plan.middleware.geoip, client_ip.as_deref()) {
+            crate::geoip::Decision::Allow => {}
+            decision => {
+                let reason = match decision {
+                    crate::geoip::Decision::BlockCountry => "geoip-country",
+                    crate::geoip::Decision::BlockAsn => "geoip-asn",
+                    crate::geoip::Decision::Allow => unreachable!(),
+                };
+                send_error(&mut send, deny::h3_forbidden(reason)).await;
+                return Ok(());
+            }
+        }
+    }
+
+    if plan.middleware.security.is_active() {
+        let path_only = req.uri().path();
+        let query = req.uri().query().unwrap_or("");
+        let xff = req
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok());
+        let x_real_ip = req
+            .headers()
+            .get("x-real-ip")
+            .and_then(|value| value.to_str().ok());
+        let client_ip = resolve_client_ip(None, xff, x_real_ip)
+            .or_else(|| client_ip_from_http_headers(req.headers()));
+        let view = crate::security::RequestView {
+            method: req.method().as_str(),
+            path: path_only,
+            query,
+            user_agent: req.headers().get("user-agent").and_then(|v| v.to_str().ok()),
+            accept: req.headers().get("accept").and_then(|v| v.to_str().ok()),
+            accept_language: req
+                .headers()
+                .get("accept-language")
+                .and_then(|v| v.to_str().ok()),
+            cookie: req.headers().get("cookie").and_then(|v| v.to_str().ok()),
+            client_ip: client_ip.as_deref(),
+        };
+        let decision = crate::security::evaluate(&plan.middleware.security, &view);
+        match decision.action {
+            crate::security::SecurityAction::Allow | crate::security::SecurityAction::Log => {}
+            crate::security::SecurityAction::Challenge | crate::security::SecurityAction::Block => {
+                // Quiche path: block (full captcha HTML is served on Quinn/Pingora).
+                send_error(&mut send, deny::h3_forbidden(decision.reason)).await;
+                return Ok(());
+            }
+        }
+    }
+
     tracing::trace!(
         host = %host,
         path = %path_q,

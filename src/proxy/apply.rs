@@ -50,6 +50,8 @@ pub fn config_to_route_table(config: &Config) -> Result<RouteTable> {
                 None,
                 &target,
                 site.forward_client_ip,
+                site.geoip.clone(),
+                site.security.clone(),
             )]
         } else {
             site
@@ -62,6 +64,8 @@ pub fn config_to_route_table(config: &Config) -> Result<RouteTable> {
                         r.rewrite.as_deref(),
                         &target,
                         site.forward_client_ip,
+                        site.geoip.clone(),
+                        site.security.clone(),
                     )
                 })
                 .collect()
@@ -79,6 +83,8 @@ fn site_route(
     _rewrite: Option<&str>,
     target: &crate::router::Backend,
     forward_client_ip: bool,
+    geoip: crate::geoip::GeoIpPolicy,
+    security: crate::security::SecurityPolicy,
 ) -> Route {
     Route {
         path: path.to_string(),
@@ -90,6 +96,8 @@ fn site_route(
         backend: target.clone(),
         middlewares: Vec::<Middleware>::new(),
         forward_client_ip,
+        geoip: geoip.normalized(),
+        security: security.normalized(),
     }
 }
 
@@ -129,6 +137,8 @@ pub fn migrate_from_routes_yaml(yaml: &str) -> Result<Config> {
             k8s_resource_kind: None,
             http3_alt_svc_enabled: true,
             forward_client_ip: false,
+            geoip: Default::default(),
+            security: Default::default(),
         });
     }
 

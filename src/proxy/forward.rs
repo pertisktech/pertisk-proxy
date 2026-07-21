@@ -11,6 +11,8 @@ pub struct MiddlewareAction {
     pub request_headers: Vec<(String, String)>,
     pub response_headers: Vec<(String, String)>,
     pub forward_client_ip: bool,
+    pub geoip: crate::geoip::GeoIpPolicy,
+    pub security: crate::security::SecurityPolicy,
 }
 
 impl Default for MiddlewareAction {
@@ -20,6 +22,8 @@ impl Default for MiddlewareAction {
             request_headers: Vec::new(),
             response_headers: Vec::new(),
             forward_client_ip: true,
+            geoip: Default::default(),
+            security: Default::default(),
         }
     }
 }
@@ -145,6 +149,8 @@ pub fn resolve_forward(
 
     let mut middleware = apply_middlewares(&route.middlewares);
     middleware.forward_client_ip = route.forward_client_ip;
+    middleware.geoip = route.geoip.clone();
+    middleware.security = route.security.clone();
     let upstream_path = if let Some(ref prefix) = middleware.strip_prefix {
         strip_path_prefix(path_and_query, prefix)
     } else {
@@ -227,6 +233,8 @@ mod tests {
                     prefix: "/api".into(),
                 }],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
 
@@ -248,6 +256,8 @@ mod tests {
                 },
                 middlewares: vec![],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
         let plan = resolve_forward(&table, "app.example.com", "/api/status").unwrap();
@@ -356,6 +366,8 @@ mod tests {
                 },
                 middlewares: vec![],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
         let plan = resolve_forward(&table, "proxmox.example.com", "/").unwrap();
@@ -377,6 +389,8 @@ mod tests {
                 },
                 middlewares: vec![],
                 forward_client_ip: true,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
         let plan = resolve_forward(&table, "git.example.com", "/").unwrap();

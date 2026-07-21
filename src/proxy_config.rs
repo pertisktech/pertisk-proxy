@@ -89,6 +89,12 @@ pub struct Site {
     /// so upstream apps (e.g. Git login notifications) see the real client IP.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub forward_client_ip: bool,
+    /// GeoIP allow/deny (country + ASN). Disabled by default.
+    #[serde(default, skip_serializing_if = "crate::geoip::GeoIpPolicy::is_default")]
+    pub geoip: crate::geoip::GeoIpPolicy,
+    /// WAF / bot / captcha policy. Disabled by default.
+    #[serde(default, skip_serializing_if = "crate::security::SecurityPolicy::is_default")]
+    pub security: crate::security::SecurityPolicy,
 }
 
 fn is_true(value: &bool) -> bool {
@@ -535,6 +541,8 @@ mod upstream_parse_tests {
             security_headers: None,
             http3_alt_svc_enabled: true,
             forward_client_ip: false,
+            geoip: Default::default(),
+            security: Default::default(),
             ingress_namespace: None,
             ingress_name: None,
             k8s_resource_kind: None,
@@ -691,6 +699,8 @@ backends:
             k8s_resource_kind: None,
             http3_alt_svc_enabled: true,
             forward_client_ip: false,
+            geoip: Default::default(),
+            security: Default::default(),
         };
         let value = serde_json::to_value(&site).unwrap();
         assert!(

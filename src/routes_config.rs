@@ -100,6 +100,8 @@ fn build_table(specs: Vec<RouteSpec>) -> Result<RouteTable> {
                 backend: backend.clone(),
                 middlewares: spec.middlewares.clone(),
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             });
         }
     }

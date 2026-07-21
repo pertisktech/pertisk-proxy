@@ -76,6 +76,12 @@ export type ManagementInfo = {
     namespace: string;
     lease_name: string;
   } | null;
+  geoip?: {
+    country_db_loaded: boolean;
+    asn_db_loaded: boolean;
+    country_db_path?: string | null;
+    asn_db_path?: string | null;
+  };
 };
 
 export type TuningInfo = {
@@ -138,6 +144,13 @@ export type Metrics = {
   bytes_sent_total: number;
   bytes_received_total: number;
   upstream_errors_total: number;
+  geoip_blocked_total?: number;
+  waf_blocked_total?: number;
+  waf_logged_total?: number;
+  bot_challenged_total?: number;
+  bot_blocked_total?: number;
+  captcha_passed_total?: number;
+  captcha_failed_total?: number;
   metrics_addr: string;
 };
 
@@ -150,6 +163,40 @@ export type Site = {
   k8s_resource_kind?: string | null;
   /** Inject X-Real-IP and X-Forwarded-For for upstream apps. */
   forward_client_ip?: boolean;
+  /** GeoIP country/ASN allow/deny. */
+  geoip?: {
+    enabled?: boolean;
+    allow_countries?: string[];
+    deny_countries?: string[];
+    allow_asns?: number[];
+    deny_asns?: number[];
+  };
+  /** WAF / bot / captcha. */
+  security?: {
+    waf?: {
+      enabled?: boolean;
+      use_builtin_rules?: boolean;
+      rules?: Array<{
+        id: string;
+        enabled?: boolean;
+        action?: 'block' | 'log' | 'challenge';
+        methods?: string[];
+        path_contains?: string;
+        query_contains?: string;
+        ua_contains?: string;
+      }>;
+    };
+    bot?: {
+      enabled?: boolean;
+      challenge_score?: number;
+      block_score?: number;
+      rate_limit_per_min?: number;
+    };
+    captcha?: {
+      enabled?: boolean;
+      cookie_ttl_secs?: number;
+    };
+  };
 };
 
 export type K8sNamespaceRow = { name: string; created_at?: string | null };

@@ -114,6 +114,12 @@ impl IngressController {
 
             let ns = ingress.namespace().unwrap_or_else(|| "default".to_string());
             let ingress_name = ingress.name_any();
+            let geoip = crate::geoip::policy_from_annotations(
+                ingress.metadata.annotations.as_ref(),
+            );
+            let security = crate::security::policy_from_annotations(
+                ingress.metadata.annotations.as_ref(),
+            );
             let rule_hosts: Vec<String> = spec
                 .rules
                 .as_deref()
@@ -164,6 +170,8 @@ impl IngressController {
                         k8s_resource_kind: Some("ingress".to_string()),
                         http3_alt_svc_enabled: true,
                         forward_client_ip: true,
+                        geoip: geoip.clone(),
+                        security: security.clone(),
                     });
                 }
             }
@@ -498,6 +506,9 @@ impl IngressController {
         for route in &routes {
             let route_ns = route.namespace().unwrap_or_else(|| "default".to_string());
             let route_name = route.name_any();
+            let geoip = crate::geoip::policy_from_annotations(route.metadata.annotations.as_ref());
+            let security =
+                crate::security::policy_from_annotations(route.metadata.annotations.as_ref());
             let attached = attached_gateways(&route, &managed_gateways);
             if attached.is_empty() {
                 continue;
@@ -586,6 +597,8 @@ impl IngressController {
                                 k8s_resource_kind: Some("httproute".to_string()),
                                 http3_alt_svc_enabled: true,
                                 forward_client_ip: true,
+                                geoip: geoip.clone(),
+                                security: security.clone(),
                             });
                         }
                     }

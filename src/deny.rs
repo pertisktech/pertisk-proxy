@@ -77,6 +77,80 @@ pub fn h3_response(tls: bool) -> http::Response<Vec<u8>> {
         .unwrap()
 }
 
+const GEOIP_BODY: &[u8] = b"forbidden";
+
+/// Respond 403 for GeoIP / policy blocks on the Pingora path.
+pub async fn respond_forbidden(
+    session: &mut Session,
+    server: &str,
+    reason: &str,
+) -> pingora_core::Result<()> {
+    let mut resp = ResponseHeader::build(StatusCode::FORBIDDEN, Some(4))?;
+    resp.insert_header("Content-Type", "text/plain")?;
+    resp.insert_header("Content-Length", GEOIP_BODY.len())?;
+    resp.insert_header("Server", server)?;
+    resp.insert_header("X-App-Name", crate::app_name())?;
+    resp.insert_header("X-Pertisk-Block", reason)?;
+    session.write_response_header(Box::new(resp), false).await?;
+    session
+        .write_response_body(Some(Bytes::from_static(GEOIP_BODY)), true)
+        .await?;
+    Ok(())
+}
+
+pub async fn respond_html(
+    session: &mut Session,
+    server: &str,
+    status: StatusCode,
+    content_type: &str,
+    body: &str,
+    extra_headers: &[(&'static str, String)],
+) -> pingora_core::Result<()> {
+    let mut resp = ResponseHeader::build(status, Some(4 + extra_headers.len()))?;
+    resp.insert_header("Content-Type", content_type)?;
+    resp.insert_header("Content-Length", body.len())?;
+    resp.insert_header("Server", server)?;
+    resp.insert_header("X-App-Name", crate::app_name())?;
+    for (name, value) in extra_headers {
+        resp.insert_header(*name, value.as_str())?;
+    }
+    session.write_response_header(Box::new(resp), false).await?;
+    session
+        .write_response_body(Some(Bytes::copy_from_slice(body.as_bytes())), true)
+        .await?;
+    Ok(())
+}
+
+pub async fn respond_redirect(
+    session: &mut Session,
+    server: &str,
+    location: &str,
+    set_cookie: Option<&str>,
+) -> pingora_core::Result<()> {
+    let mut resp = ResponseHeader::build(StatusCode::FOUND, Some(5))?;
+    resp.insert_header("Location", location)?;
+    resp.insert_header("Content-Length", "0")?;
+    resp.insert_header("Server", server)?;
+    resp.insert_header("X-App-Name", crate::app_name())?;
+    if let Some(cookie) = set_cookie {
+        resp.insert_header("Set-Cookie", cookie)?;
+    }
+    session.write_response_header(Box::new(resp), true).await?;
+    Ok(())
+}
+
+pub fn h3_forbidden(reason: &str) -> http::Response<Vec<u8>> {
+    http::Response::builder()
+        .status(StatusCode::FORBIDDEN)
+        .header("content-type", "text/plain")
+        .header("content-length", GEOIP_BODY.len())
+        .header("server", "pertisk-proxy/h3")
+        .header("x-app-name", crate::app_name())
+        .header("x-pertisk-block", reason)
+        .body(GEOIP_BODY.to_vec())
+        .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

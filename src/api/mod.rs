@@ -482,6 +482,7 @@ struct ManagementInfo {
     gateway_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     leader_election: Option<LeaderElectionInfo>,
+    geoip: crate::geoip::GeoIpStatus,
 }
 
 #[derive(Serialize)]
@@ -711,6 +712,13 @@ struct MetricsResponse {
     bytes_sent_total: u64,
     bytes_received_total: u64,
     upstream_errors_total: u64,
+    geoip_blocked_total: u64,
+    waf_blocked_total: u64,
+    waf_logged_total: u64,
+    bot_challenged_total: u64,
+    bot_blocked_total: u64,
+    captcha_passed_total: u64,
+    captcha_failed_total: u64,
     site_h2_requests_total: std::collections::HashMap<String, u64>,
     site_h3_requests_total: std::collections::HashMap<String, u64>,
     metrics_addr: String,
@@ -760,6 +768,13 @@ async fn get_metrics(
         bytes_sent_total: m.bytes_sent_total.load(Ordering::Relaxed),
         bytes_received_total: m.bytes_received_total.load(Ordering::Relaxed),
         upstream_errors_total: m.upstream_errors_total.load(Ordering::Relaxed),
+        geoip_blocked_total: m.geoip_blocked_total.load(Ordering::Relaxed),
+        waf_blocked_total: m.waf_blocked_total.load(Ordering::Relaxed),
+        waf_logged_total: m.waf_logged_total.load(Ordering::Relaxed),
+        bot_challenged_total: m.bot_challenged_total.load(Ordering::Relaxed),
+        bot_blocked_total: m.bot_blocked_total.load(Ordering::Relaxed),
+        captcha_passed_total: m.captcha_passed_total.load(Ordering::Relaxed),
+        captcha_failed_total: m.captcha_failed_total.load(Ordering::Relaxed),
         site_h2_requests_total,
         site_h3_requests_total,
         metrics_addr: crate::metrics::metrics_addr_from_env().to_string(),
@@ -849,6 +864,7 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
         ingress_class,
         gateway_class,
         leader_election,
+        geoip: crate::geoip::status(),
     })
 }
 

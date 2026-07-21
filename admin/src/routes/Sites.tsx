@@ -88,6 +88,18 @@ export function Sites() {
   const [formDnsProviderId, setFormDnsProviderId] = useState('');
   const [formWildcard, setFormWildcard] = useState(false);
   const [formForwardClientIp, setFormForwardClientIp] = useState(true);
+  const [formGeoipEnabled, setFormGeoipEnabled] = useState(false);
+  const [formGeoipAllowCountries, setFormGeoipAllowCountries] = useState('');
+  const [formGeoipDenyCountries, setFormGeoipDenyCountries] = useState('');
+  const [formGeoipAllowAsns, setFormGeoipAllowAsns] = useState('');
+  const [formGeoipDenyAsns, setFormGeoipDenyAsns] = useState('');
+  const [formWafEnabled, setFormWafEnabled] = useState(false);
+  const [formWafBuiltin, setFormWafBuiltin] = useState(true);
+  const [formBotEnabled, setFormBotEnabled] = useState(false);
+  const [formBotChallenge, setFormBotChallenge] = useState('40');
+  const [formBotBlock, setFormBotBlock] = useState('80');
+  const [formCaptchaEnabled, setFormCaptchaEnabled] = useState(false);
+  const [siteFormTab, setSiteFormTab] = useState<'general' | 'advanced'>('general');
   const [siteSaving, setSiteSaving] = useState(false);
   const [siteError, setSiteError] = useState('');
 
@@ -181,6 +193,18 @@ export function Sites() {
     setFormDnsProviderId('');
     setFormWildcard(false);
     setFormForwardClientIp(true);
+    setFormGeoipEnabled(false);
+    setFormGeoipAllowCountries('');
+    setFormGeoipDenyCountries('');
+    setFormGeoipAllowAsns('');
+    setFormGeoipDenyAsns('');
+    setFormWafEnabled(false);
+    setFormWafBuiltin(true);
+    setFormBotEnabled(false);
+    setFormBotChallenge('40');
+    setFormBotBlock('80');
+    setFormCaptchaEnabled(false);
+    setSiteFormTab('general');
     setSiteError('');
     setSiteModal(true);
   }
@@ -212,6 +236,18 @@ export function Sites() {
     setFormAcmeEmail(acmeSource?.email ?? '');
     setFormWildcard(tlsForHost ? siteUsesWildcardInTls(site.host, tlsForHost) : false);
     setFormForwardClientIp(site.forward_client_ip !== false);
+    setFormGeoipEnabled(!!site.geoip?.enabled);
+    setFormGeoipAllowCountries((site.geoip?.allow_countries ?? []).join(', '));
+    setFormGeoipDenyCountries((site.geoip?.deny_countries ?? []).join(', '));
+    setFormGeoipAllowAsns((site.geoip?.allow_asns ?? []).join(', '));
+    setFormGeoipDenyAsns((site.geoip?.deny_asns ?? []).join(', '));
+    setFormWafEnabled(!!site.security?.waf?.enabled);
+    setFormWafBuiltin(site.security?.waf?.use_builtin_rules !== false);
+    setFormBotEnabled(!!site.security?.bot?.enabled);
+    setFormBotChallenge(String(site.security?.bot?.challenge_score ?? 40));
+    setFormBotBlock(String(site.security?.bot?.block_score ?? 80));
+    setFormCaptchaEnabled(!!site.security?.captcha?.enabled);
+    setSiteFormTab('general');
     setFormDnsProviderId(
       acmeSource && acmeChallengeFromSource(acmeSource) === 'dns01'
         ? resolveDnsProviderId(acmeSource, dnsProviders)
@@ -251,22 +287,49 @@ export function Sites() {
       .filter((r) => r.path);
   }
 
+  function parseCountryList(raw: string): string[] {
+    return [
+      ...new Set(
+        raw
+          .split(/[,;\s]+/)
+          .map((c) => c.trim().toUpperCase())
+          .filter(Boolean),
+      ),
+    ];
+  }
+
+  function parseAsnList(raw: string): number[] {
+    return [
+      ...new Set(
+        raw
+          .split(/[,;\s]+/)
+          .map((part) => part.trim().replace(/^AS/i, ''))
+          .filter(Boolean)
+          .map((n) => Number(n))
+          .filter((n) => Number.isFinite(n) && n > 0),
+      ),
+    ];
+  }
+
   async function submitSite(e: FormEvent) {
     e.preventDefault();
     setSiteError('');
     const host = formHost.trim();
     if (!host) {
       setSiteError('Domain is required');
+      setSiteFormTab('general');
       return;
     }
     const rawUpstream = formUpstream.trim();
     if (!rawUpstream) {
       setSiteError('Upstream URL is required');
+      setSiteFormTab('general');
       return;
     }
     const routes = buildRoutes();
     if (!routes.length) {
       setSiteError('At least one route with a path is required');
+      setSiteFormTab('general');
       return;
     }
 
@@ -375,11 +438,51 @@ export function Sites() {
       }
     }
 
+    const allowCountries = parseCountryList(formGeoipAllowCountries);
+    const denyCountries = parseCountryList(formGeoipDenyCountries);
+    const allowAsns = parseAsnList(formGeoipAllowAsns);
+    const denyAsns = parseAsnList(formGeoipDenyAsns);
+    const geoipActive =
+      formGeoipEnabled ||
+      allowCountries.length > 0 ||
+      denyCountries.length > 0 ||
+      allowAsns.length > 0 ||
+      denyAsns.length > 0;
+
+    const challengeScore = Number(formBotChallenge) || 40;
+    const blockScore = Number(formBotBlock) || 80;
+    const securityActive = formWafEnabled || formBotEnabled || formCaptchaEnabled;
+
     const newSite: Site = {
       host,
       backend: backendName,
       routes,
       forward_client_ip: formForwardClientIp || undefined,
+      geoip: geoipActive
+        ? {
+            enabled: true,
+            allow_countries: allowCountries,
+            deny_countries: denyCountries,
+            allow_asns: allowAsns,
+            deny_asns: denyAsns,
+          }
+        : undefined,
+      security: securityActive
+        ? {
+            waf: {
+              enabled: formWafEnabled,
+              use_builtin_rules: formWafEnabled && formWafBuiltin,
+            },
+            bot: {
+              enabled: formBotEnabled,
+              challenge_score: challengeScore,
+              block_score: blockScore,
+            },
+            captcha: {
+              enabled: formCaptchaEnabled,
+            },
+          }
+        : undefined,
     };
     const newSites =
       editingIndex !== null ? sites.map((s, i) => (i === editingIndex ? newSite : s)) : [...sites, newSite];
@@ -546,146 +649,289 @@ export function Sites() {
 
       <Modal open={siteModal} onClose={() => setSiteModal(false)} title={editingIndex !== null ? 'Edit site' : 'Add site'} wide>
         <form onSubmit={submitSite} className="space-y-5">
-          <div className={sectionCls}>
-            <h3 className={sectionTitleCls}>Basics</h3>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className={labelCls}>
-                Domain
-                <input className={inputCls} value={formHost} onChange={(e) => setFormHost(e.target.value)} placeholder="example.com" required />
-              </label>
-              <label className={labelCls}>
-                Upstream
-                <input
-                  className={inputCls}
-                  value={formUpstream}
-                  onChange={(e) => setFormUpstream(e.target.value)}
-                  placeholder="http://localhost:8080 or 127.0.0.1:3000"
-                  required
-                />
-              </label>
-            </div>
-            <Checkbox
-              checked={formForwardClientIp}
-              onChange={setFormForwardClientIp}
-              className="text-sm"
-              label="Forward client IP (X-Real-IP / X-Forwarded-For)"
-            />
+          <div className="tab-bar w-full sm:w-auto" role="tablist" aria-label="Site settings">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={siteFormTab === 'general'}
+              onClick={() => setSiteFormTab('general')}
+              className={cn('tab-item', siteFormTab === 'general' && 'active')}
+            >
+              General
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={siteFormTab === 'advanced'}
+              onClick={() => setSiteFormTab('advanced')}
+              className={cn('tab-item', siteFormTab === 'advanced' && 'active')}
+            >
+              Advanced
+            </button>
           </div>
 
-          <div className={sectionCls}>
-            <h3 className={cn(sectionTitleCls, 'flex items-center gap-2')}>
-              <Lock size={14} /> SSL / TLS
-            </h3>
-            <div className="grid gap-2 sm:grid-cols-3">
-              {([
-                { mode: 'none' as const, icon: Lock, title: 'None', text: 'Plain HTTP only' },
-                { mode: 'from_list' as const, icon: Award, title: 'Existing cert', text: 'Reuse a configured certificate' },
-                { mode: 'generate' as const, icon: Zap, title: 'Generate SSL', text: "ACME / Let's Encrypt" },
-              ]).map(({ mode, icon: Icon, title, text }) => (
-                <label
-                  key={mode}
-                  className={cn(
-                    'flex cursor-pointer gap-3 rounded-md border p-3 transition-colors',
-                    formSslMode === mode ? 'border-primary bg-primary/5' : 'border-border hover:bg-hover/50',
-                  )}
-                >
-                  <input type="radio" name="sslMode" checked={formSslMode === mode} onChange={() => setFormSslMode(mode)} className="mt-1" />
-                  <span>
-                    <span className="flex items-center gap-1.5 text-sm font-medium">
-                      <Icon size={14} /> {title}
-                    </span>
-                    <span className="text-xs text-text-secondary">{text}</span>
-                  </span>
-                </label>
-              ))}
-            </div>
-            {formSslMode === 'generate' ? (
-              <p className="text-xs text-text-secondary">Certificate is issued automatically when you save (no restart).</p>
-            ) : null}
-            {formSslMode === 'from_list' ? (
-              <label className={labelCls}>
-                Certificate
-                <select className={inputCls} value={formTlsIndex} onChange={(e) => setFormTlsIndex(Number(e.target.value))}>
-                  {tlsList.map((t, i) => (
-                    <option key={i} value={i}>{sslLabelForDropdown(t.hosts)}</option>
-                  ))}
-                  {tlsList.length === 0 ? <option value={0}>No certificates configured</option> : null}
-                </select>
-              </label>
-            ) : null}
-            {formSslMode === 'generate' ? (
-              <div className="space-y-3">
-                <label className={labelCls}>
-                  Contact email (Let&apos;s Encrypt)
-                  <input type="email" className={inputCls} value={formAcmeEmail} onChange={(e) => setFormAcmeEmail(e.target.value)} placeholder="you@yourdomain.com" required />
-                </label>
-                <label className={labelCls}>
-                  Challenge type
-                  <select className={inputCls} value={formAcmeChallenge} onChange={(e) => setFormAcmeChallenge(e.target.value as 'http01' | 'dns01')}>
-                    <option value="http01">HTTP-01</option>
-                    <option value="dns01">DNS-01</option>
-                  </select>
-                </label>
-                {formAcmeChallenge === 'dns01' ? (
+          {siteFormTab === 'general' ? (
+            <>
+              <div className={sectionCls}>
+                <h3 className={sectionTitleCls}>Basics</h3>
+                <div className="grid gap-4 sm:grid-cols-2">
                   <label className={labelCls}>
-                    DNS provider
-                    <select className={inputCls} value={formDnsProviderId} onChange={(e) => setFormDnsProviderId(e.target.value)}>
-                      <option value="">Please select</option>
-                      {dnsProviders.map((p) => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
+                    Domain
+                    <input className={inputCls} value={formHost} onChange={(e) => setFormHost(e.target.value)} placeholder="example.com" required />
+                  </label>
+                  <label className={labelCls}>
+                    Upstream
+                    <input
+                      className={inputCls}
+                      value={formUpstream}
+                      onChange={(e) => setFormUpstream(e.target.value)}
+                      placeholder="http://localhost:8080 or 127.0.0.1:3000"
+                      required
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className={sectionCls}>
+                <h3 className={cn(sectionTitleCls, 'flex items-center gap-2')}>
+                  <Lock size={14} /> SSL / TLS
+                </h3>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {([
+                    { mode: 'none' as const, icon: Lock, title: 'None', text: 'Plain HTTP only' },
+                    { mode: 'from_list' as const, icon: Award, title: 'Existing cert', text: 'Reuse a configured certificate' },
+                    { mode: 'generate' as const, icon: Zap, title: 'Generate SSL', text: "ACME / Let's Encrypt" },
+                  ]).map(({ mode, icon: Icon, title, text }) => (
+                    <label
+                      key={mode}
+                      className={cn(
+                        'flex cursor-pointer gap-3 rounded-md border p-3 transition-colors',
+                        formSslMode === mode ? 'border-primary bg-primary/5' : 'border-border hover:bg-hover/50',
+                      )}
+                    >
+                      <input type="radio" name="sslMode" checked={formSslMode === mode} onChange={() => setFormSslMode(mode)} className="mt-1" />
+                      <span>
+                        <span className="flex items-center gap-1.5 text-sm font-medium">
+                          <Icon size={14} /> {title}
+                        </span>
+                        <span className="text-xs text-text-secondary">{text}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                {formSslMode === 'generate' ? (
+                  <p className="text-xs text-text-secondary">Certificate is issued automatically when you save (no restart).</p>
+                ) : null}
+                {formSslMode === 'from_list' ? (
+                  <label className={labelCls}>
+                    Certificate
+                    <select className={inputCls} value={formTlsIndex} onChange={(e) => setFormTlsIndex(Number(e.target.value))}>
+                      {tlsList.map((t, i) => (
+                        <option key={i} value={i}>{sslLabelForDropdown(t.hosts)}</option>
                       ))}
-                      {dnsProviders.length === 0 ? <option value="">No DNS providers (add one in DNS Providers)</option> : null}
+                      {tlsList.length === 0 ? <option value={0}>No certificates configured</option> : null}
                     </select>
                   </label>
                 ) : null}
-                <Checkbox
-                  checked={formWildcard}
-                  onChange={setFormWildcard}
-                  className="text-sm"
-                  label={`Wildcard certificate (${formHost.trim() ? hostToWildcard(formHost.trim()) : '*.domain'})`}
-                />
+                {formSslMode === 'generate' ? (
+                  <div className="space-y-3">
+                    <label className={labelCls}>
+                      Contact email (Let&apos;s Encrypt)
+                      <input type="email" className={inputCls} value={formAcmeEmail} onChange={(e) => setFormAcmeEmail(e.target.value)} placeholder="you@yourdomain.com" required />
+                    </label>
+                    <label className={labelCls}>
+                      Challenge type
+                      <select className={inputCls} value={formAcmeChallenge} onChange={(e) => setFormAcmeChallenge(e.target.value as 'http01' | 'dns01')}>
+                        <option value="http01">HTTP-01</option>
+                        <option value="dns01">DNS-01</option>
+                      </select>
+                    </label>
+                    {formAcmeChallenge === 'dns01' ? (
+                      <label className={labelCls}>
+                        DNS provider
+                        <select className={inputCls} value={formDnsProviderId} onChange={(e) => setFormDnsProviderId(e.target.value)}>
+                          <option value="">Please select</option>
+                          {dnsProviders.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                          {dnsProviders.length === 0 ? <option value="">No DNS providers (add one in DNS Providers)</option> : null}
+                        </select>
+                      </label>
+                    ) : null}
+                    <Checkbox
+                      checked={formWildcard}
+                      onChange={setFormWildcard}
+                      className="text-sm"
+                      label={`Wildcard certificate (${formHost.trim() ? hostToWildcard(formHost.trim()) : '*.domain'})`}
+                    />
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
 
-          <div className={sectionCls}>
-            <div className="flex items-center justify-between">
-              <h3 className={sectionTitleCls}>Routes</h3>
-              <button type="button" onClick={addRoute} className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-hover">
-                <Plus size={12} /> Add route
-              </button>
-            </div>
-            <div className="space-y-2">
-              {formRoutes.map((r, i) => (
-                <div key={i} className="flex flex-wrap items-center gap-2">
-                  <select
-                    className="rounded-md border border-border bg-bg px-2 py-2 text-sm"
-                    value={r.path_type ?? 'Prefix'}
-                    onChange={(e) => updateRoute(i, 'path_type', e.target.value)}
-                  >
-                    {PATH_TYPES.map((t) => (
-                      <option key={t} value={t}>{t}</option>
-                    ))}
-                  </select>
-                  <input
-                    className="min-w-0 flex-1 rounded-md border border-border bg-bg px-3 py-2 text-sm"
-                    value={r.path}
-                    onChange={(e) => updateRoute(i, 'path', e.target.value)}
-                    placeholder="/api"
-                  />
-                  <input
-                    className="min-w-0 flex-1 rounded-md border border-border bg-bg px-3 py-2 text-sm"
-                    value={r.rewrite ?? ''}
-                    onChange={(e) => updateRoute(i, 'rewrite', e.target.value)}
-                    placeholder="rewrite (optional)"
-                  />
-                  <button type="button" onClick={() => removeRoute(i)} className="rounded-md border border-border p-2 text-red-r1 hover:bg-hover" title="Remove route">
-                    <X size={14} />
+              <div className={sectionCls}>
+                <div className="flex items-center justify-between">
+                  <h3 className={sectionTitleCls}>Routes</h3>
+                  <button type="button" onClick={addRoute} className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-hover">
+                    <Plus size={12} /> Add route
                   </button>
                 </div>
-              ))}
-            </div>
-          </div>
+                <div className="space-y-2">
+                  {formRoutes.map((r, i) => (
+                    <div key={i} className="flex flex-wrap items-center gap-2">
+                      <select
+                        className="rounded-md border border-border bg-bg px-2 py-2 text-sm"
+                        value={r.path_type ?? 'Prefix'}
+                        onChange={(e) => updateRoute(i, 'path_type', e.target.value)}
+                      >
+                        {PATH_TYPES.map((t) => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
+                      </select>
+                      <input
+                        className="min-w-0 flex-1 rounded-md border border-border bg-bg px-3 py-2 text-sm"
+                        value={r.path}
+                        onChange={(e) => updateRoute(i, 'path', e.target.value)}
+                        placeholder="/api"
+                      />
+                      <input
+                        className="min-w-0 flex-1 rounded-md border border-border bg-bg px-3 py-2 text-sm"
+                        value={r.rewrite ?? ''}
+                        onChange={(e) => updateRoute(i, 'rewrite', e.target.value)}
+                        placeholder="rewrite (optional)"
+                      />
+                      <button type="button" onClick={() => removeRoute(i)} className="rounded-md border border-border p-2 text-red-r1 hover:bg-hover" title="Remove route">
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className={sectionCls}>
+                <h3 className={sectionTitleCls}>Client IP</h3>
+                <Checkbox
+                  checked={formForwardClientIp}
+                  onChange={setFormForwardClientIp}
+                  className="text-sm"
+                  label="Forward client IP (X-Real-IP / X-Forwarded-For)"
+                />
+              </div>
+
+              <div className={sectionCls}>
+                <h3 className={sectionTitleCls}>GeoIP</h3>
+                <Checkbox
+                  checked={formGeoipEnabled}
+                  onChange={setFormGeoipEnabled}
+                  className="text-sm"
+                  label="Enable GeoIP allow / deny"
+                />
+                <p className="text-xs text-text-secondary">
+                  Requires MaxMind MMDB files (
+                  <code className="font-mono">PERTISK_GEOIP_COUNTRY_DB</code> /{' '}
+                  <code className="font-mono">PERTISK_GEOIP_ASN_DB</code>). Empty allowlist = allow all
+                  except deny list.
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className={labelCls}>
+                    Allow countries
+                    <input
+                      className={inputCls}
+                      value={formGeoipAllowCountries}
+                      onChange={(e) => setFormGeoipAllowCountries(e.target.value)}
+                      placeholder="TH, US"
+                      disabled={!formGeoipEnabled}
+                    />
+                  </label>
+                  <label className={labelCls}>
+                    Deny countries
+                    <input
+                      className={inputCls}
+                      value={formGeoipDenyCountries}
+                      onChange={(e) => setFormGeoipDenyCountries(e.target.value)}
+                      placeholder="CN, RU"
+                      disabled={!formGeoipEnabled}
+                    />
+                  </label>
+                  <label className={labelCls}>
+                    Allow ASNs
+                    <input
+                      className={inputCls}
+                      value={formGeoipAllowAsns}
+                      onChange={(e) => setFormGeoipAllowAsns(e.target.value)}
+                      placeholder="13335, AS15169"
+                      disabled={!formGeoipEnabled}
+                    />
+                  </label>
+                  <label className={labelCls}>
+                    Deny ASNs
+                    <input
+                      className={inputCls}
+                      value={formGeoipDenyAsns}
+                      onChange={(e) => setFormGeoipDenyAsns(e.target.value)}
+                      placeholder="12345"
+                      disabled={!formGeoipEnabled}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className={sectionCls}>
+                <h3 className={sectionTitleCls}>WAF / bot / captcha</h3>
+                <Checkbox
+                  checked={formWafEnabled}
+                  onChange={setFormWafEnabled}
+                  className="text-sm"
+                  label="Enable WAF (built-in SQLi / XSS / path traversal)"
+                />
+                <Checkbox
+                  checked={formWafBuiltin}
+                  onChange={setFormWafBuiltin}
+                  className="text-sm"
+                  label="Use built-in WAF rules"
+                  disabled={!formWafEnabled}
+                />
+                <Checkbox
+                  checked={formBotEnabled}
+                  onChange={setFormBotEnabled}
+                  className="text-sm"
+                  label="Enable bot scoring"
+                />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className={labelCls}>
+                    Challenge score
+                    <input
+                      className={inputCls}
+                      value={formBotChallenge}
+                      onChange={(e) => setFormBotChallenge(e.target.value)}
+                      disabled={!formBotEnabled}
+                    />
+                  </label>
+                  <label className={labelCls}>
+                    Block score
+                    <input
+                      className={inputCls}
+                      value={formBotBlock}
+                      onChange={(e) => setFormBotBlock(e.target.value)}
+                      disabled={!formBotEnabled}
+                    />
+                  </label>
+                </div>
+                <Checkbox
+                  checked={formCaptchaEnabled}
+                  onChange={setFormCaptchaEnabled}
+                  className="text-sm"
+                  label="Enable math captcha for challenges"
+                />
+                <p className="text-xs text-text-secondary">
+                  Challenge page: <code className="font-mono">/.pertisk/captcha</code>. Set{' '}
+                  <code className="font-mono">PERTISK_CAPTCHA_SECRET</code> for stable cookies across
+                  restarts.
+                </p>
+              </div>
+            </>
+          )}
 
           {siteError ? <p className="text-sm text-red-r1">{siteError}</p> : null}
           <div className="flex justify-end gap-2 pt-2">
