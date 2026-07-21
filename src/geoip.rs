@@ -68,9 +68,153 @@ pub enum Decision {
 
 pub struct GeoIpEngine {
     country: Option<maxminddb::Reader<Vec<u8>>>,
-    asn: Option<maxminddb::Reader<Vec<u8>>>,
+    asn: Option<AsnDb>,
     country_path: Option<PathBuf>,
     asn_path: Option<PathBuf>,
+}
+
+enum AsnDb {
+    Mmdb(maxminddb::Reader<Vec<u8>>),
+    /// ip2asn-combined.tsv style: start_ip\tend_ip\tasn\tcountry\torg
+    Tsv(AsnTsvDb),
+}
+
+struct AsnTsvDb {
+    v4: Vec<(u32, u32, u32)>,
+    v6: Vec<(u128, u128, u32)>,
+}
+
+impl AsnTsvDb {
+    fn load(path: &Path) -> Result<Self, String> {
+        let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let mut v4 = Vec::new();
+        let mut v6 = Vec::new();
+        for (line_no, line) in raw.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut cols = line.split('\t');
+            let start_s = cols.next().ok_or_else(|| format!("line {}: missing start", line_no + 1))?;
+            let end_s = cols.next().ok_or_else(|| format!("line {}: missing end", line_no + 1))?;
+            let asn_s = cols.next().unwrap_or("0");
+            let asn: u32 = asn_s.parse().unwrap_or(0);
+            if asn == 0 {
+                continue;
+            }
+            let start: IpAddr = start_s
+                .parse()
+                .map_err(|e| format!("line {}: bad start IP: {e}", line_no + 1))?;
+            let end: IpAddr = end_s
+                .parse()
+                .map_err(|e| format!("line {}: bad end IP: {e}", line_no + 1))?;
+            match (start, end) {
+                (IpAddr::V4(a), IpAddr::V4(b)) => {
+                    v4.push((u32::from(a), u32::from(b), asn));
+                }
+                (IpAddr::V6(a), IpAddr::V6(b)) => {
+                    v6.push((u128::from(a), u128::from(b), asn));
+                }
+                _ => {}
+            }
+        }
+        v4.sort_unstable_by_key(|(start, _, _)| *start);
+        v6.sort_unstable_by_key(|(start, _, _)| *start);
+        Ok(Self { v4, v6 })
+    }
+
+    fn lookup(&self, addr: IpAddr) -> Option<u32> {
+        match addr {
+            IpAddr::V4(ip) => {
+                let key = u32::from(ip);
+                let idx = self.v4.partition_point(|(start, _, _)| *start <= key);
+                if idx == 0 {
+                    return None;
+                }
+                let (start, end, asn) = self.v4[idx - 1];
+                if key >= start && key <= end {
+                    Some(asn)
+                } else {
+                    None
+                }
+            }
+            IpAddr::V6(ip) => {
+                let key = u128::from(ip);
+                let idx = self.v6.partition_point(|(start, _, _)| *start <= key);
+                if idx == 0 {
+                    return None;
+                }
+                let (start, end, asn) = self.v6[idx - 1];
+                if key >= start && key <= end {
+                    Some(asn)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+impl AsnDb {
+    fn lookup(&self, addr: IpAddr) -> Option<u32> {
+        match self {
+            AsnDb::Mmdb(reader) => match reader.lookup::<geoip2::Asn>(addr) {
+                Ok(Some(record)) => record.autonomous_system_number,
+                Ok(None) => None,
+                Err(err) => {
+                    debug!(error = %err, "GeoIP ASN MMDB lookup failed");
+                    None
+                }
+            },
+            AsnDb::Tsv(db) => db.lookup(addr),
+        }
+    }
+}
+
+fn load_asn_db(path: &Path) -> Option<AsnDb> {
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let is_tsv = name.ends_with(".tsv")
+        || name.ends_with(".tsv.gz")
+        || name.contains("ip2asn")
+        || name.ends_with(".csv");
+
+    if is_tsv {
+        // .tsv.gz not supported yet — only plain .tsv
+        if name.ends_with(".gz") {
+            warn!(path = %path.display(), "compressed ASN TSV is not supported; use uncompressed .tsv");
+            return None;
+        }
+        match AsnTsvDb::load(path) {
+            Ok(db) => {
+                info!(
+                    path = %path.display(),
+                    v4_ranges = db.v4.len(),
+                    v6_ranges = db.v6.len(),
+                    "GeoIP ASN TSV database loaded"
+                );
+                Some(AsnDb::Tsv(db))
+            }
+            Err(err) => {
+                warn!(path = %path.display(), error = %err, "GeoIP ASN TSV unavailable");
+                None
+            }
+        }
+    } else {
+        match maxminddb::Reader::open_readfile(path) {
+            Ok(reader) => {
+                info!(path = %path.display(), "GeoIP ASN MMDB database loaded");
+                Some(AsnDb::Mmdb(reader))
+            }
+            Err(err) => {
+                warn!(path = %path.display(), error = %err, "GeoIP ASN MMDB unavailable");
+                None
+            }
+        }
+    }
 }
 
 impl GeoIpEngine {
@@ -91,16 +235,7 @@ impl GeoIpEngine {
                 None
             }
         });
-        let asn = asn_path.and_then(|path| match maxminddb::Reader::open_readfile(path) {
-            Ok(reader) => {
-                info!(path = %path.display(), "GeoIP ASN database loaded");
-                Some(reader)
-            }
-            Err(err) => {
-                warn!(path = %path.display(), error = %err, "GeoIP ASN database unavailable");
-                None
-            }
-        });
+        let asn = asn_path.and_then(load_asn_db);
         Self {
             country,
             asn,
@@ -144,14 +279,8 @@ impl GeoIpEngine {
                 Err(err) => debug!(ip = %ip, error = %err, "GeoIP country lookup failed"),
             }
         }
-        if let Some(reader) = &self.asn {
-            match reader.lookup::<geoip2::Asn>(addr) {
-                Ok(Some(record)) => {
-                    info.asn = record.autonomous_system_number;
-                }
-                Ok(None) => {}
-                Err(err) => debug!(ip = %ip, error = %err, "GeoIP ASN lookup failed"),
-            }
+        if let Some(asn_db) = &self.asn {
+            info.asn = asn_db.lookup(addr);
         }
         if info.country.is_none() && info.asn.is_none() {
             None
@@ -274,8 +403,11 @@ fn default_country_path() -> Option<PathBuf> {
 fn default_asn_path() -> Option<PathBuf> {
     for candidate in [
         "/var/lib/pertisk-proxy/geoip/GeoLite2-ASN.mmdb",
+        "/var/lib/pertisk-proxy/geoip/ip2asn-combined.tsv",
+        "/var/lib/pertisk-proxy/geoip/ip2asn-v4.tsv",
         "/usr/share/GeoIP/GeoLite2-ASN.mmdb",
         "/usr/share/GeoIP/GeoIP2-ASN.mmdb",
+        "/usr/share/GeoIP/ip2asn-combined.tsv",
     ] {
         let path = PathBuf::from(candidate);
         if path.is_file() {
@@ -444,5 +576,25 @@ mod tests {
     fn parse_helpers() {
         assert_eq!(parse_countries("th, US;vn"), vec!["TH", "US", "VN"]);
         assert_eq!(parse_asns("AS13335, 15169"), vec![13335, 15169]);
+    }
+
+    #[test]
+    fn tsv_asn_lookup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ip2asn-combined.tsv");
+        std::fs::write(
+            &path,
+            "1.0.0.0\t1.0.0.255\t13335\tUS\tCLOUDFLARENET\n\
+             8.8.8.0\t8.8.8.255\t15169\tUS\tGOOGLE\n",
+        )
+        .unwrap();
+        let db = AsnTsvDb::load(&path).unwrap();
+        assert_eq!(db.lookup("1.0.0.10".parse().unwrap()), Some(13335));
+        assert_eq!(db.lookup("8.8.8.8".parse().unwrap()), Some(15169));
+        assert_eq!(db.lookup("9.9.9.9".parse().unwrap()), None);
+
+        let engine = GeoIpEngine::load(None, Some(path.as_path()));
+        assert!(engine.asn_loaded());
+        assert_eq!(engine.lookup("1.0.0.1").and_then(|i| i.asn), Some(13335));
     }
 }

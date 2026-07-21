@@ -27,6 +27,7 @@ import {
   tlsIndexForHost,
   type SiteSslMode,
 } from '@/utils/tlsHostMatch';
+import { useManagementInfo } from '@/context/ManagementContext';
 import { cn } from '@/utils';
 
 const PATH_TYPES = ['Exact', 'Prefix', 'ImplementationSpecific'];
@@ -69,6 +70,8 @@ function resolveDnsProviderId(
 }
 
 export function Sites() {
+  const management = useManagementInfo();
+  const geoipStatus = management?.geoip;
   const [config, setConfig] = useState<ProxyConfig>({ sites: [], backends: [], tls: [] });
   const [dnsProviders, setDnsProviders] = useState<DnsProviderRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -517,10 +520,51 @@ export function Sites() {
     }
   }
 
-  const inputCls = 'mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm';
+  const inputCls = 'mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-text placeholder:text-muted/40 placeholder:italic';
   const labelCls = 'block text-sm text-text-secondary';
   const sectionCls = 'space-y-3 rounded-md border border-border p-4';
   const sectionTitleCls = 'text-sm font-semibold text-text';
+
+  function ConfigTextField({
+    label,
+    example,
+    value,
+    onChange,
+    disabled,
+  }: {
+    label: string;
+    example: string;
+    value: string;
+    onChange: (value: string) => void;
+    disabled?: boolean;
+  }) {
+    const hasValue = value.trim().length > 0;
+    return (
+      <label className={labelCls}>
+        <span className="flex items-center justify-between gap-2">
+          <span>{label}</span>
+          <span
+            className={cn(
+              'rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+              hasValue ? 'bg-green-g1/15 text-green-g1' : 'bg-surface-elevated text-muted',
+            )}
+          >
+            {hasValue ? 'set' : 'empty'}
+          </span>
+        </span>
+        <span className="mt-0.5 block text-[11px] font-normal italic text-muted">
+          Example · {example}
+        </span>
+        <input
+          className={cn(inputCls, hasValue && 'border-primary/50')}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          autoComplete="off"
+        />
+      </label>
+    );
+  }
 
   if (loading) return <p className="text-text-secondary">Loading sites…</p>;
 
@@ -670,8 +714,14 @@ export function Sites() {
             </button>
           </div>
 
-          {siteFormTab === 'general' ? (
-            <>
+          <div className="grid">
+            <div
+              className={cn(
+                'col-start-1 row-start-1 space-y-5',
+                siteFormTab !== 'general' && 'invisible pointer-events-none',
+              )}
+              aria-hidden={siteFormTab !== 'general'}
+            >
               <div className={sectionCls}>
                 <h3 className={sectionTitleCls}>Basics</h3>
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -806,9 +856,14 @@ export function Sites() {
                   ))}
                 </div>
               </div>
-            </>
-          ) : (
-            <>
+            </div>
+            <div
+              className={cn(
+                'col-start-1 row-start-1 space-y-5',
+                siteFormTab !== 'advanced' && 'invisible pointer-events-none',
+              )}
+              aria-hidden={siteFormTab !== 'advanced'}
+            >
               <div className={sectionCls}>
                 <h3 className={sectionTitleCls}>Client IP</h3>
                 <Checkbox
@@ -821,83 +876,110 @@ export function Sites() {
 
               <div className={sectionCls}>
                 <h3 className={sectionTitleCls}>GeoIP</h3>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span
+                    className={cn(
+                      'rounded-full px-2.5 py-1 font-medium',
+                      geoipStatus?.country_db_loaded
+                        ? 'bg-green-g1/15 text-green-g1'
+                        : 'bg-yellow-y1/15 text-yellow-y1',
+                    )}
+                  >
+                    Country DB {geoipStatus?.country_db_loaded ? 'ready' : 'missing'}
+                  </span>
+                  <span
+                    className={cn(
+                      'rounded-full px-2.5 py-1 font-medium',
+                      geoipStatus?.asn_db_loaded
+                        ? 'bg-green-g1/15 text-green-g1'
+                        : 'bg-yellow-y1/15 text-yellow-y1',
+                    )}
+                  >
+                    ASN DB {geoipStatus?.asn_db_loaded ? 'ready' : 'missing'}
+                  </span>
+                </div>
+                {geoipStatus?.country_db_path || geoipStatus?.asn_db_path ? (
+                  <ul className="space-y-1 font-mono text-[11px] text-muted">
+                    {geoipStatus.country_db_path ? (
+                      <li>country: {geoipStatus.country_db_path}</li>
+                    ) : null}
+                    {geoipStatus.asn_db_path ? <li>asn: {geoipStatus.asn_db_path}</li> : null}
+                  </ul>
+                ) : null}
                 <Checkbox
                   checked={formGeoipEnabled}
                   onChange={setFormGeoipEnabled}
                   className="text-sm"
                   label="Enable GeoIP allow / deny"
                 />
-                <p className="text-xs text-text-secondary">
-                  Requires MaxMind MMDB files (
-                  <code className="font-mono">PERTISK_GEOIP_COUNTRY_DB</code> /{' '}
-                  <code className="font-mono">PERTISK_GEOIP_ASN_DB</code>). Empty allowlist = allow all
-                  except deny list.
-                </p>
+                {formGeoipEnabled && !geoipStatus?.country_db_loaded ? (
+                  <p className="rounded-md border border-yellow-y1/30 bg-yellow-y1/10 px-3 py-2 text-xs text-yellow-y1">
+                    Country DB is not loaded — country allow/deny will fail open until an MMDB is
+                    available.
+                  </p>
+                ) : null}
+                {formGeoipEnabled &&
+                (formGeoipAllowAsns.trim() || formGeoipDenyAsns.trim()) &&
+                !geoipStatus?.asn_db_loaded ? (
+                  <p className="rounded-md border border-yellow-y1/30 bg-yellow-y1/10 px-3 py-2 text-xs text-yellow-y1">
+                    ASN DB is not loaded — ASN allow/deny will fail open until GeoLite2-ASN.mmdb or ip2asn-combined.tsv is available.
+                  </p>
+                ) : null}
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <label className={labelCls}>
-                    Allow countries
-                    <input
-                      className={inputCls}
-                      value={formGeoipAllowCountries}
-                      onChange={(e) => setFormGeoipAllowCountries(e.target.value)}
-                      placeholder="TH, US"
-                      disabled={!formGeoipEnabled}
-                    />
-                  </label>
-                  <label className={labelCls}>
-                    Deny countries
-                    <input
-                      className={inputCls}
-                      value={formGeoipDenyCountries}
-                      onChange={(e) => setFormGeoipDenyCountries(e.target.value)}
-                      placeholder="CN, RU"
-                      disabled={!formGeoipEnabled}
-                    />
-                  </label>
-                  <label className={labelCls}>
-                    Allow ASNs
-                    <input
-                      className={inputCls}
-                      value={formGeoipAllowAsns}
-                      onChange={(e) => setFormGeoipAllowAsns(e.target.value)}
-                      placeholder="13335, AS15169"
-                      disabled={!formGeoipEnabled}
-                    />
-                  </label>
-                  <label className={labelCls}>
-                    Deny ASNs
-                    <input
-                      className={inputCls}
-                      value={formGeoipDenyAsns}
-                      onChange={(e) => setFormGeoipDenyAsns(e.target.value)}
-                      placeholder="12345"
-                      disabled={!formGeoipEnabled}
-                    />
-                  </label>
+                  <ConfigTextField
+                    label="Allow countries"
+                    example="TH, US"
+                    value={formGeoipAllowCountries}
+                    onChange={setFormGeoipAllowCountries}
+                    disabled={!formGeoipEnabled}
+                  />
+                  <ConfigTextField
+                    label="Deny countries"
+                    example="CN, RU"
+                    value={formGeoipDenyCountries}
+                    onChange={setFormGeoipDenyCountries}
+                    disabled={!formGeoipEnabled}
+                  />
+                  <ConfigTextField
+                    label="Allow ASNs"
+                    example="13335, AS15169"
+                    value={formGeoipAllowAsns}
+                    onChange={setFormGeoipAllowAsns}
+                    disabled={!formGeoipEnabled}
+                  />
+                  <ConfigTextField
+                    label="Deny ASNs"
+                    example="12345"
+                    value={formGeoipDenyAsns}
+                    onChange={setFormGeoipDenyAsns}
+                    disabled={!formGeoipEnabled}
+                  />
                 </div>
               </div>
 
               <div className={sectionCls}>
                 <h3 className={sectionTitleCls}>WAF / bot / captcha</h3>
-                <Checkbox
-                  checked={formWafEnabled}
-                  onChange={setFormWafEnabled}
-                  className="text-sm"
-                  label="Enable WAF (built-in SQLi / XSS / path traversal)"
-                />
-                <Checkbox
-                  checked={formWafBuiltin}
-                  onChange={setFormWafBuiltin}
-                  className="text-sm"
-                  label="Use built-in WAF rules"
-                  disabled={!formWafEnabled}
-                />
-                <Checkbox
-                  checked={formBotEnabled}
-                  onChange={setFormBotEnabled}
-                  className="text-sm"
-                  label="Enable bot scoring"
-                />
+                <div className="flex flex-col gap-1">
+                  <Checkbox
+                    checked={formWafEnabled}
+                    onChange={setFormWafEnabled}
+                    className="text-sm"
+                    label="Enable WAF (built-in SQLi / XSS / path traversal)"
+                  />
+                  <Checkbox
+                    checked={formWafBuiltin}
+                    onChange={setFormWafBuiltin}
+                    className="text-sm"
+                    label="Use built-in WAF rules"
+                    disabled={!formWafEnabled}
+                  />
+                  <Checkbox
+                    checked={formBotEnabled}
+                    onChange={setFormBotEnabled}
+                    className="text-sm"
+                    label="Enable bot scoring"
+                  />
+                </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className={labelCls}>
                     Challenge score
@@ -930,8 +1012,8 @@ export function Sites() {
                   restarts.
                 </p>
               </div>
-            </>
-          )}
+            </div>
+          </div>
 
           {siteError ? <p className="text-sm text-red-r1">{siteError}</p> : null}
           <div className="flex justify-end gap-2 pt-2">

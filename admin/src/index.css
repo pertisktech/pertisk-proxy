@@ -98,6 +98,27 @@ input, textarea, select, button {
   font: inherit;
 }
 
+input,
+textarea,
+select {
+  color: var(--color-text);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-muted);
+  opacity: 0.4;
+  font-style: italic;
+}
+
+input:disabled,
+textarea:disabled,
+select:disabled {
+  color: var(--color-text-secondary);
+  opacity: 0.75;
+  cursor: not-allowed;
+}
+
 code, pre, textarea.mono {
   font-family: var(--font-mono);
 }

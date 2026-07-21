@@ -123,6 +123,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.625rem;
+  padding: 0.375rem 0;
   cursor: pointer;
   user-select: none;
 }
