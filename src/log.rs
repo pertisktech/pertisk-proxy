@@ -298,9 +298,14 @@ impl ProxyLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// `MIN_UI_LOG_LEVEL` is process-global; serialize tests that mutate it.
+    static UI_LOG_LEVEL_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn ui_log_level_filters_by_severity() {
+        let _guard = UI_LOG_LEVEL_TEST_LOCK.lock().unwrap();
         set_min_ui_log_level(LogLevel::Warn);
         assert!(!ui_log_enabled(LogLevel::Info));
         assert!(!ui_log_enabled(LogLevel::Debug));
@@ -311,6 +316,7 @@ mod tests {
 
     #[test]
     fn push_sync_respects_min_level() {
+        let _guard = UI_LOG_LEVEL_TEST_LOCK.lock().unwrap();
         set_min_ui_log_level(LogLevel::Warn);
         let log = ProxyLog::new(10);
         log.push_sync(ProxyLogEntry::config_reload("reload"));
