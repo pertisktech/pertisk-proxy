@@ -10,6 +10,7 @@ import {
   isRememberEnabled,
   setRememberCredentials,
   setToken,
+  setUsername as persistUsername,
 } from '@/auth';
 import { useTheme } from '@/context/ThemeContext';
 import { Logo } from '@/components/Logo';
@@ -65,6 +66,7 @@ export function Login() {
     try {
       const res = await api.login(password, username);
       if (res.token) setToken(res.token);
+      persistUsername(res.username || username);
       setRememberCredentials(username, password, remember);
       navigate('/');
     } catch (err) {

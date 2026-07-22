@@ -1,4 +1,5 @@
 const TOKEN_KEY = 'pertisk_token';
+const USERNAME_KEY = 'pertisk_username';
 const REMEMBER_KEY = 'pertisk_remember';
 const SAVED_USER_KEY = 'pertisk_saved_username';
 const SAVED_PASS_KEY = 'pertisk_saved_password';
@@ -13,6 +14,17 @@ export function setToken(token: string) {
 
 export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USERNAME_KEY);
+}
+
+export function getUsername(): string | null {
+  return localStorage.getItem(USERNAME_KEY);
+}
+
+export function setUsername(username: string) {
+  const trimmed = username.trim();
+  if (trimmed) localStorage.setItem(USERNAME_KEY, trimmed);
+  else localStorage.removeItem(USERNAME_KEY);
 }
 
 export function isRememberEnabled(): boolean {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { ExternalLink, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -58,18 +58,6 @@ function formatRate(value: number | null | undefined): string {
 function deltaRate(curr: number, prev: number, seconds: number): number {
   if (seconds <= 0 || curr < prev) return 0;
   return (curr - prev) / seconds;
-}
-
-function prometheusMetricsURL(metricsAddr: string | undefined, hostname: string | null | undefined): string {
-  const addr = metricsAddr?.trim() || '0.0.0.0:9090';
-  const fallbackHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-  const displayHost = hostname?.trim() || fallbackHost;
-  const lastColon = addr.lastIndexOf(':');
-  const bindHost = lastColon > 0 ? addr.slice(0, lastColon) : '0.0.0.0';
-  const port = lastColon > 0 ? addr.slice(lastColon + 1) : '9090';
-  const host =
-    bindHost === '0.0.0.0' || bindHost === '[::]' || bindHost === '::' ? displayHost : bindHost.replace(/^\[|\]$/g, '');
-  return `http://${host.includes(':') ? `[${host}]` : host}:${port}/metrics`;
 }
 
 const PROTOCOL_COLORS: Record<string, string> = {
@@ -242,7 +230,6 @@ export function Metrics() {
   const totalRequests =
     (latest?.http_requests_total ?? 0) + (latest?.https_requests_total ?? 0) + (latest?.grpc_requests_total ?? 0);
   const totalBytes = (latest?.bytes_sent_total ?? 0) + (latest?.bytes_received_total ?? 0);
-  const promUrl = prometheusMetricsURL(latest?.metrics_addr, mgmt?.hostname ?? null);
 
   const rawSnapshot = useMemo(
     () => ({
@@ -266,27 +253,17 @@ export function Metrics() {
 
   return (
     <div className="space-y-4 overflow-y-auto pb-8">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <Checkbox checked={live} onChange={setLive} label="Live refresh" />
-          <button
-            type="button"
-            onClick={fetchMetrics}
-            disabled={loading}
-            className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-hover disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={loading ? 'animate-spin' : undefined} /> Refresh
-          </button>
-          <Checkbox checked={showRaw} onChange={setShowRaw} label="Show JSON" />
-        </div>
-        <a
-          href={promUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-hover"
+      <div className="flex flex-wrap items-center gap-3">
+        <Checkbox checked={live} onChange={setLive} label="Live refresh" />
+        <button
+          type="button"
+          onClick={fetchMetrics}
+          disabled={loading}
+          className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm hover:bg-hover disabled:opacity-50"
         >
-          Prometheus <ExternalLink size={14} />
-        </a>
+          <RefreshCw size={14} className={loading ? 'animate-spin' : undefined} /> Refresh
+        </button>
+        <Checkbox checked={showRaw} onChange={setShowRaw} label="Show JSON" />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">

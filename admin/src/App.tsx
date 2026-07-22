@@ -15,9 +15,10 @@ import { DnsProviders } from '@/routes/DnsProviders';
 import { Logs } from '@/routes/Logs';
 import { Metrics } from '@/routes/Metrics';
 import { Settings } from '@/routes/Settings';
+import { Profile } from '@/routes/Profile';
 import { Backup } from '@/routes/Backup';
 import { api, type ManagementInfo } from '@/api/client';
-import { clearToken, getToken } from '@/auth';
+import { clearToken, getToken, setUsername } from '@/auth';
 
 function AuthGate({
   onAuthed,
@@ -40,6 +41,7 @@ function AuthGate({
       }
       try {
         const check = await api.authCheck();
+        if (check.username) setUsername(check.username);
         setOk(check.authenticated);
       } catch {
         setOk(false);
@@ -111,6 +113,7 @@ export default function App() {
                   <Route path="metrics" element={<Metrics />} />
                   <Route path="backup" element={<Backup />} />
                   <Route path="settings" element={<Settings />} />
+                  <Route path="profile" element={<Profile />} />
                 </Route>
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />

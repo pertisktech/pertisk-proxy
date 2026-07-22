@@ -93,6 +93,22 @@ impl Database {
         .await?
     }
 
+    /// Update password hash for an existing user. Returns false if the user does not exist.
+    pub async fn update_user_password(&self, username: &str, new_password: &str) -> Result<bool> {
+        let path = self.path.clone();
+        let username = username.to_string();
+        let password_hash = hash(new_password, DEFAULT_COST)?;
+        spawn_blocking(move || {
+            let conn = Connection::open(path)?;
+            let n = conn.execute(
+                "UPDATE users SET password_hash = ?1 WHERE username = ?2",
+                rusqlite::params![password_hash, username],
+            )?;
+            Ok::<_, anyhow::Error>(n > 0)
+        })
+        .await?
+    }
+
     pub async fn insert_session(
         &self,
         token: &str,

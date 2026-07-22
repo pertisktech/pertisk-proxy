@@ -379,13 +379,28 @@ export const api = {
   health: () => request<{ status: string }>('/health'),
   version: () => request<{ version: string; binary: string }>('/version'),
   authConfig: () =>
-    request<{ mode: string; supports_local: boolean; auth_required: boolean }>('/auth/config'),
+    request<{
+      mode: string;
+      supports_local: boolean;
+      auth_required: boolean;
+      can_change_password?: boolean;
+    }>('/auth/config'),
   login: (password: string, username = 'admin') =>
     request<{ token: string; username: string; expires_in: number }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ password, username }),
     }),
-  authCheck: () => request<{ authenticated: boolean }>('/auth/check'),
+  authCheck: () =>
+    request<{
+      authenticated: boolean;
+      username?: string | null;
+      can_change_password?: boolean;
+    }>('/auth/check'),
+  changePassword: (current_password: string, new_password: string) =>
+    request<{ ok: boolean }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password, new_password }),
+    }),
   management: () => request<ManagementInfo>('/management'),
   metrics: () => request<Metrics>('/metrics'),
   logs: (params?: { type?: 'system' | 'proxy' | 'http' | 'all'; host?: string }) => {

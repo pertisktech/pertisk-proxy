@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, type ManagementInfo } from '@/api/client';
 import { Card } from '@/components/Card';
 import { useManagementInfo } from '@/context/ManagementContext';
@@ -175,7 +176,11 @@ export function Settings() {
           <p className="mt-2 text-sm text-muted">
             Default credentials on first start: <code className="rounded bg-bg px-1">admin</code> /{' '}
             <code className="rounded bg-bg px-1">admin</code> (stored in SQLite). Change the password
-            after first login.
+            after first login from{' '}
+            <Link to="/profile" className="text-primary underline-offset-2 hover:underline">
+              Profile
+            </Link>
+            .
           </p>
         )}
       </Card>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, FormEvent } from 'react';
 import { toast } from 'sonner';
-import { Award, Globe, Lock, Pencil, Plus, Trash2, X, Zap } from 'lucide-react';
+import { Award, ExternalLink, Globe, Lock, Pencil, Plus, Trash2, X, Zap } from 'lucide-react';
 import {
   api,
   type DnsProviderRow,
@@ -47,6 +47,13 @@ function normalizeUpstream(url: string): string {
   }
   if (!s) return '';
   return `${secure ? 'https' : 'http'}://${s}`;
+}
+
+/** Public site URL for deep link; null for wildcard / empty hosts. */
+function sitePublicUrl(host: string, hasTls: boolean): string | null {
+  const h = host.trim().toLowerCase();
+  if (!h || h.includes('*')) return null;
+  return `${hasTls ? 'https' : 'http'}://${h}`;
 }
 
 function routeLabel(route: PathRewrite): string {
@@ -564,10 +571,26 @@ export function Sites() {
             const globalIndex = sites.indexOf(site);
             const tls = resolveTlsForHost(site.host, tlsList);
             const ssl = siteSslStatus(tls);
+            const publicUrl = sitePublicUrl(site.host, !!tls);
             return (
               <div key={`${site.host}-${globalIndex}`} className="rounded-lg border border-border bg-surface p-4">
                 <div className="flex items-start justify-between gap-2">
-                  <h3 className="font-semibold">{site.host}</h3>
+                  <h3 className="font-semibold">
+                    {publicUrl ? (
+                      <a
+                        href={publicUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 hover:text-primary"
+                        title={`Open ${publicUrl}`}
+                      >
+                        {site.host}
+                        <ExternalLink size={14} className="shrink-0 text-muted" />
+                      </a>
+                    ) : (
+                      site.host
+                    )}
+                  </h3>
                   <span className={cn('text-xs font-medium', ssl.tone)}>{ssl.label}</span>
                 </div>
                 <p className="mt-2 font-mono text-xs text-text-secondary">{upstreamForSite(site)}</p>
@@ -582,6 +605,18 @@ export function Sites() {
                   <p className="mt-2 text-xs text-text-secondary">Cert: {sslLabelForCard(tls.hosts)}</p>
                 ) : null}
                 <div className="mt-4 icon-actions">
+                  {publicUrl ? (
+                    <a
+                      href={publicUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="icon-action"
+                      title="Open site"
+                      aria-label="Open site"
+                    >
+                      <ExternalLink size={16} />
+                    </a>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => openEditSite(globalIndex)}
@@ -622,9 +657,25 @@ export function Sites() {
                 const globalIndex = sites.indexOf(site);
                 const tls = resolveTlsForHost(site.host, tlsList);
                 const ssl = siteSslStatus(tls);
+                const publicUrl = sitePublicUrl(site.host, !!tls);
                 return (
                   <tr key={`${site.host}-${globalIndex}`} className="border-b border-border last:border-0 hover:bg-hover/50">
-                    <td className="px-4 py-3 font-medium">{site.host}</td>
+                    <td className="px-4 py-3 font-medium">
+                      {publicUrl ? (
+                        <a
+                          href={publicUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 hover:text-primary"
+                          title={`Open ${publicUrl}`}
+                        >
+                          {site.host}
+                          <ExternalLink size={14} className="shrink-0 text-muted" />
+                        </a>
+                      ) : (
+                        site.host
+                      )}
+                    </td>
                     <td className="px-4 py-3 font-mono text-xs">{upstreamForSite(site)}</td>
                     <td className="px-4 py-3 text-text-secondary">
                       {(site.routes ?? []).map((r) => routeLabel(r)).join(', ') || '—'}
@@ -635,6 +686,18 @@ export function Sites() {
                     </td>
                     <td className="actions-cell px-4 py-3">
                       <div className="icon-actions">
+                        {publicUrl ? (
+                          <a
+                            href={publicUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="icon-action"
+                            title="Open site"
+                            aria-label="Open site"
+                          >
+                            <ExternalLink size={16} />
+                          </a>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => openEditSite(globalIndex)}

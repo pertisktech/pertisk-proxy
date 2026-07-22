@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   Shield,
@@ -18,13 +18,18 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Archive,
+  User,
+  KeyRound,
+  ChevronDown,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/utils';
 import { Logo } from '@/components/Logo';
 import { useTheme } from '@/context/ThemeContext';
 import { useGatewayApiEnabled, useManagementInfo } from '@/context/ManagementContext';
 import { useMode } from '@/context/ModeContext';
+import { api } from '@/api/client';
+import { getUsername, setUsername } from '@/auth';
 
 const SIDEBAR_COLLAPSED_KEY = 'pertisk_sidebar_collapsed';
 
@@ -69,14 +74,20 @@ function ingressNav(gatewayApiEnabled: boolean): NavItem[] {
 export function Layout({ onLogout, loading = false }: { onLogout: () => void; loading?: boolean }) {
   const { toggleTheme, isDark } = useTheme();
   const location = useLocation();
+  const navigate = useNavigate();
   const mode = useMode();
   const gatewayApiEnabled = useGatewayApiEnabled();
   const management = useManagementInfo();
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(getStoredSidebarCollapsed);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [username, setUser] = useState(getUsername() || 'admin');
+  const [canChangePassword, setCanChangePassword] = useState(mode === 'proxy');
+  const profileRef = useRef<HTMLDivElement>(null);
 
   const nav = mode === 'ingress' ? ingressNav(gatewayApiEnabled) : proxyNav();
-  const title = nav.find((n) => (n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)))?.label ?? 'Admin';
+  const title = nav.find((n) => (n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)))?.label
+    ?? (location.pathname.startsWith('/profile') ? 'Profile' : 'Admin');
   const modeLabel = mode === 'ingress' ? 'Ingress mode' : 'Proxy mode';
 
   useEffect(() => {
@@ -87,11 +98,35 @@ export function Layout({ onLogout, loading = false }: { onLogout: () => void; lo
 
   useEffect(() => {
     setOpen(false);
+    setProfileOpen(false);
   }, [location.pathname]);
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
   }, [collapsed]);
+
+  useEffect(() => {
+    api
+      .authCheck()
+      .then((c) => {
+        if (c.username) {
+          setUser(c.username);
+          setUsername(c.username);
+        }
+        if (typeof c.can_change_password === 'boolean') {
+          setCanChangePassword(c.can_change_password);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!profileRef.current?.contains(e.target as Node)) setProfileOpen(false);
+    }
+    if (profileOpen) document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [profileOpen]);
 
   return (
     <div className="app-shell text-text">
@@ -171,14 +206,62 @@ export function Layout({ onLogout, loading = false }: { onLogout: () => void; lo
               >
                 {isDark ? <Sun size={16} /> : <Moon size={16} />}
               </button>
-              <button
-                type="button"
-                onClick={onLogout}
-                className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2.5 text-sm hover:bg-hover"
-              >
-                <LogOut size={16} />
-                Logout
-              </button>
+              <div className="relative" ref={profileRef}>
+                <button
+                  type="button"
+                  onClick={() => setProfileOpen((v) => !v)}
+                  className="inline-flex h-8 max-w-[10rem] items-center gap-1.5 rounded-md border border-border px-2.5 text-sm hover:bg-hover"
+                  aria-expanded={profileOpen}
+                  aria-haspopup="menu"
+                >
+                  <User size={16} className="shrink-0" />
+                  <span className="truncate">{username}</span>
+                  <ChevronDown size={14} className="shrink-0 text-muted" />
+                </button>
+                {profileOpen ? (
+                  <div
+                    role="menu"
+                    className="absolute right-0 z-50 mt-1 min-w-[11rem] rounded-md border border-border bg-surface py-1 shadow-lg"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-hover"
+                      onClick={() => {
+                        setProfileOpen(false);
+                        navigate('/profile');
+                      }}
+                    >
+                      <User size={14} /> Profile
+                    </button>
+                    {canChangePassword ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-hover"
+                        onClick={() => {
+                          setProfileOpen(false);
+                          navigate('/profile');
+                        }}
+                      >
+                        <KeyRound size={14} /> Change password
+                      </button>
+                    ) : null}
+                    <div className="my-1 border-t border-border" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-r1 hover:bg-hover"
+                      onClick={() => {
+                        setProfileOpen(false);
+                        onLogout();
+                      }}
+                    >
+                      <LogOut size={14} /> Logout
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
         </header>

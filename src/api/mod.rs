@@ -172,6 +172,7 @@ pub fn router(state: AdminState) -> Router {
         .route("/api/reload", post(reload_config))
         .route("/api/tls", get(get_tls))
         .route("/api/routes", get(get_routes))
+        .route("/api/auth/change-password", post(auth_change_password))
         .route("/api/certificates", get(certificates_list).post(certificates_upload))
         .route("/api/certificates/{id}", delete(certificates_delete))
         .route("/api/dns-providers", get(dns_providers_list).post(dns_providers_create))
@@ -339,6 +340,8 @@ struct AuthConfigResponse {
     mode: &'static str,
     supports_local: bool,
     auth_required: bool,
+    /// Password change via Admin UI (SQLite users). Proxy mode with DB only.
+    can_change_password: bool,
 }
 
 async fn auth_config(State(state): State<AdminState>) -> Json<AuthConfigResponse> {
@@ -346,6 +349,7 @@ async fn auth_config(State(state): State<AdminState>) -> Json<AuthConfigResponse
         mode: "local",
         supports_local: true,
         auth_required: state.auth_required,
+        can_change_password: state.db.is_some() && !state.viewer_mode,
     })
 }
 
@@ -459,6 +463,7 @@ async fn auth_login(
 struct AuthCheckResponse {
     authenticated: bool,
     username: Option<String>,
+    can_change_password: bool,
 }
 
 async fn auth_check(
@@ -469,7 +474,111 @@ async fn auth_check(
     Json(AuthCheckResponse {
         authenticated: !state.auth_required || username.is_some(),
         username,
+        can_change_password: state.db.is_some() && !state.viewer_mode,
     })
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordRequest {
+    current_password: String,
+    new_password: String,
+}
+
+#[derive(Serialize)]
+struct ChangePasswordResponse {
+    ok: bool,
+}
+
+async fn auth_change_password(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Json(body): Json<ChangePasswordRequest>,
+) -> Result<Json<ChangePasswordResponse>, (StatusCode, Json<ApiError>)> {
+    if state.viewer_mode || state.db.is_none() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "password change is only available in proxy mode with local users".into(),
+            }),
+        ));
+    }
+
+    let Some(username) = resolve_username(&state, &headers).await else {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiError {
+                error: "not authenticated".into(),
+            }),
+        ));
+    };
+
+    let new_password = body.new_password.trim();
+    if new_password.len() < 6 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "new password must be at least 6 characters".into(),
+            }),
+        ));
+    }
+    if new_password == body.current_password {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "new password must be different from the current password".into(),
+            }),
+        ));
+    }
+
+    let db = state.db.as_ref().expect("db checked above");
+    let Some(hash) = db.get_user_password_hash(&username).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+    })?
+    else {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "password change is only available for local database users".into(),
+            }),
+        ));
+    };
+
+    if !bcrypt::verify(&body.current_password, &hash).unwrap_or(false) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiError {
+                error: "current password is incorrect".into(),
+            }),
+        ));
+    }
+
+    let updated = db
+        .update_user_password(&username, new_password)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+    if !updated {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "user not found".into(),
+            }),
+        ));
+    }
+
+    info!(username = %username, "admin password changed");
+    Ok(Json(ChangePasswordResponse { ok: true }))
 }
 
 #[derive(Serialize)]
