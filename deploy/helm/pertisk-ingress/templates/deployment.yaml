@@ -24,6 +24,32 @@ spec:
       serviceAccountName: {{ include "pertisk-ingress.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if and .Values.geoip.enabled .Values.geoip.download.enabled }}
+      initContainers:
+        - name: geoip-download
+          image: {{ .Values.geoip.download.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              set -eu
+              DEST="{{ .Values.geoip.mountPath }}"
+              mkdir -p "$DEST"
+              echo "Downloading GeoLite2-Country.mmdb..."
+              wget -qO- "{{ .Values.geoip.download.countryUrl }}" | gunzip > "$DEST/GeoLite2-Country.mmdb"
+              echo "Downloading ip2asn-combined.tsv..."
+              wget -qO- "{{ .Values.geoip.download.asnUrl }}" | gunzip > "$DEST/ip2asn-combined.tsv"
+              chmod a+rX "$DEST" "$DEST"/*
+              ls -la "$DEST"
+          volumeMounts:
+            - name: geoip
+              mountPath: {{ .Values.geoip.mountPath | quote }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: {{ include "pertisk-ingress.image" . }}
@@ -235,12 +261,44 @@ spec:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+            {{- if .Values.geoip.enabled }}
+            {{- if .Values.geoip.countryDb }}
+            - name: PERTISK_GEOIP_COUNTRY_DB
+              value: {{ .Values.geoip.countryDb | quote }}
+            {{- end }}
+            {{- if .Values.geoip.asnDb }}
+            - name: PERTISK_GEOIP_ASN_DB
+              value: {{ .Values.geoip.asnDb | quote }}
+            {{- end }}
+            {{- end }}
+          {{- if .Values.geoip.enabled }}
+          volumeMounts:
+            - name: geoip
+              mountPath: {{ .Values.geoip.mountPath | quote }}
+              readOnly: true
+          {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
             {{- toYaml .Values.readinessProbe | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      {{- if .Values.geoip.enabled }}
+      volumes:
+        - name: geoip
+          {{- if .Values.geoip.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.geoip.existingClaim | quote }}
+          {{- else if .Values.geoip.hostPath }}
+          hostPath:
+            path: {{ .Values.geoip.hostPath | quote }}
+            type: Directory
+          {{- else if .Values.geoip.download.enabled }}
+          emptyDir: {}
+          {{- else }}
+          {{- fail "geoip.enabled requires geoip.download.enabled (Talos), geoip.existingClaim, or geoip.hostPath" }}
+          {{- end }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

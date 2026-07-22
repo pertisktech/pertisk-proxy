@@ -105,14 +105,47 @@ pub struct AdminState {
 
 pub async fn serve(state: AdminState, addr: SocketAddr) -> Result<()> {
     let app = router(state);
-    let listener = TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("failed to bind management API on {addr}"))?;
+    let listener = bind_management_listener(addr).await?;
     info!("Management API listening on http://{addr}");
     axum::serve(listener, app)
         .await
         .context("management API server stopped")?;
     Ok(())
+}
+
+/// Bind management API. For `[::]:port`, force `IPV6_V6ONLY=0` so IPv4+IPv6 dual-stack works
+/// even when `net.ipv6.bindv6only=1`.
+async fn bind_management_listener(addr: SocketAddr) -> Result<TcpListener> {
+    if addr.is_ipv6() {
+        let socket = socket2::Socket::new(
+            socket2::Domain::IPV6,
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        )
+        .context("create management IPv6 socket")?;
+        #[cfg(unix)]
+        {
+            socket
+                .set_reuse_address(true)
+                .context("management SO_REUSEADDR")?;
+        }
+        socket
+            .set_only_v6(false)
+            .context("management IPV6_V6ONLY=0 (dual-stack)")?;
+        socket
+            .bind(&addr.into())
+            .with_context(|| format!("failed to bind management API on {addr}"))?;
+        socket.listen(1024).context("management listen")?;
+        socket
+            .set_nonblocking(true)
+            .context("management nonblocking")?;
+        TcpListener::from_std(std::net::TcpListener::from(socket))
+            .context("management TcpListener")
+    } else {
+        TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("failed to bind management API on {addr}"))
+    }
 }
 
 pub fn router(state: AdminState) -> Router {
@@ -482,6 +515,7 @@ struct ManagementInfo {
     gateway_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     leader_election: Option<LeaderElectionInfo>,
+    geoip: crate::geoip::GeoIpStatus,
 }
 
 #[derive(Serialize)]
@@ -711,6 +745,13 @@ struct MetricsResponse {
     bytes_sent_total: u64,
     bytes_received_total: u64,
     upstream_errors_total: u64,
+    geoip_blocked_total: u64,
+    waf_blocked_total: u64,
+    waf_logged_total: u64,
+    bot_challenged_total: u64,
+    bot_blocked_total: u64,
+    captcha_passed_total: u64,
+    captcha_failed_total: u64,
     site_h2_requests_total: std::collections::HashMap<String, u64>,
     site_h3_requests_total: std::collections::HashMap<String, u64>,
     metrics_addr: String,
@@ -760,6 +801,13 @@ async fn get_metrics(
         bytes_sent_total: m.bytes_sent_total.load(Ordering::Relaxed),
         bytes_received_total: m.bytes_received_total.load(Ordering::Relaxed),
         upstream_errors_total: m.upstream_errors_total.load(Ordering::Relaxed),
+        geoip_blocked_total: m.geoip_blocked_total.load(Ordering::Relaxed),
+        waf_blocked_total: m.waf_blocked_total.load(Ordering::Relaxed),
+        waf_logged_total: m.waf_logged_total.load(Ordering::Relaxed),
+        bot_challenged_total: m.bot_challenged_total.load(Ordering::Relaxed),
+        bot_blocked_total: m.bot_blocked_total.load(Ordering::Relaxed),
+        captcha_passed_total: m.captcha_passed_total.load(Ordering::Relaxed),
+        captcha_failed_total: m.captcha_failed_total.load(Ordering::Relaxed),
         site_h2_requests_total,
         site_h3_requests_total,
         metrics_addr: crate::metrics::metrics_addr_from_env().to_string(),
@@ -849,6 +897,7 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
         ingress_class,
         gateway_class,
         leader_election,
+        geoip: crate::geoip::status(),
     })
 }
 
@@ -1753,7 +1802,7 @@ pub fn management_addr() -> SocketAddr {
     std::env::var("PERTISK_MANAGEMENT_ADDR")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| "127.0.0.1:9080".parse().expect("valid default addr"))
+        .unwrap_or_else(|| "[::]:9080".parse().expect("valid default addr"))
 }
 
 pub fn admin_dev_origin() -> Option<String> {

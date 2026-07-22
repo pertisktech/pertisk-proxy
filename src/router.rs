@@ -40,6 +40,10 @@ pub struct Route {
     pub middlewares: Vec<Middleware>,
     /// Inject X-Real-IP / X-Forwarded-For from the downstream client address.
     pub forward_client_ip: bool,
+    /// GeoIP country/ASN allow/deny for this route's site.
+    pub geoip: crate::geoip::GeoIpPolicy,
+    /// WAF / bot / captcha for this route's site.
+    pub security: crate::security::SecurityPolicy,
 }
 
 #[derive(Debug, Default)]
@@ -285,6 +289,8 @@ fn add_ingress_to_table(by_host: &mut HashMap<String, Vec<Route>>, ingress: &Ing
                 backend,
                 middlewares: vec![],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             });
         }
     }
@@ -336,6 +342,8 @@ fn collect_http_paths(
             backend,
             middlewares: vec![],
             forward_client_ip: false,
+            geoip: Default::default(),
+            security: Default::default(),
         });
     }
 }
@@ -395,6 +403,8 @@ mod tests {
                     },
                     middlewares: vec![],
                     forward_client_ip: false,
+                    geoip: Default::default(),
+                    security: Default::default(),
                 }],
             )]),
         };
@@ -419,6 +429,8 @@ mod tests {
                         },
                         middlewares: vec![],
                         forward_client_ip: false,
+                        geoip: Default::default(),
+                        security: Default::default(),
                     }],
                 ),
                 (
@@ -433,6 +445,8 @@ mod tests {
                         },
                         middlewares: vec![],
                         forward_client_ip: false,
+                        geoip: Default::default(),
+                        security: Default::default(),
                     }],
                 ),
             ]),
@@ -458,6 +472,8 @@ mod tests {
                 },
                 middlewares: vec![],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
         assert!(table.match_route("app.example.com", "/api").is_some());
@@ -478,6 +494,8 @@ mod tests {
                 },
                 middlewares: vec![],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
         assert!(table.match_route("unknown.host", "/any").is_some());
@@ -497,6 +515,8 @@ mod tests {
                 },
                 middlewares: vec![],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
         assert!(table.match_route("app.orion.thaidevops.co", "/").is_some());
@@ -520,6 +540,8 @@ mod tests {
                     },
                     middlewares: vec![],
                     forward_client_ip: false,
+                    geoip: Default::default(),
+                    security: Default::default(),
                 }],
             ),
             (
@@ -534,6 +556,8 @@ mod tests {
                     },
                     middlewares: vec![],
                     forward_client_ip: false,
+                    geoip: Default::default(),
+                    security: Default::default(),
                 }],
             ),
         ]));
@@ -558,6 +582,8 @@ mod tests {
                     },
                     middlewares: vec![],
                     forward_client_ip: false,
+                    geoip: Default::default(),
+                    security: Default::default(),
                 },
                 Route {
                     path: "/api/v2".into(),
@@ -569,6 +595,8 @@ mod tests {
                     },
                     middlewares: vec![],
                     forward_client_ip: false,
+                    geoip: Default::default(),
+                    security: Default::default(),
                 },
             ],
         )]));
@@ -612,6 +640,8 @@ mod tests {
                 },
                 middlewares: vec![],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
         assert_eq!(table.route_count(), 1);
@@ -634,6 +664,8 @@ mod tests {
                 },
                 middlewares: vec![],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
         router.replace(table);
@@ -724,6 +756,8 @@ mod tests {
                 },
                 middlewares: vec![],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
         assert!(table.match_route("app.example.com", "/api/v1").is_some());
@@ -745,6 +779,8 @@ mod tests {
                 },
                 middlewares: vec![],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
         router.replace_all(
@@ -823,6 +859,8 @@ mod tests {
                 },
                 middlewares: vec![],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
         assert!(table.match_route("app.example.com", "/custom/path").is_some());

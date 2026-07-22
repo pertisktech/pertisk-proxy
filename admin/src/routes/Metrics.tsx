@@ -289,12 +289,13 @@ export function Metrics() {
         </a>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
         <Stat label="Total requests" value={formatNum(totalRequests)} />
         <Stat label="Active connections" value={formatNum(latest?.active_connections)} />
         <Stat label="Requests / s" value={formatRate(snapshotRates.rps)} />
         <Stat label="Total bytes" value={formatBytes(totalBytes)} />
         <Stat label="Upstream errors" value={formatNum(latest?.upstream_errors_total)} />
+        <Stat label="GeoIP blocked" value={formatNum(latest?.geoip_blocked_total)} />
       </div>
 
       {(current?.cpu != null || current?.memory_mb != null) && (

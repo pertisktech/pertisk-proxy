@@ -13,7 +13,7 @@
 http3Addr: "0.0.0.0:8443"
 
 service:
-  externalTrafficPolicy: Cluster
+  externalTrafficPolicy: Local
   sessionAffinity: ClientIP
   sessionAffinityConfig:
     clientIP:

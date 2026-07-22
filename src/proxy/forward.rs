@@ -1,5 +1,7 @@
 //! Shared reverse-proxy routing used by Pingora (HTTP/1, HTTP/2) and HTTP/3.
 
+use std::net::IpAddr;
+
 use pingora_core::Result;
 use pingora_error::ErrorType::HTTPStatus;
 
@@ -11,6 +13,8 @@ pub struct MiddlewareAction {
     pub request_headers: Vec<(String, String)>,
     pub response_headers: Vec<(String, String)>,
     pub forward_client_ip: bool,
+    pub geoip: crate::geoip::GeoIpPolicy,
+    pub security: crate::security::SecurityPolicy,
 }
 
 impl Default for MiddlewareAction {
@@ -20,6 +24,8 @@ impl Default for MiddlewareAction {
             request_headers: Vec::new(),
             response_headers: Vec::new(),
             forward_client_ip: true,
+            geoip: Default::default(),
+            security: Default::default(),
         }
     }
 }
@@ -68,13 +74,70 @@ pub fn resolve_client_ip(
     xff: Option<&str>,
     x_real_ip: Option<&str>,
 ) -> Option<String> {
-    if let Some(ip) = socket_ip.map(str::trim).filter(|value| !value.is_empty()) {
-        return Some(ip.to_string());
+    // Prefer the TCP peer when it looks like a real client. Behind kube-proxy with
+    // externalTrafficPolicy=Cluster the peer is often a private SNAT address — skip it
+    // so GeoIP / forwarding can use X-Real-IP / X-Forwarded-For instead.
+    if let Some(ip) = socket_ip.and_then(normalize_ip_str) {
+        if is_public_routable_ip(&ip) {
+            return Some(ip);
+        }
     }
-    if let Some(ip) = x_real_ip.map(str::trim).filter(|value| !value.is_empty()) {
-        return Some(ip.to_string());
+    if let Some(ip) = x_real_ip.and_then(normalize_ip_str) {
+        if is_public_routable_ip(&ip) {
+            return Some(ip);
+        }
     }
-    first_hop_from_xff(xff)
+    if let Some(ip) = first_hop_from_xff(xff).and_then(|s| normalize_ip_str(&s)) {
+        return Some(ip);
+    }
+    if let Some(ip) = x_real_ip.and_then(normalize_ip_str) {
+        return Some(ip);
+    }
+    // Last resort: private socket (Cluster ET policy, no forwarded headers).
+    socket_ip.and_then(normalize_ip_str)
+}
+
+/// Strip zone id / brackets and unwrap IPv4-mapped IPv6 (`::ffff:a.b.c.d` → `a.b.c.d`).
+pub fn normalize_ip_str(ip: &str) -> Option<String> {
+    let ip = ip.trim().trim_matches(|c| c == '[' || c == ']');
+    let ip = ip.split('%').next()?.trim();
+    if ip.is_empty() {
+        return None;
+    }
+    match ip.parse::<IpAddr>() {
+        Ok(IpAddr::V6(v6)) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                Some(v4.to_string())
+            } else {
+                Some(v6.to_string())
+            }
+        }
+        Ok(IpAddr::V4(v4)) => Some(v4.to_string()),
+        Err(_) => None,
+    }
+}
+
+/// True for addresses that are not private/loopback/link-local (usable as client IP).
+pub fn is_public_routable_ip(ip: &str) -> bool {
+    let Some(normalized) = normalize_ip_str(ip) else {
+        return false;
+    };
+    match normalized.parse::<IpAddr>() {
+        Ok(IpAddr::V4(v4)) => {
+            !(v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast())
+        }
+        Ok(IpAddr::V6(v6)) => {
+            !(v6.is_loopback()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+                || v6.is_unspecified())
+        }
+        Err(_) => false,
+    }
 }
 
 pub fn client_ip_from_http_headers(headers: &http::HeaderMap) -> Option<String> {
@@ -145,6 +208,8 @@ pub fn resolve_forward(
 
     let mut middleware = apply_middlewares(&route.middlewares);
     middleware.forward_client_ip = route.forward_client_ip;
+    middleware.geoip = route.geoip.clone();
+    middleware.security = route.security.clone();
     let upstream_path = if let Some(ref prefix) = middleware.strip_prefix {
         strip_path_prefix(path_and_query, prefix)
     } else {
@@ -227,6 +292,8 @@ mod tests {
                     prefix: "/api".into(),
                 }],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
 
@@ -248,6 +315,8 @@ mod tests {
                 },
                 middlewares: vec![],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
         let plan = resolve_forward(&table, "app.example.com", "/api/status").unwrap();
@@ -318,15 +387,42 @@ mod tests {
     }
 
     #[test]
-    fn resolve_client_ip_prefers_socket() {
+    fn resolve_client_ip_prefers_public_socket() {
         let ip = resolve_client_ip(Some("203.0.113.9"), Some("198.51.100.1"), None);
         assert_eq!(ip.as_deref(), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn resolve_client_ip_skips_private_socket_for_xff() {
+        let ip = resolve_client_ip(Some("10.244.1.5"), Some("203.0.113.9, 10.0.0.1"), None);
+        assert_eq!(ip.as_deref(), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn resolve_client_ip_unwraps_ipv4_mapped() {
+        let ip = resolve_client_ip(Some("::ffff:203.0.113.9"), None, None);
+        assert_eq!(ip.as_deref(), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn normalize_ip_strips_zone_id() {
+        assert_eq!(
+            normalize_ip_str("2405:9800::1%eth0").as_deref(),
+            Some("2405:9800::1")
+        );
     }
 
     #[test]
     fn resolve_client_ip_falls_back_to_xff() {
         let ip = resolve_client_ip(None, Some("203.0.113.9, 10.0.0.1"), None);
         assert_eq!(ip.as_deref(), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn ipv4_mapped_private_is_not_public() {
+        assert!(!is_public_routable_ip("::ffff:10.1.1.5"));
+        assert!(is_public_routable_ip("::ffff:203.0.113.9"));
+        assert!(is_public_routable_ip("2405:9800:b901:194c:be24:11ff:feed:f72"));
     }
 
     #[test]
@@ -356,6 +452,8 @@ mod tests {
                 },
                 middlewares: vec![],
                 forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
         let plan = resolve_forward(&table, "proxmox.example.com", "/").unwrap();
@@ -377,6 +475,8 @@ mod tests {
                 },
                 middlewares: vec![],
                 forward_client_ip: true,
+                geoip: Default::default(),
+                security: Default::default(),
             }],
         )]));
         let plan = resolve_forward(&table, "git.example.com", "/").unwrap();

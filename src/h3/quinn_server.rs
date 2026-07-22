@@ -400,6 +400,181 @@ async fn handle_request_inner(
         }
     };
 
+    if plan.middleware.geoip.is_active() {
+        let socket_ip = remote_addr.ip().to_string();
+        let xff = req
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok());
+        let x_real_ip = req
+            .headers()
+            .get("x-real-ip")
+            .and_then(|v| v.to_str().ok());
+        let client_ip = resolve_client_ip(Some(&socket_ip), xff, x_real_ip);
+        match crate::geoip::evaluate_ip(&plan.middleware.geoip, client_ip.as_deref()) {
+            crate::geoip::Decision::Allow => {}
+            decision => {
+                let reason = match decision {
+                    crate::geoip::Decision::BlockCountry => "geoip-country",
+                    crate::geoip::Decision::BlockAsn => "geoip-asn",
+                    crate::geoip::Decision::Allow => unreachable!(),
+                };
+                metrics.inc_geoip_blocked();
+                tracing::warn!(
+                    host = %host,
+                    client_ip = client_ip.as_deref().unwrap_or("-"),
+                    reason,
+                    "GeoIP blocked request"
+                );
+                let body = Bytes::from_static(b"forbidden");
+                let mut resp = plain_response(http::StatusCode::FORBIDDEN, body.as_ref());
+                if let Ok(v) = http::HeaderValue::from_str(reason) {
+                    resp.headers_mut().insert("x-pertisk-block", v);
+                }
+                send_h3_response(stream, resp, body).await?;
+                return Ok(());
+            }
+        }
+    }
+
+    let path_only = req.uri().path();
+    let query = req.uri().query().unwrap_or("");
+    let socket_ip = remote_addr.ip().to_string();
+    let xff = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok());
+    let x_real_ip = req
+        .headers()
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok());
+    let client_ip = resolve_client_ip(Some(&socket_ip), xff, x_real_ip);
+    let ua = req
+        .headers()
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok());
+    let accept = req.headers().get("accept").and_then(|v| v.to_str().ok());
+    let accept_lang = req
+        .headers()
+        .get("accept-language")
+        .and_then(|v| v.to_str().ok());
+    let cookie = req.headers().get("cookie").and_then(|v| v.to_str().ok());
+
+    if crate::security::is_captcha_path(path_only) {
+        let ttl = if plan.middleware.security.captcha.enabled {
+            plan.middleware.security.captcha.cookie_ttl_secs
+        } else {
+            86_400
+        };
+        if path_only == crate::security::CAPTCHA_VERIFY_PATH {
+            let token = h3_query_param(query, "token");
+            let answer = h3_query_param(query, "answer");
+            let next = h3_query_param(query, "next");
+            match crate::security::verify_and_pass_cookie(
+                token.as_deref(),
+                answer.as_deref(),
+                next.as_deref(),
+                client_ip.as_deref(),
+                ttl,
+            ) {
+                Ok((set_cookie, location)) => {
+                    metrics.inc_captcha_passed();
+                    let mut resp = plain_response(http::StatusCode::FOUND, b"");
+                    if let Ok(v) = http::HeaderValue::from_str(&location) {
+                        resp.headers_mut().insert(http::header::LOCATION, v);
+                    }
+                    if let Ok(v) = http::HeaderValue::from_str(&set_cookie) {
+                        resp.headers_mut().insert(http::header::SET_COOKIE, v);
+                    }
+                    send_h3_response(stream, resp, Bytes::new()).await?;
+                }
+                Err(_) => {
+                    metrics.inc_captcha_failed();
+                    let (body, _) = crate::security::challenge_page(
+                        next.as_deref().unwrap_or("/"),
+                        "retry",
+                    );
+                    let bytes = Bytes::from(body);
+                    let mut resp =
+                        plain_response(http::StatusCode::FORBIDDEN, bytes.as_ref());
+                    resp.headers_mut().insert(
+                        http::header::CONTENT_TYPE,
+                        http::HeaderValue::from_static("text/html; charset=utf-8"),
+                    );
+                    send_h3_response(stream, resp, bytes).await?;
+                }
+            }
+            return Ok(());
+        }
+        let next = h3_query_param(query, "next").unwrap_or_else(|| "/".into());
+        let (body, _) = crate::security::challenge_page(&next, "check");
+        let bytes = Bytes::from(body);
+        let mut resp = plain_response(http::StatusCode::OK, bytes.as_ref());
+        resp.headers_mut().insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("text/html; charset=utf-8"),
+        );
+        send_h3_response(stream, resp, bytes).await?;
+        return Ok(());
+    }
+
+    if plan.middleware.security.is_active() {
+        let view = crate::security::RequestView {
+            method: req.method().as_str(),
+            path: path_only,
+            query,
+            user_agent: ua,
+            accept,
+            accept_language: accept_lang,
+            cookie,
+            client_ip: client_ip.as_deref(),
+        };
+        let decision = crate::security::evaluate(&plan.middleware.security, &view);
+        match decision.action {
+            crate::security::SecurityAction::Allow | crate::security::SecurityAction::Log => {
+                if decision.action == crate::security::SecurityAction::Log {
+                    metrics.inc_waf_logged();
+                }
+            }
+            crate::security::SecurityAction::Challenge => {
+                if decision.reason.starts_with("bot") {
+                    metrics.inc_bot_challenged();
+                }
+                let next = if query.is_empty() {
+                    path_only.to_string()
+                } else {
+                    format!("{path_only}?{query}")
+                };
+                let (body, _) = crate::security::challenge_page(&next, decision.reason);
+                let bytes = Bytes::from(body);
+                let mut resp = plain_response(http::StatusCode::FORBIDDEN, bytes.as_ref());
+                resp.headers_mut().insert(
+                    http::header::CONTENT_TYPE,
+                    http::HeaderValue::from_static("text/html; charset=utf-8"),
+                );
+                if let Ok(v) = http::HeaderValue::from_str(decision.reason) {
+                    resp.headers_mut().insert("x-pertisk-block", v);
+                }
+                send_h3_response(stream, resp, bytes).await?;
+                return Ok(());
+            }
+            crate::security::SecurityAction::Block => {
+                if decision.reason.starts_with("waf") {
+                    metrics.inc_waf_blocked();
+                } else if decision.reason.starts_with("bot") {
+                    metrics.inc_bot_blocked();
+                }
+                let body = Bytes::from_static(b"forbidden");
+                let mut resp = plain_response(http::StatusCode::FORBIDDEN, body.as_ref());
+                if let Ok(v) = http::HeaderValue::from_str(decision.reason) {
+                    resp.headers_mut().insert("x-pertisk-block", v);
+                }
+                send_h3_response(stream, resp, body).await?;
+                return Ok(());
+            }
+        }
+    }
+
     let expects_body = req
         .headers()
         .get(http::header::CONTENT_LENGTH)
@@ -613,6 +788,18 @@ fn plain_response(status: http::StatusCode, body: &[u8]) -> http::Response<()> {
         resp.headers_mut().insert(http::header::CONTENT_LENGTH, v);
     }
     resp
+}
+
+fn h3_query_param(query: &str, key: &str) -> Option<String> {
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let k = parts.next().unwrap_or("");
+        let v = parts.next().unwrap_or("");
+        if k == key {
+            return Some(v.replace('+', " "));
+        }
+    }
+    None
 }
 
 async fn send_h3_response(

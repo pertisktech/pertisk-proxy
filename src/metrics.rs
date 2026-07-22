@@ -21,6 +21,13 @@ pub struct ProxyMetrics {
     pub h3_requests_total: Arc<AtomicU64>,
     pub h2_requests_total: Arc<AtomicU64>,
     pub upstream_errors_total: Arc<AtomicU64>,
+    pub geoip_blocked_total: Arc<AtomicU64>,
+    pub waf_blocked_total: Arc<AtomicU64>,
+    pub waf_logged_total: Arc<AtomicU64>,
+    pub bot_challenged_total: Arc<AtomicU64>,
+    pub bot_blocked_total: Arc<AtomicU64>,
+    pub captcha_passed_total: Arc<AtomicU64>,
+    pub captcha_failed_total: Arc<AtomicU64>,
     pub grpc_requests_total: Arc<AtomicU64>,
     pub active_connections: Arc<AtomicU64>,
     pub bytes_sent_total: Arc<AtomicU64>,
@@ -36,6 +43,13 @@ impl ProxyMetrics {
             h3_requests_total: Arc::new(AtomicU64::new(0)),
             h2_requests_total: Arc::new(AtomicU64::new(0)),
             upstream_errors_total: Arc::new(AtomicU64::new(0)),
+            geoip_blocked_total: Arc::new(AtomicU64::new(0)),
+            waf_blocked_total: Arc::new(AtomicU64::new(0)),
+            waf_logged_total: Arc::new(AtomicU64::new(0)),
+            bot_challenged_total: Arc::new(AtomicU64::new(0)),
+            bot_blocked_total: Arc::new(AtomicU64::new(0)),
+            captcha_passed_total: Arc::new(AtomicU64::new(0)),
+            captcha_failed_total: Arc::new(AtomicU64::new(0)),
             grpc_requests_total: Arc::new(AtomicU64::new(0)),
             active_connections: Arc::new(AtomicU64::new(0)),
             bytes_sent_total: Arc::new(AtomicU64::new(0)),
@@ -97,6 +111,34 @@ impl ProxyMetrics {
 
     pub fn inc_upstream_errors(&self) {
         self.upstream_errors_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_geoip_blocked(&self) {
+        self.geoip_blocked_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_waf_blocked(&self) {
+        self.waf_blocked_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_waf_logged(&self) {
+        self.waf_logged_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_bot_challenged(&self) {
+        self.bot_challenged_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_bot_blocked(&self) {
+        self.bot_blocked_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_captcha_passed(&self) {
+        self.captcha_passed_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_captcha_failed(&self) {
+        self.captcha_failed_total.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_grpc_requests(&self) {
@@ -227,6 +269,50 @@ impl ProxyMetrics {
         output.push_str(&format!(
             "pertisk_upstream_errors_total {}\n",
             self.upstream_errors_total.load(Ordering::Relaxed)
+        ));
+
+        output.push_str("# HELP pertisk_geoip_blocked_total Total requests blocked by GeoIP policy\n");
+        output.push_str("# TYPE pertisk_geoip_blocked_total counter\n");
+        output.push_str(&format!(
+            "pertisk_geoip_blocked_total {}\n",
+            self.geoip_blocked_total.load(Ordering::Relaxed)
+        ));
+
+        output.push_str("# HELP pertisk_waf_blocked_total Total requests blocked by WAF\n");
+        output.push_str("# TYPE pertisk_waf_blocked_total counter\n");
+        output.push_str(&format!(
+            "pertisk_waf_blocked_total {}\n",
+            self.waf_blocked_total.load(Ordering::Relaxed)
+        ));
+        output.push_str("# HELP pertisk_waf_logged_total Total WAF log-only matches\n");
+        output.push_str("# TYPE pertisk_waf_logged_total counter\n");
+        output.push_str(&format!(
+            "pertisk_waf_logged_total {}\n",
+            self.waf_logged_total.load(Ordering::Relaxed)
+        ));
+        output.push_str("# HELP pertisk_bot_challenged_total Total bot challenges issued\n");
+        output.push_str("# TYPE pertisk_bot_challenged_total counter\n");
+        output.push_str(&format!(
+            "pertisk_bot_challenged_total {}\n",
+            self.bot_challenged_total.load(Ordering::Relaxed)
+        ));
+        output.push_str("# HELP pertisk_bot_blocked_total Total requests blocked by bot score\n");
+        output.push_str("# TYPE pertisk_bot_blocked_total counter\n");
+        output.push_str(&format!(
+            "pertisk_bot_blocked_total {}\n",
+            self.bot_blocked_total.load(Ordering::Relaxed)
+        ));
+        output.push_str("# HELP pertisk_captcha_passed_total Total captcha passes\n");
+        output.push_str("# TYPE pertisk_captcha_passed_total counter\n");
+        output.push_str(&format!(
+            "pertisk_captcha_passed_total {}\n",
+            self.captcha_passed_total.load(Ordering::Relaxed)
+        ));
+        output.push_str("# HELP pertisk_captcha_failed_total Total captcha failures\n");
+        output.push_str("# TYPE pertisk_captcha_failed_total counter\n");
+        output.push_str(&format!(
+            "pertisk_captcha_failed_total {}\n",
+            self.captcha_failed_total.load(Ordering::Relaxed)
         ));
 
         output.push_str("# HELP pertisk_active_connections Current number of active connections\n");

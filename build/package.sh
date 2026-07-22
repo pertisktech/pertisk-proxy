@@ -294,7 +294,7 @@ LISTEN_H3_UDP=[::]:443
 ENABLE_H3=true
 
 # Admin UI + management API (bind locally; put a reverse proxy in front in production)
-PERTISK_MANAGEMENT_ADDR=0.0.0.0:9080
+PERTISK_MANAGEMENT_ADDR=[::]:9080
 # PERTISK_ADMIN_PASSWORD=change-me
 
 # Optional one-time import when the database is empty (legacy routes.yaml)

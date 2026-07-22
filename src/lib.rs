@@ -2,6 +2,8 @@
 pub mod ingress;
 pub mod config;
 pub mod deny;
+pub mod geoip;
+pub mod security;
 pub mod health;
 pub mod http3_options;
 pub mod proxy_config;

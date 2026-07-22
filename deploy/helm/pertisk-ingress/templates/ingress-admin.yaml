@@ -5,6 +5,9 @@ metadata:
   name: {{ include "pertisk-ingress.fullname" . }}-admin
   labels:
     {{- include "pertisk-ingress.labels" . | nindent 4 }}
+  annotations:
+    # Never apply GeoIP/WAF to the management UI (easy self-lockout).
+    proxy.pertisk.tech/security-exempt: "true"
 spec:
   ingressClassName: {{ .Values.ingressClassName }}
   rules:

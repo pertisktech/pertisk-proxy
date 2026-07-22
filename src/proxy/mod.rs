@@ -30,6 +30,8 @@ pub struct RequestCtx {
     pub request_headers: Vec<(String, String)>,
     pub response_headers: Vec<(String, String)>,
     pub forward_client_ip: bool,
+    pub geoip: crate::geoip::GeoIpPolicy,
+    pub security: crate::security::SecurityPolicy,
     pub is_grpc: bool,
     pub is_grpc_web: bool,
     pub is_long_lived_stream: bool,
@@ -46,6 +48,8 @@ impl From<crate::proxy::forward::MiddlewareAction> for RequestCtx {
             request_headers: mw.request_headers,
             response_headers: mw.response_headers,
             forward_client_ip: mw.forward_client_ip,
+            geoip: mw.geoip,
+            security: mw.security,
             is_grpc: false,
             is_grpc_web: false,
             is_long_lived_stream: false,
@@ -306,6 +310,165 @@ impl ProxyHttp for Gateway {
             ctx.is_grpc_web = is_grpc_web;
             ctx.is_long_lived_stream = is_long_lived_stream;
             ctx.is_registry = is_registry;
+        }
+
+        if ctx.geoip.is_active() {
+            let client_ip = session_client_ip(session);
+            match crate::geoip::evaluate_ip(&ctx.geoip, client_ip.as_deref()) {
+                crate::geoip::Decision::Allow => {}
+                decision => {
+                    let reason = match decision {
+                        crate::geoip::Decision::BlockCountry => "geoip-country",
+                        crate::geoip::Decision::BlockAsn => "geoip-asn",
+                        crate::geoip::Decision::Allow => unreachable!(),
+                    };
+                    self.metrics.inc_geoip_blocked();
+                    tracing::warn!(
+                        host = %host,
+                        client_ip = client_ip.as_deref().unwrap_or("-"),
+                        reason,
+                        "GeoIP blocked request"
+                    );
+                    self.log.push_sync(ProxyLogEntry::error_with_context(
+                        &host,
+                        session.req_header().uri.path(),
+                        client_ip.as_deref().unwrap_or("-"),
+                        format!("GeoIP blocked ({reason})"),
+                    ));
+                    deny::respond_forbidden(
+                        session,
+                        &format!("pertisk-proxy/{protocol}"),
+                        reason,
+                    )
+                    .await?;
+                    return Ok(true);
+                }
+            }
+        }
+
+        let server = format!("pertisk-proxy/{protocol}");
+        let req_header = session.req_header();
+        let method_str = req_header.method.as_str();
+        let path_only = req_header.uri.path();
+        let query = req_header.uri.query().unwrap_or("");
+        let client_ip = session_client_ip(session);
+        let ua = header_str(req_header, "user-agent");
+        let accept = header_str(req_header, "accept");
+        let accept_lang = header_str(req_header, "accept-language");
+        let cookie = header_str(req_header, "cookie");
+
+        // Captcha endpoints (host-agnostic once a site policy enables captcha).
+        if crate::security::is_captcha_path(path_only) {
+            let ttl = if ctx.security.captcha.enabled {
+                ctx.security.captcha.cookie_ttl_secs
+            } else {
+                86_400
+            };
+            if path_only == crate::security::CAPTCHA_VERIFY_PATH {
+                let token = query_param(query, "token");
+                let answer = query_param(query, "answer");
+                let next = query_param(query, "next");
+                match crate::security::verify_and_pass_cookie(
+                    token.as_deref(),
+                    answer.as_deref(),
+                    next.as_deref(),
+                    client_ip.as_deref(),
+                    ttl,
+                ) {
+                    Ok((set_cookie, location)) => {
+                        self.metrics.inc_captcha_passed();
+                        deny::respond_redirect(session, &server, &location, Some(&set_cookie))
+                            .await?;
+                    }
+                    Err(_) => {
+                        self.metrics.inc_captcha_failed();
+                        let (body, ctype) = crate::security::challenge_page(
+                            next.as_deref().unwrap_or("/"),
+                            "retry",
+                        );
+                        deny::respond_html(
+                            session,
+                            &server,
+                            http::StatusCode::FORBIDDEN,
+                            ctype,
+                            &body,
+                            &[("X-Pertisk-Block", "captcha-failed".into())],
+                        )
+                        .await?;
+                    }
+                }
+                return Ok(true);
+            }
+            let next = query_param(query, "next").unwrap_or_else(|| "/".into());
+            let (body, ctype) = crate::security::challenge_page(&next, "check");
+            deny::respond_html(
+                session,
+                &server,
+                http::StatusCode::OK,
+                ctype,
+                &body,
+                &[],
+            )
+            .await?;
+            return Ok(true);
+        }
+
+        if ctx.security.is_active() {
+            let view = crate::security::RequestView {
+                method: method_str,
+                path: path_only,
+                query,
+                user_agent: ua.as_deref(),
+                accept: accept.as_deref(),
+                accept_language: accept_lang.as_deref(),
+                cookie: cookie.as_deref(),
+                client_ip: client_ip.as_deref(),
+            };
+            let decision = crate::security::evaluate(&ctx.security, &view);
+            match decision.action {
+                crate::security::SecurityAction::Allow => {}
+                crate::security::SecurityAction::Log => {
+                    self.metrics.inc_waf_logged();
+                    tracing::info!(
+                        host = %host,
+                        reason = decision.reason,
+                        detail = %decision.detail,
+                        "WAF log match"
+                    );
+                }
+                crate::security::SecurityAction::Challenge => {
+                    if decision.reason.starts_with("bot") {
+                        self.metrics.inc_bot_challenged();
+                    }
+                    let next = if query.is_empty() {
+                        path_only.to_string()
+                    } else {
+                        format!("{path_only}?{query}")
+                    };
+                    let (body, ctype) =
+                        crate::security::challenge_page(&next, decision.reason);
+                    deny::respond_html(
+                        session,
+                        &server,
+                        http::StatusCode::FORBIDDEN,
+                        ctype,
+                        &body,
+                        &[("X-Pertisk-Block", decision.reason.to_string())],
+                    )
+                    .await?;
+                    return Ok(true);
+                }
+                crate::security::SecurityAction::Block => {
+                    if decision.reason.starts_with("waf") {
+                        self.metrics.inc_waf_blocked();
+                    } else if decision.reason.starts_with("bot") {
+                        self.metrics.inc_bot_blocked();
+                    }
+                    deny::respond_forbidden(session, &server, decision.reason)
+                        .await?;
+                    return Ok(true);
+                }
+            }
         }
 
         if ctx.is_grpc {
@@ -678,6 +841,53 @@ fn protocol_short(label: &str) -> &str {
         "http/1.1" => "1.1",
         other => other,
     }
+}
+
+fn header_str(req: &RequestHeader, name: &str) -> Option<String> {
+    req.headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+}
+
+fn query_param(query: &str, key: &str) -> Option<String> {
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let k = parts.next().unwrap_or("");
+        let v = parts.next().unwrap_or("");
+        if k == key {
+            return Some(
+                urlencoding_decode(v)
+                    .unwrap_or_else(|| v.replace('+', " ")),
+            );
+        }
+    }
+    None
+}
+
+fn urlencoding_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let h = (bytes[i + 1] as char).to_digit(16)?;
+                let l = (bytes[i + 2] as char).to_digit(16)?;
+                out.push(((h << 4) | l) as u8);
+                i += 3;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 fn session_client_ip(session: &Session) -> Option<String> {
