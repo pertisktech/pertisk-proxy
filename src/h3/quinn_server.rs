@@ -420,6 +420,12 @@ async fn handle_request_inner(
                     crate::geoip::Decision::Allow => unreachable!(),
                 };
                 metrics.inc_geoip_blocked();
+                tracing::warn!(
+                    host = %host,
+                    client_ip = client_ip.as_deref().unwrap_or("-"),
+                    reason,
+                    "GeoIP blocked request"
+                );
                 let body = Bytes::from_static(b"forbidden");
                 let mut resp = plain_response(http::StatusCode::FORBIDDEN, body.as_ref());
                 if let Ok(v) = http::HeaderValue::from_str(reason) {

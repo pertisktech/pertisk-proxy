@@ -55,16 +55,20 @@ Pods will run `geoip-download` init (~50MB), then start. Admin → Advanced shou
 
 ---
 
-## Proxy / bare-metal host
+## Proxy mode (RPM / bare metal)
+
+Listen dual-stack (IPv4+IPv6) with `IPV6_V6ONLY=0`:
 
 ```sh
-sudo mkdir -p /var/lib/pertisk-proxy/geoip && cd /tmp
-wget -q https://cdn.jsdelivr.net/npm/geolite2-country/GeoLite2-Country.mmdb.gz && gzip -df GeoLite2-Country.mmdb.gz
-sudo cp GeoLite2-Country.mmdb /var/lib/pertisk-proxy/geoip/
-wget -q https://iptoasn.com/data/ip2asn-combined.tsv.gz && gzip -df ip2asn-combined.tsv.gz
-sudo cp ip2asn-combined.tsv /var/lib/pertisk-proxy/geoip/
-sudo systemctl restart pertisk-proxy
+LISTEN_HTTP=[::]:80
+LISTEN_HTTPS=[::]:443
+LISTEN_H3_UDP=[::]:443
+PERTISK_MANAGEMENT_ADDR=[::]:9080
 ```
+
+Client IPs are normalized for GeoIP (`::ffff:x.x.x.x` → IPv4, zone ids stripped). Your public IPv6 (e.g. AIS `2405:9800:…`) should map to **TH** in GeoLite2-Country.
+
+Install DBs under `/var/lib/pertisk-proxy/geoip/` (same as above), restart `pertisk-proxy`, then Sites → Advanced → allow countries `TH`.
 
 ## Enable features
 

@@ -309,7 +309,8 @@ pub fn status() -> GeoIpStatus {
 }
 
 pub fn lookup(ip: &str) -> Option<GeoInfo> {
-    ENGINE.lookup(ip)
+    let ip = crate::proxy::forward::normalize_ip_str(ip)?;
+    ENGINE.lookup(&ip)
 }
 
 /// Evaluate policy against a lookup result. Fail-open when the relevant DB is missing.
@@ -360,14 +361,15 @@ pub fn evaluate_ip(policy: &GeoIpPolicy, ip: Option<&str>) -> Decision {
     if !policy.is_active() {
         return Decision::Allow;
     }
+    let normalized = ip.and_then(crate::proxy::forward::normalize_ip_str);
     // Private / SNAT peers (e.g. kube-proxy Cluster ET) have no MaxMind country — fail-open
     // so allowlists do not lock out the whole cluster until client IP is preserved.
-    if let Some(ip) = ip.map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(ref ip) = normalized {
         if !crate::proxy::forward::is_public_routable_ip(ip) {
             return Decision::Allow;
         }
     }
-    let info = ip.and_then(lookup);
+    let info = normalized.as_deref().and_then(lookup);
     evaluate(policy, info.as_ref())
 }
 

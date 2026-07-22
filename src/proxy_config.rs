@@ -300,7 +300,8 @@ fn default_https_addr() -> SocketAddr {
     "[::]:443".parse().unwrap()
 }
 fn default_management_addr() -> SocketAddr {
-    "0.0.0.0:9080".parse().unwrap()
+    // Dual-stack (IPV6_V6ONLY=0 in api::serve) — IPv4 + IPv6
+    "[::]:9080".parse().unwrap()
 }
 fn default_true() -> bool {
     true

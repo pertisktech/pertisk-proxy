@@ -77,33 +77,52 @@ pub fn resolve_client_ip(
     // Prefer the TCP peer when it looks like a real client. Behind kube-proxy with
     // externalTrafficPolicy=Cluster the peer is often a private SNAT address — skip it
     // so GeoIP / forwarding can use X-Real-IP / X-Forwarded-For instead.
-    if let Some(ip) = socket_ip.map(str::trim).filter(|value| !value.is_empty()) {
-        if is_public_routable_ip(ip) {
-            return Some(ip.to_string());
+    if let Some(ip) = socket_ip.and_then(normalize_ip_str) {
+        if is_public_routable_ip(&ip) {
+            return Some(ip);
         }
     }
-    if let Some(ip) = x_real_ip.map(str::trim).filter(|value| !value.is_empty()) {
-        if is_public_routable_ip(ip) || socket_ip.is_none() {
-            return Some(ip.to_string());
+    if let Some(ip) = x_real_ip.and_then(normalize_ip_str) {
+        if is_public_routable_ip(&ip) {
+            return Some(ip);
         }
-        // private X-Real-IP only if we have nothing better from XFF
     }
-    if let Some(ip) = first_hop_from_xff(xff) {
+    if let Some(ip) = first_hop_from_xff(xff).and_then(|s| normalize_ip_str(&s)) {
         return Some(ip);
     }
-    if let Some(ip) = x_real_ip.map(str::trim).filter(|value| !value.is_empty()) {
-        return Some(ip.to_string());
+    if let Some(ip) = x_real_ip.and_then(normalize_ip_str) {
+        return Some(ip);
     }
     // Last resort: private socket (Cluster ET policy, no forwarded headers).
-    socket_ip
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+    socket_ip.and_then(normalize_ip_str)
+}
+
+/// Strip zone id / brackets and unwrap IPv4-mapped IPv6 (`::ffff:a.b.c.d` → `a.b.c.d`).
+pub fn normalize_ip_str(ip: &str) -> Option<String> {
+    let ip = ip.trim().trim_matches(|c| c == '[' || c == ']');
+    let ip = ip.split('%').next()?.trim();
+    if ip.is_empty() {
+        return None;
+    }
+    match ip.parse::<IpAddr>() {
+        Ok(IpAddr::V6(v6)) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                Some(v4.to_string())
+            } else {
+                Some(v6.to_string())
+            }
+        }
+        Ok(IpAddr::V4(v4)) => Some(v4.to_string()),
+        Err(_) => None,
+    }
 }
 
 /// True for addresses that are not private/loopback/link-local (usable as client IP).
 pub fn is_public_routable_ip(ip: &str) -> bool {
-    match ip.trim().parse::<IpAddr>() {
+    let Some(normalized) = normalize_ip_str(ip) else {
+        return false;
+    };
+    match normalized.parse::<IpAddr>() {
         Ok(IpAddr::V4(v4)) => {
             !(v4.is_private()
                 || v4.is_loopback()
@@ -380,9 +399,30 @@ mod tests {
     }
 
     #[test]
+    fn resolve_client_ip_unwraps_ipv4_mapped() {
+        let ip = resolve_client_ip(Some("::ffff:203.0.113.9"), None, None);
+        assert_eq!(ip.as_deref(), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn normalize_ip_strips_zone_id() {
+        assert_eq!(
+            normalize_ip_str("2405:9800::1%eth0").as_deref(),
+            Some("2405:9800::1")
+        );
+    }
+
+    #[test]
     fn resolve_client_ip_falls_back_to_xff() {
         let ip = resolve_client_ip(None, Some("203.0.113.9, 10.0.0.1"), None);
         assert_eq!(ip.as_deref(), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn ipv4_mapped_private_is_not_public() {
+        assert!(!is_public_routable_ip("::ffff:10.1.1.5"));
+        assert!(is_public_routable_ip("::ffff:203.0.113.9"));
+        assert!(is_public_routable_ip("2405:9800:b901:194c:be24:11ff:feed:f72"));
     }
 
     #[test]

@@ -105,14 +105,47 @@ pub struct AdminState {
 
 pub async fn serve(state: AdminState, addr: SocketAddr) -> Result<()> {
     let app = router(state);
-    let listener = TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("failed to bind management API on {addr}"))?;
+    let listener = bind_management_listener(addr).await?;
     info!("Management API listening on http://{addr}");
     axum::serve(listener, app)
         .await
         .context("management API server stopped")?;
     Ok(())
+}
+
+/// Bind management API. For `[::]:port`, force `IPV6_V6ONLY=0` so IPv4+IPv6 dual-stack works
+/// even when `net.ipv6.bindv6only=1`.
+async fn bind_management_listener(addr: SocketAddr) -> Result<TcpListener> {
+    if addr.is_ipv6() {
+        let socket = socket2::Socket::new(
+            socket2::Domain::IPV6,
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        )
+        .context("create management IPv6 socket")?;
+        #[cfg(unix)]
+        {
+            socket
+                .set_reuse_address(true)
+                .context("management SO_REUSEADDR")?;
+        }
+        socket
+            .set_only_v6(false)
+            .context("management IPV6_V6ONLY=0 (dual-stack)")?;
+        socket
+            .bind(&addr.into())
+            .with_context(|| format!("failed to bind management API on {addr}"))?;
+        socket.listen(1024).context("management listen")?;
+        socket
+            .set_nonblocking(true)
+            .context("management nonblocking")?;
+        TcpListener::from_std(std::net::TcpListener::from(socket))
+            .context("management TcpListener")
+    } else {
+        TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("failed to bind management API on {addr}"))
+    }
 }
 
 pub fn router(state: AdminState) -> Router {
@@ -1769,7 +1802,7 @@ pub fn management_addr() -> SocketAddr {
     std::env::var("PERTISK_MANAGEMENT_ADDR")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| "127.0.0.1:9080".parse().expect("valid default addr"))
+        .unwrap_or_else(|| "[::]:9080".parse().expect("valid default addr"))
 }
 
 pub fn admin_dev_origin() -> Option<String> {

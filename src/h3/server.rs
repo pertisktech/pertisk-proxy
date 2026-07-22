@@ -280,6 +280,12 @@ async fn handle_proxied_request(
                     crate::geoip::Decision::BlockAsn => "geoip-asn",
                     crate::geoip::Decision::Allow => unreachable!(),
                 };
+                tracing::warn!(
+                    host = %host,
+                    client_ip = client_ip.as_deref().unwrap_or("-"),
+                    reason,
+                    "GeoIP blocked request"
+                );
                 send_error(&mut send, deny::h3_forbidden(reason)).await;
                 return Ok(());
             }

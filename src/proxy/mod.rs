@@ -323,12 +323,18 @@ impl ProxyHttp for Gateway {
                         crate::geoip::Decision::Allow => unreachable!(),
                     };
                     self.metrics.inc_geoip_blocked();
-                    tracing::info!(
+                    tracing::warn!(
                         host = %host,
                         client_ip = client_ip.as_deref().unwrap_or("-"),
                         reason,
                         "GeoIP blocked request"
                     );
+                    self.log.push_sync(ProxyLogEntry::error_with_context(
+                        &host,
+                        session.req_header().uri.path(),
+                        client_ip.as_deref().unwrap_or("-"),
+                        format!("GeoIP blocked ({reason})"),
+                    ));
                     deny::respond_forbidden(
                         session,
                         &format!("pertisk-proxy/{protocol}"),
