@@ -360,6 +360,13 @@ pub fn evaluate_ip(policy: &GeoIpPolicy, ip: Option<&str>) -> Decision {
     if !policy.is_active() {
         return Decision::Allow;
     }
+    // Private / SNAT peers (e.g. kube-proxy Cluster ET) have no MaxMind country — fail-open
+    // so allowlists do not lock out the whole cluster until client IP is preserved.
+    if let Some(ip) = ip.map(str::trim).filter(|s| !s.is_empty()) {
+        if !crate::proxy::forward::is_public_routable_ip(ip) {
+            return Decision::Allow;
+        }
+    }
     let info = ip.and_then(lookup);
     evaluate(policy, info.as_ref())
 }
@@ -426,6 +433,15 @@ pub const ANNOTATION_KEYS: &[&str] = &[
     "proxy.pertisk.tech/geoip-deny-asns",
 ];
 
+fn flag_true(map: &std::collections::BTreeMap<String, String>, key: &str) -> bool {
+    map.get(key)
+        .map(|v| {
+            let v = v.trim().to_ascii_lowercase();
+            matches!(v.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
 /// Build a policy from Kubernetes Ingress / HTTPRoute annotations.
 ///
 /// Supported keys:
@@ -440,6 +456,11 @@ pub fn policy_from_annotations(
     let Some(map) = annotations else {
         return GeoIpPolicy::default();
     };
+    if flag_true(map, "proxy.pertisk.tech/security-exempt")
+        || flag_true(map, "proxy.pertisk.tech/geoip-exempt")
+    {
+        return GeoIpPolicy::default();
+    }
     let enabled = map
         .get("proxy.pertisk.tech/geoip-enabled")
         .map(|v| {

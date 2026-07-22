@@ -17,7 +17,15 @@ geoip:
   enabled: true
   download:
     enabled: true
+
+service:
+  # Prefer Cluster on Cilium/Talos (Local often causes LB 502s).
+  externalTrafficPolicy: Cluster
 ```
+
+**Do not** put GeoIP allow/deny on the **admin** Ingress (`…-admin`). It is marked `proxy.pertisk.tech/security-exempt: "true"`. Apply GeoIP only on app Ingresses.
+
+With `Cluster`, the peer IP is often private (SNAT). The proxy fail-opens GeoIP for private IPs and uses `X-Forwarded-For` / `X-Real-IP` when present. For strict GeoIP on public apps, put Cloudflare (or similar) in front so those headers carry the real client IP — do **not** switch this LB to `Local` unless you have verified health checks.
 
 Redeploy:
 

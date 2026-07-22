@@ -1,5 +1,7 @@
 //! Shared reverse-proxy routing used by Pingora (HTTP/1, HTTP/2) and HTTP/3.
 
+use std::net::IpAddr;
+
 use pingora_core::Result;
 use pingora_error::ErrorType::HTTPStatus;
 
@@ -72,13 +74,51 @@ pub fn resolve_client_ip(
     xff: Option<&str>,
     x_real_ip: Option<&str>,
 ) -> Option<String> {
+    // Prefer the TCP peer when it looks like a real client. Behind kube-proxy with
+    // externalTrafficPolicy=Cluster the peer is often a private SNAT address — skip it
+    // so GeoIP / forwarding can use X-Real-IP / X-Forwarded-For instead.
     if let Some(ip) = socket_ip.map(str::trim).filter(|value| !value.is_empty()) {
-        return Some(ip.to_string());
+        if is_public_routable_ip(ip) {
+            return Some(ip.to_string());
+        }
+    }
+    if let Some(ip) = x_real_ip.map(str::trim).filter(|value| !value.is_empty()) {
+        if is_public_routable_ip(ip) || socket_ip.is_none() {
+            return Some(ip.to_string());
+        }
+        // private X-Real-IP only if we have nothing better from XFF
+    }
+    if let Some(ip) = first_hop_from_xff(xff) {
+        return Some(ip);
     }
     if let Some(ip) = x_real_ip.map(str::trim).filter(|value| !value.is_empty()) {
         return Some(ip.to_string());
     }
-    first_hop_from_xff(xff)
+    // Last resort: private socket (Cluster ET policy, no forwarded headers).
+    socket_ip
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// True for addresses that are not private/loopback/link-local (usable as client IP).
+pub fn is_public_routable_ip(ip: &str) -> bool {
+    match ip.trim().parse::<IpAddr>() {
+        Ok(IpAddr::V4(v4)) => {
+            !(v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast())
+        }
+        Ok(IpAddr::V6(v6)) => {
+            !(v6.is_loopback()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+                || v6.is_unspecified())
+        }
+        Err(_) => false,
+    }
 }
 
 pub fn client_ip_from_http_headers(headers: &http::HeaderMap) -> Option<String> {
@@ -328,8 +368,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_client_ip_prefers_socket() {
+    fn resolve_client_ip_prefers_public_socket() {
         let ip = resolve_client_ip(Some("203.0.113.9"), Some("198.51.100.1"), None);
+        assert_eq!(ip.as_deref(), Some("203.0.113.9"));
+    }
+
+    #[test]
+    fn resolve_client_ip_skips_private_socket_for_xff() {
+        let ip = resolve_client_ip(Some("10.244.1.5"), Some("203.0.113.9, 10.0.0.1"), None);
         assert_eq!(ip.as_deref(), Some("203.0.113.9"));
     }
 

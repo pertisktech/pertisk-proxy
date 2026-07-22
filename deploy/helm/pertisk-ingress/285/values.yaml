@@ -14,6 +14,8 @@
 http3Addr: "0.0.0.0:8443"
 
 service:
+  # Keep Cluster on Cilium/Talos LBs — Local often 502s when traffic hits a node without a pod.
+  # GeoIP still works: private SNAT peers fail-open; prefer X-Forwarded-For when present.
   externalTrafficPolicy: Cluster
   sessionAffinity: ClientIP
   sessionAffinityConfig:

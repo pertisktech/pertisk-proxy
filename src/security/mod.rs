@@ -209,6 +209,9 @@ pub fn policy_from_annotations(
             })
             .unwrap_or(false)
     };
+    if flag("proxy.pertisk.tech/security-exempt") {
+        return SecurityPolicy::default();
+    }
     let parse_u32 = |key: &str, default: u32| {
         map.get(key)
             .and_then(|v| v.trim().parse().ok())
