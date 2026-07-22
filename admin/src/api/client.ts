@@ -260,6 +260,8 @@ export type IngressFormRow = {
   ingress_class_name?: string;
   gateway_namespace?: string;
   gateway_name?: string;
+  geoip?: Site['geoip'];
+  security?: Site['security'];
 };
 
 export type IngressSubmitBody = IngressFormRow & {

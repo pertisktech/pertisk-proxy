@@ -417,6 +417,15 @@ fn default_asn_path() -> Option<PathBuf> {
     None
 }
 
+/// Annotation keys written for GeoIP policy on Ingress / HTTPRoute.
+pub const ANNOTATION_KEYS: &[&str] = &[
+    "proxy.pertisk.tech/geoip-enabled",
+    "proxy.pertisk.tech/geoip-allow-countries",
+    "proxy.pertisk.tech/geoip-deny-countries",
+    "proxy.pertisk.tech/geoip-allow-asns",
+    "proxy.pertisk.tech/geoip-deny-asns",
+];
+
 /// Build a policy from Kubernetes Ingress / HTTPRoute annotations.
 ///
 /// Supported keys:
@@ -466,6 +475,60 @@ pub fn policy_from_annotations(
         deny_asns,
     }
     .normalized()
+}
+
+/// Replace GeoIP annotation keys on a metadata map from a policy.
+pub fn apply_annotations(
+    annotations: &mut std::collections::BTreeMap<String, String>,
+    policy: &GeoIpPolicy,
+) {
+    for key in ANNOTATION_KEYS {
+        annotations.remove(*key);
+    }
+    let policy = policy.clone().normalized();
+    if policy.is_default() {
+        return;
+    }
+    if policy.enabled {
+        annotations.insert(
+            "proxy.pertisk.tech/geoip-enabled".to_string(),
+            "true".to_string(),
+        );
+    }
+    if !policy.allow_countries.is_empty() {
+        annotations.insert(
+            "proxy.pertisk.tech/geoip-allow-countries".to_string(),
+            policy.allow_countries.join(","),
+        );
+    }
+    if !policy.deny_countries.is_empty() {
+        annotations.insert(
+            "proxy.pertisk.tech/geoip-deny-countries".to_string(),
+            policy.deny_countries.join(","),
+        );
+    }
+    if !policy.allow_asns.is_empty() {
+        annotations.insert(
+            "proxy.pertisk.tech/geoip-allow-asns".to_string(),
+            policy
+                .allow_asns
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+    if !policy.deny_asns.is_empty() {
+        annotations.insert(
+            "proxy.pertisk.tech/geoip-deny-asns".to_string(),
+            policy
+                .deny_asns
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
 }
 
 /// Parse comma/space-separated country codes from an annotation or form field.

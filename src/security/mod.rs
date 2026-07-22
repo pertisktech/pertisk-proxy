@@ -182,6 +182,18 @@ pub fn evaluate(policy: &SecurityPolicy, req: &RequestView<'_>) -> SecurityDecis
     }
 }
 
+/// Annotation keys written for WAF / bot / captcha on Ingress / HTTPRoute.
+pub const ANNOTATION_KEYS: &[&str] = &[
+    "proxy.pertisk.tech/waf-enabled",
+    "proxy.pertisk.tech/waf-builtin",
+    "proxy.pertisk.tech/bot-enabled",
+    "proxy.pertisk.tech/bot-challenge-score",
+    "proxy.pertisk.tech/bot-block-score",
+    "proxy.pertisk.tech/bot-rate-limit",
+    "proxy.pertisk.tech/captcha-enabled",
+    "proxy.pertisk.tech/captcha-ttl-secs",
+];
+
 /// Parse security policy from Ingress / HTTPRoute annotations.
 pub fn policy_from_annotations(
     annotations: Option<&std::collections::BTreeMap<String, String>>,
@@ -225,6 +237,62 @@ pub fn policy_from_annotations(
         },
     }
     .normalized()
+}
+
+/// Replace WAF / bot / captcha annotation keys on a metadata map from a policy.
+pub fn apply_annotations(
+    annotations: &mut std::collections::BTreeMap<String, String>,
+    policy: &SecurityPolicy,
+) {
+    for key in ANNOTATION_KEYS {
+        annotations.remove(*key);
+    }
+    let policy = policy.clone().normalized();
+    if policy.is_default() {
+        return;
+    }
+    if policy.waf.enabled {
+        annotations.insert(
+            "proxy.pertisk.tech/waf-enabled".to_string(),
+            "true".to_string(),
+        );
+        annotations.insert(
+            "proxy.pertisk.tech/waf-builtin".to_string(),
+            if policy.waf.use_builtin_rules {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            },
+        );
+    }
+    if policy.bot.enabled {
+        annotations.insert(
+            "proxy.pertisk.tech/bot-enabled".to_string(),
+            "true".to_string(),
+        );
+        annotations.insert(
+            "proxy.pertisk.tech/bot-challenge-score".to_string(),
+            policy.bot.challenge_score.to_string(),
+        );
+        annotations.insert(
+            "proxy.pertisk.tech/bot-block-score".to_string(),
+            policy.bot.block_score.to_string(),
+        );
+        annotations.insert(
+            "proxy.pertisk.tech/bot-rate-limit".to_string(),
+            policy.bot.rate_limit_per_min.to_string(),
+        );
+    }
+    if policy.captcha.enabled {
+        annotations.insert(
+            "proxy.pertisk.tech/captcha-enabled".to_string(),
+            "true".to_string(),
+        );
+        annotations.insert(
+            "proxy.pertisk.tech/captcha-ttl-secs".to_string(),
+            policy.captcha.cookie_ttl_secs.to_string(),
+        );
+    }
 }
 
 #[cfg(test)]

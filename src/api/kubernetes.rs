@@ -842,6 +842,10 @@ pub struct IngressFormRow {
     /// Parent Gateway name when this row is an HTTPRoute (Gateway API site).
     pub gateway_name: Option<String>,
     pub gateway_namespace: Option<String>,
+    #[serde(skip_serializing_if = "crate::geoip::GeoIpPolicy::is_default")]
+    pub geoip: crate::geoip::GeoIpPolicy,
+    #[serde(skip_serializing_if = "crate::security::SecurityPolicy::is_default")]
+    pub security: crate::security::SecurityPolicy,
 }
 
 #[derive(Debug, Deserialize)]
@@ -872,6 +876,10 @@ pub struct CreateIngressBody {
     /// Existing Gateway to attach the HTTPRoute to (Gateway API sites).
     pub gateway_name: Option<String>,
     pub gateway_namespace: Option<String>,
+    #[serde(default)]
+    pub geoip: crate::geoip::GeoIpPolicy,
+    #[serde(default)]
+    pub security: crate::security::SecurityPolicy,
 }
 
 #[derive(Serialize)]
@@ -1153,6 +1161,21 @@ fn backend_port(number: Option<i32>, name: Option<&str>) -> Option<ServiceBacken
     }
 }
 
+fn merge_security_annotations(
+    existing: Option<std::collections::BTreeMap<String, String>>,
+    geoip: &crate::geoip::GeoIpPolicy,
+    security: &crate::security::SecurityPolicy,
+) -> Option<std::collections::BTreeMap<String, String>> {
+    let mut annotations = existing.unwrap_or_default();
+    crate::geoip::apply_annotations(&mut annotations, geoip);
+    crate::security::apply_annotations(&mut annotations, security);
+    if annotations.is_empty() {
+        None
+    } else {
+        Some(annotations)
+    }
+}
+
 fn ingress_paths_from_body(body: &CreateIngressBody) -> Result<Vec<HTTPIngressPath>, String> {
     if let Some(routes) = body.routes.as_ref().filter(|routes| !routes.is_empty()) {
         let mut paths = Vec::with_capacity(routes.len());
@@ -1310,6 +1333,7 @@ pub async fn kubernetes_ingresses_create(
         metadata: kube::core::ObjectMeta {
             name: Some(ingress_name.clone()),
             namespace: Some(ingress_ns.to_string()),
+            annotations: merge_security_annotations(None, &body.geoip, &body.security),
             ..Default::default()
         },
         spec: Some(spec),
@@ -1439,6 +1463,7 @@ pub async fn kubernetes_ingress_get(
         .unwrap_or_default();
     let first_service_port = first_route.and_then(|route| route.service_port);
     let first_service_port_name = first_route.and_then(|route| route.service_port_name.clone());
+    let annotations = ingress.metadata.annotations.as_ref();
     let row = IngressFormRow {
         namespace: namespace.clone(),
         name: name.clone(),
@@ -1453,6 +1478,8 @@ pub async fn kubernetes_ingress_get(
         ingress_class_name: spec.ingress_class_name.clone(),
         gateway_name: None,
         gateway_namespace: None,
+        geoip: crate::geoip::policy_from_annotations(annotations),
+        security: crate::security::policy_from_annotations(annotations),
     };
     Json(row).into_response()
 }
@@ -1549,6 +1576,11 @@ pub async fn kubernetes_ingress_update(
         }
     };
     current.spec = Some(spec);
+    current.metadata.annotations = merge_security_annotations(
+        current.metadata.annotations.clone(),
+        &body.geoip,
+        &body.security,
+    );
     match api.replace(&name, &PostParams::default(), &current).await {
         Ok(_) => (
             StatusCode::OK,
@@ -2229,6 +2261,7 @@ pub async fn kubernetes_gateway_sites_create(
         metadata: kube::core::ObjectMeta {
             name: Some(resource_name.clone()),
             namespace: Some(ns.clone()),
+            annotations: merge_security_annotations(None, &body.geoip, &body.security),
             ..Default::default()
         },
         spec: build_httproute_spec(
@@ -2328,6 +2361,7 @@ pub async fn kubernetes_gateway_site_get(
             .and_then(|gw| gw.spec.gateway_class_name)
     };
     let first_route = routes.first();
+    let annotations = route.metadata.annotations.as_ref();
     let row = IngressFormRow {
         namespace: namespace.clone(),
         name: name.clone(),
@@ -2352,6 +2386,8 @@ pub async fn kubernetes_gateway_site_get(
             Some(gateway_name)
         },
         gateway_namespace: Some(gateway_namespace),
+        geoip: crate::geoip::policy_from_annotations(annotations),
+        security: crate::security::policy_from_annotations(annotations),
     };
     Json(row).into_response()
 }
@@ -2464,6 +2500,11 @@ pub async fn kubernetes_gateway_site_update(
         return resp;
     }
     httproute.spec = build_httproute_spec(host, &gateway_name, &gateway_ns, rules);
+    httproute.metadata.annotations = merge_security_annotations(
+        httproute.metadata.annotations.clone(),
+        &body.geoip,
+        &body.security,
+    );
     match route_api.replace(&name, &PostParams::default(), &httproute).await {
         Ok(_) => (
             StatusCode::OK,

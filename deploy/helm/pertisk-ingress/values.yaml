@@ -198,6 +198,26 @@ metrics:
 # -- Extra env vars for the controller container
 extraEnv: []
 
+# -- GeoIP databases (country MMDB + optional ASN MMDB/TSV). Mount into pods for country/ASN allow-deny.
+# Without these, GeoIP policy fail-opens (allows traffic) when enabled on an Ingress.
+# On Talos / immutable nodes prefer download.enabled (init container → emptyDir), not hostPath.
+geoip:
+  enabled: false
+  # -- Mount path inside the container (default lookup paths)
+  mountPath: /var/lib/pertisk-proxy/geoip
+  # -- Optional overrides (leave empty to use auto-detect under mountPath)
+  countryDb: "" # e.g. /var/lib/pertisk-proxy/geoip/GeoLite2-Country.mmdb
+  asnDb: "" # e.g. /var/lib/pertisk-proxy/geoip/ip2asn-combined.tsv
+  # -- Volume source when enabled (pick one): existingClaim | hostPath | download
+  existingClaim: "" # PVC name in the release namespace (e.g. nfs-client)
+  hostPath: "" # Linux nodes with writable disk — not suitable for Talos
+  download:
+    # -- Init container fetches DBs into emptyDir (recommended for Talos)
+    enabled: false
+    image: busybox:1.37.0
+    countryUrl: https://cdn.jsdelivr.net/npm/geolite2-country/GeoLite2-Country.mmdb.gz
+    asnUrl: https://iptoasn.com/data/ip2asn-combined.tsv.gz
+
 # -- Admin auth for ingress management UI (env-based, no DB)
 auth:
   # -- Auth mode for admin login: local | sso | both

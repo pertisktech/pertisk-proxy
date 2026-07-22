@@ -13,6 +13,7 @@ import {
   type Site,
 } from '@/api/client';
 import { Modal } from '@/components/Modal';
+import { Checkbox } from '@/components/Checkbox';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Pagination } from '@/components/Pagination';
 import { ListToolbar, type ViewMode } from '@/components/ListToolbar';
@@ -43,11 +44,83 @@ function portLabel(port: K8sServicePortDetail): string {
   return `${port.port} (${port.protocol})`;
 }
 
-function submitBody(form: IngressFormRow): IngressSubmitBody {
+function emptySecurityForm(): Pick<IngressFormRow, 'geoip' | 'security'> {
+  return {
+    geoip: {
+      enabled: false,
+      allow_countries: [],
+      deny_countries: [],
+      allow_asns: [],
+      deny_asns: [],
+    },
+    security: {
+      waf: { enabled: false, use_builtin_rules: true },
+      bot: { enabled: false, challenge_score: 40, block_score: 80 },
+      captcha: { enabled: false },
+    },
+  };
+}
+
+function parseCsv(raw: string): string[] {
+  return raw
+    .split(/[,;\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function parseAsns(raw: string): number[] {
+  const out = new Set<number>();
+  for (const part of parseCsv(raw)) {
+    const n = Number(part.replace(/^AS/i, ''));
+    if (Number.isFinite(n) && n > 0) out.add(n);
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+function submitBody(
+  form: IngressFormRow,
+  geoipEnabled: boolean,
+  allowCountries: string,
+  denyCountries: string,
+  allowAsns: string,
+  denyAsns: string,
+  wafEnabled: boolean,
+  wafBuiltin: boolean,
+  botEnabled: boolean,
+  botChallenge: string,
+  botBlock: string,
+  captchaEnabled: boolean,
+): IngressSubmitBody {
+  const geoipActive =
+    geoipEnabled ||
+    !!allowCountries.trim() ||
+    !!denyCountries.trim() ||
+    !!allowAsns.trim() ||
+    !!denyAsns.trim();
+  const securityActive = wafEnabled || botEnabled || captchaEnabled;
   return {
     ...form,
     ingress_namespace: form.namespace,
-    name: form.name,
+    geoip: geoipActive
+      ? {
+          enabled: geoipEnabled || geoipActive,
+          allow_countries: parseCsv(allowCountries).map((c) => c.toUpperCase()),
+          deny_countries: parseCsv(denyCountries).map((c) => c.toUpperCase()),
+          allow_asns: parseAsns(allowAsns),
+          deny_asns: parseAsns(denyAsns),
+        }
+      : { enabled: false },
+    security: securityActive
+      ? {
+          waf: { enabled: wafEnabled, use_builtin_rules: wafBuiltin },
+          bot: {
+            enabled: botEnabled,
+            challenge_score: Number(botChallenge) || 40,
+            block_score: Number(botBlock) || 80,
+          },
+          captcha: { enabled: captchaEnabled },
+        }
+      : {},
   };
 }
 
@@ -55,12 +128,14 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
   const navigate = useNavigate();
   const mode = useMode();
   const management = useManagementInfo();
+  const geoipStatus = management?.geoip;
   const pageSize = usePageSize();
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [page, setPage] = useState(1);
   const [modal, setModal] = useState(false);
+  const [formTab, setFormTab] = useState<'general' | 'advanced'>('general');
   const [deleteRef, setDeleteRef] = useState<{ namespace: string; name: string } | null>(null);
   const [namespaces, setNamespaces] = useState<K8sNamespaceRow[]>([]);
   const [tlsSecrets, setTlsSecrets] = useState<K8sTlsSecretRow[]>([]);
@@ -76,7 +151,19 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
     service_port: 80,
     path: '/',
     path_type: 'Prefix',
+    ...emptySecurityForm(),
   });
+  const [formGeoipEnabled, setFormGeoipEnabled] = useState(false);
+  const [formGeoipAllowCountries, setFormGeoipAllowCountries] = useState('');
+  const [formGeoipDenyCountries, setFormGeoipDenyCountries] = useState('');
+  const [formGeoipAllowAsns, setFormGeoipAllowAsns] = useState('');
+  const [formGeoipDenyAsns, setFormGeoipDenyAsns] = useState('');
+  const [formWafEnabled, setFormWafEnabled] = useState(false);
+  const [formWafBuiltin, setFormWafBuiltin] = useState(true);
+  const [formBotEnabled, setFormBotEnabled] = useState(false);
+  const [formBotChallenge, setFormBotChallenge] = useState('40');
+  const [formBotBlock, setFormBotBlock] = useState('80');
+  const [formCaptchaEnabled, setFormCaptchaEnabled] = useState(false);
 
   useEffect(() => {
     if (mode === 'proxy') navigate('/sites', { replace: true });
@@ -140,8 +227,23 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
 
   const servicePorts = portsForService(k8sServices, form.service_name);
 
+  function resetSecurityFields(row?: Pick<IngressFormRow, 'geoip' | 'security'>) {
+    setFormGeoipEnabled(!!row?.geoip?.enabled);
+    setFormGeoipAllowCountries((row?.geoip?.allow_countries ?? []).join(', '));
+    setFormGeoipDenyCountries((row?.geoip?.deny_countries ?? []).join(', '));
+    setFormGeoipAllowAsns((row?.geoip?.allow_asns ?? []).join(', '));
+    setFormGeoipDenyAsns((row?.geoip?.deny_asns ?? []).join(', '));
+    setFormWafEnabled(!!row?.security?.waf?.enabled);
+    setFormWafBuiltin(row?.security?.waf?.use_builtin_rules !== false);
+    setFormBotEnabled(!!row?.security?.bot?.enabled);
+    setFormBotChallenge(String(row?.security?.bot?.challenge_score ?? 40));
+    setFormBotBlock(String(row?.security?.bot?.block_score ?? 80));
+    setFormCaptchaEnabled(!!row?.security?.captcha?.enabled);
+  }
+
   function openCreate() {
     setEditRef(null);
+    setFormTab('general');
     const defaultNamespace = getDefaultIngressNamespace() || namespaces[0]?.name || 'default';
     setForm({
       host: '',
@@ -153,7 +255,9 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
       path: '/',
       path_type: 'Prefix',
       ingress_class_name: management?.ingress_class || undefined,
+      ...emptySecurityForm(),
     });
+    resetSecurityFields();
     setModal(true);
   }
 
@@ -161,6 +265,7 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
     const ns = site.ingress_namespace || 'default';
     const name = site.ingress_name || '';
     setEditRef({ namespace: ns, name });
+    setFormTab('general');
     setModal(true);
     try {
       const row =
@@ -182,7 +287,10 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
         ingress_class_name: row.ingress_class_name || management?.ingress_class || undefined,
         gateway_namespace: row.gateway_namespace ?? undefined,
         gateway_name: row.gateway_name ?? undefined,
+        geoip: row.geoip,
+        security: row.security,
       });
+      resetSecurityFields(row);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load site');
       setModal(false);
@@ -201,7 +309,20 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
       return;
     }
     setSaving(true);
-    const body = submitBody(form);
+    const body = submitBody(
+      form,
+      formGeoipEnabled,
+      formGeoipAllowCountries,
+      formGeoipDenyCountries,
+      formGeoipAllowAsns,
+      formGeoipDenyAsns,
+      formWafEnabled,
+      formWafBuiltin,
+      formBotEnabled,
+      formBotChallenge,
+      formBotBlock,
+      formCaptchaEnabled,
+    );
     try {
       if (k8sPageKind === 'gateway') {
         if (editRef) {
@@ -241,13 +362,59 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
   }
 
   const title = k8sPageKind === 'gateway' ? 'Gateway HTTPRoute Sites' : 'Ingress Sites';
+  const labelCls = 'block text-sm text-text-secondary';
+  const inputCls =
+    'mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-text placeholder:text-muted/40 placeholder:italic';
+  const sectionCls = 'space-y-3 rounded-md border border-border p-4';
+  const sectionTitleCls = 'text-sm font-semibold text-text';
+
+  function ConfigTextField({
+    label,
+    example,
+    value,
+    onChange,
+    disabled,
+  }: {
+    label: string;
+    example: string;
+    value: string;
+    onChange: (value: string) => void;
+    disabled?: boolean;
+  }) {
+    const hasValue = value.trim().length > 0;
+    return (
+      <label className={labelCls}>
+        <span className="flex items-center justify-between gap-2">
+          <span>{label}</span>
+          <span
+            className={cn(
+              'rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+              hasValue ? 'bg-green-g1/15 text-green-g1' : 'bg-surface-elevated text-muted',
+            )}
+          >
+            {hasValue ? 'set' : 'empty'}
+          </span>
+        </span>
+        <span className="mt-0.5 block text-[11px] font-normal italic text-muted">
+          Example · {example}
+        </span>
+        <input
+          className={cn(inputCls, hasValue && 'border-primary/50')}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+        />
+      </label>
+    );
+  }
 
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-xl font-semibold">{title}</h2>
         <p className="text-sm text-text-secondary">
-          Manage Kubernetes {k8sPageKind === 'gateway' ? 'HTTPRoute' : 'Ingress'} resources
+          Manage Kubernetes {k8sPageKind === 'gateway' ? 'HTTPRoute' : 'Ingress'} resources. GeoIP /
+          WAF settings are stored as annotations.
         </p>
       </div>
 
@@ -334,127 +501,298 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
       )}
 
       <Modal open={modal} onClose={() => setModal(false)} title={editRef ? 'Edit site' : 'Add site'} wide protect={saving}>
-        <form onSubmit={onSubmit} className="space-y-3">
-          <label className="block text-sm">
-            Host
-            <input className="mt-1 w-full rounded border border-border bg-bg px-3 py-2" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} required />
-          </label>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="block text-sm">
-              Ingress namespace
-              <select className="mt-1 w-full rounded border border-border bg-bg px-3 py-2" value={form.namespace} onChange={(e) => setForm({ ...form, namespace: e.target.value })}>
-                {namespaces.map((n) => (
-                  <option key={n.name} value={n.name}>{n.name}</option>
-                ))}
-              </select>
-            </label>
-            <label className="block text-sm">
-              Resource name
-              <input className="mt-1 w-full rounded border border-border bg-bg px-3 py-2" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
-            </label>
-          </div>
-          <label className="block text-sm">
-            Service namespace
-            <select
-              className="mt-1 w-full rounded border border-border bg-bg px-3 py-2"
-              value={form.service_namespace}
-              onChange={(e) => {
-                const ns = e.target.value;
-                setForm((current) => ({
-                  ...current,
-                  service_namespace: ns,
-                  service_name: '',
-                  service_port: 80,
-                  tls_secret_namespace: current.tls_secret_namespace === ns ? current.tls_secret_namespace : undefined,
-                  tls_secret_name: current.tls_secret_namespace === ns ? current.tls_secret_name : undefined,
-                }));
-              }}
-              required
+        <form onSubmit={onSubmit} className="space-y-5">
+          <div className="tab-bar w-full sm:w-auto" role="tablist" aria-label="Site settings">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={formTab === 'general'}
+              onClick={() => setFormTab('general')}
+              className={cn('tab-item', formTab === 'general' && 'active')}
             >
-              <option value="">{SELECT_PLACEHOLDER}</option>
-              {namespaces.map((n) => (
-                <option key={n.name} value={n.name}>{n.name}</option>
-              ))}
-            </select>
-          </label>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="block text-sm">
-              Service
-              <select
-                className="mt-1 w-full rounded border border-border bg-bg px-3 py-2"
-                value={form.service_name}
-                onChange={(e) => setForm({ ...form, service_name: e.target.value, service_port: 80 })}
-                required
-                disabled={!form.service_namespace}
-              >
-                <option value="">{SELECT_PLACEHOLDER}</option>
-                {k8sServices.map((service) => (
-                  <option key={`${service.namespace}/${service.name}`} value={service.name}>
-                    {service.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block text-sm">
-              Service port
-              <select
-                className="mt-1 w-full rounded border border-border bg-bg px-3 py-2"
-                value={form.service_port ? String(form.service_port) : ''}
-                onChange={(e) => setForm({ ...form, service_port: Number(e.target.value) })}
-                required
-                disabled={servicePorts.length === 0}
-              >
-                <option value="">{SELECT_PLACEHOLDER}</option>
-                {servicePorts.map((port) => (
-                  <option key={`${port.port}-${port.name ?? ''}`} value={String(port.port)}>
-                    {portLabel(port)}
-                  </option>
-                ))}
-              </select>
-            </label>
+              General
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={formTab === 'advanced'}
+              onClick={() => setFormTab('advanced')}
+              className={cn('tab-item', formTab === 'advanced' && 'active')}
+            >
+              Advanced
+            </button>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="block text-sm">
-              Path
-              <input className="mt-1 w-full rounded border border-border bg-bg px-3 py-2" value={form.path} onChange={(e) => setForm({ ...form, path: e.target.value })} />
-            </label>
-            <label className="block text-sm">
-              Path type
-              <select className="mt-1 w-full rounded border border-border bg-bg px-3 py-2" value={form.path_type} onChange={(e) => setForm({ ...form, path_type: e.target.value })}>
-                {PATH_TYPES.map((p) => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
-              </select>
-            </label>
+
+          <div className="grid">
+            <div
+              className={cn(
+                'col-start-1 row-start-1 space-y-3',
+                formTab !== 'general' && 'invisible pointer-events-none',
+              )}
+              aria-hidden={formTab !== 'general'}
+            >
+              <label className="block text-sm">
+                Host
+                <input className="mt-1 w-full rounded border border-border bg-bg px-3 py-2" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} required />
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-sm">
+                  Ingress namespace
+                  <select className="mt-1 w-full rounded border border-border bg-bg px-3 py-2" value={form.namespace} onChange={(e) => setForm({ ...form, namespace: e.target.value })}>
+                    {namespaces.map((n) => (
+                      <option key={n.name} value={n.name}>{n.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-sm">
+                  Resource name
+                  <input className="mt-1 w-full rounded border border-border bg-bg px-3 py-2" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+                </label>
+              </div>
+              <label className="block text-sm">
+                Service namespace
+                <select
+                  className="mt-1 w-full rounded border border-border bg-bg px-3 py-2"
+                  value={form.service_namespace}
+                  onChange={(e) => {
+                    const ns = e.target.value;
+                    setForm((current) => ({
+                      ...current,
+                      service_namespace: ns,
+                      service_name: '',
+                      service_port: 80,
+                      tls_secret_namespace: current.tls_secret_namespace === ns ? current.tls_secret_namespace : undefined,
+                      tls_secret_name: current.tls_secret_namespace === ns ? current.tls_secret_name : undefined,
+                    }));
+                  }}
+                  required
+                >
+                  <option value="">{SELECT_PLACEHOLDER}</option>
+                  {namespaces.map((n) => (
+                    <option key={n.name} value={n.name}>{n.name}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-sm">
+                  Service
+                  <select
+                    className="mt-1 w-full rounded border border-border bg-bg px-3 py-2"
+                    value={form.service_name}
+                    onChange={(e) => setForm({ ...form, service_name: e.target.value, service_port: 80 })}
+                    required
+                    disabled={!form.service_namespace}
+                  >
+                    <option value="">{SELECT_PLACEHOLDER}</option>
+                    {k8sServices.map((service) => (
+                      <option key={`${service.namespace}/${service.name}`} value={service.name}>
+                        {service.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-sm">
+                  Service port
+                  <select
+                    className="mt-1 w-full rounded border border-border bg-bg px-3 py-2"
+                    value={form.service_port ? String(form.service_port) : ''}
+                    onChange={(e) => setForm({ ...form, service_port: Number(e.target.value) })}
+                    required
+                    disabled={servicePorts.length === 0}
+                  >
+                    <option value="">{SELECT_PLACEHOLDER}</option>
+                    {servicePorts.map((port) => (
+                      <option key={`${port.port}-${port.name ?? ''}`} value={String(port.port)}>
+                        {portLabel(port)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-sm">
+                  Path
+                  <input className="mt-1 w-full rounded border border-border bg-bg px-3 py-2" value={form.path} onChange={(e) => setForm({ ...form, path: e.target.value })} />
+                </label>
+                <label className="block text-sm">
+                  Path type
+                  <select className="mt-1 w-full rounded border border-border bg-bg px-3 py-2" value={form.path_type} onChange={(e) => setForm({ ...form, path_type: e.target.value })}>
+                    {PATH_TYPES.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              {k8sPageKind === 'ingress' && (
+                <label className="block text-sm">
+                  TLS secret (optional)
+                  <select
+                    className="mt-1 w-full rounded border border-border bg-bg px-3 py-2"
+                    value={form.tls_secret_name ? `${form.tls_secret_namespace}/${form.tls_secret_name}` : ''}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (!v) {
+                        setForm({ ...form, tls_secret_namespace: undefined, tls_secret_name: undefined });
+                        return;
+                      }
+                      const [ns, name] = v.split('/');
+                      setForm({ ...form, tls_secret_namespace: ns, tls_secret_name: name });
+                    }}
+                  >
+                    <option value="">None</option>
+                    {filteredTlsSecrets.map((s) => (
+                      <option key={`${s.namespace}/${s.name}`} value={`${s.namespace}/${s.name}`}>
+                        {s.namespace}/{s.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-text-secondary">
+                    TLS secret must be in the service namespace.
+                  </p>
+                </label>
+              )}
+            </div>
+
+            <div
+              className={cn(
+                'col-start-1 row-start-1 space-y-5',
+                formTab !== 'advanced' && 'invisible pointer-events-none',
+              )}
+              aria-hidden={formTab !== 'advanced'}
+            >
+              <div className={sectionCls}>
+                <h3 className={sectionTitleCls}>GeoIP</h3>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <span
+                    className={cn(
+                      'rounded-full px-2.5 py-1 font-medium',
+                      geoipStatus?.country_db_loaded
+                        ? 'bg-green-g1/15 text-green-g1'
+                        : 'bg-yellow-y1/15 text-yellow-y1',
+                    )}
+                  >
+                    Country DB {geoipStatus?.country_db_loaded ? 'ready' : 'missing'}
+                  </span>
+                  <span
+                    className={cn(
+                      'rounded-full px-2.5 py-1 font-medium',
+                      geoipStatus?.asn_db_loaded
+                        ? 'bg-green-g1/15 text-green-g1'
+                        : 'bg-yellow-y1/15 text-yellow-y1',
+                    )}
+                  >
+                    ASN DB {geoipStatus?.asn_db_loaded ? 'ready' : 'missing'}
+                  </span>
+                </div>
+                {geoipStatus?.country_db_path || geoipStatus?.asn_db_path ? (
+                  <ul className="space-y-1 font-mono text-[11px] text-muted">
+                    {geoipStatus.country_db_path ? (
+                      <li>country: {geoipStatus.country_db_path}</li>
+                    ) : null}
+                    {geoipStatus.asn_db_path ? <li>asn: {geoipStatus.asn_db_path}</li> : null}
+                  </ul>
+                ) : null}
+                <Checkbox
+                  checked={formGeoipEnabled}
+                  onChange={setFormGeoipEnabled}
+                  className="text-sm"
+                  label="Enable GeoIP allow / deny"
+                />
+                {formGeoipEnabled && !geoipStatus?.country_db_loaded ? (
+                  <p className="rounded-md border border-yellow-y1/30 bg-yellow-y1/10 px-3 py-2 text-xs text-yellow-y1">
+                    Country DB is not loaded — mount GeoLite2-Country.mmdb into the ingress pods (see README).
+                  </p>
+                ) : null}
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <ConfigTextField
+                    label="Allow countries"
+                    example="TH, US"
+                    value={formGeoipAllowCountries}
+                    onChange={setFormGeoipAllowCountries}
+                    disabled={!formGeoipEnabled}
+                  />
+                  <ConfigTextField
+                    label="Deny countries"
+                    example="CN, RU"
+                    value={formGeoipDenyCountries}
+                    onChange={setFormGeoipDenyCountries}
+                    disabled={!formGeoipEnabled}
+                  />
+                  <ConfigTextField
+                    label="Allow ASNs"
+                    example="13335, AS15169"
+                    value={formGeoipAllowAsns}
+                    onChange={setFormGeoipAllowAsns}
+                    disabled={!formGeoipEnabled}
+                  />
+                  <ConfigTextField
+                    label="Deny ASNs"
+                    example="12345"
+                    value={formGeoipDenyAsns}
+                    onChange={setFormGeoipDenyAsns}
+                    disabled={!formGeoipEnabled}
+                  />
+                </div>
+              </div>
+
+              <div className={sectionCls}>
+                <h3 className={sectionTitleCls}>WAF / bot / captcha</h3>
+                <div className="flex flex-col gap-1">
+                  <Checkbox
+                    checked={formWafEnabled}
+                    onChange={setFormWafEnabled}
+                    className="text-sm"
+                    label="Enable WAF (built-in SQLi / XSS / path traversal)"
+                  />
+                  <Checkbox
+                    checked={formWafBuiltin}
+                    onChange={setFormWafBuiltin}
+                    className="text-sm"
+                    label="Use built-in WAF rules"
+                    disabled={!formWafEnabled}
+                  />
+                  <Checkbox
+                    checked={formBotEnabled}
+                    onChange={setFormBotEnabled}
+                    className="text-sm"
+                    label="Enable bot scoring"
+                  />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className={labelCls}>
+                    Challenge score
+                    <input
+                      className={inputCls}
+                      value={formBotChallenge}
+                      onChange={(e) => setFormBotChallenge(e.target.value)}
+                      disabled={!formBotEnabled}
+                    />
+                  </label>
+                  <label className={labelCls}>
+                    Block score
+                    <input
+                      className={inputCls}
+                      value={formBotBlock}
+                      onChange={(e) => setFormBotBlock(e.target.value)}
+                      disabled={!formBotEnabled}
+                    />
+                  </label>
+                </div>
+                <Checkbox
+                  checked={formCaptchaEnabled}
+                  onChange={setFormCaptchaEnabled}
+                  className="text-sm"
+                  label="Enable math captcha for challenges"
+                />
+                <p className="text-xs text-text-secondary">
+                  Written as Ingress/HTTPRoute annotations (
+                  <code className="font-mono">proxy.pertisk.tech/*</code>). Challenge page:{' '}
+                  <code className="font-mono">/.pertisk/captcha</code>.
+                </p>
+              </div>
+            </div>
           </div>
-          {k8sPageKind === 'ingress' && (
-            <label className="block text-sm">
-              TLS secret (optional)
-              <select
-                className="mt-1 w-full rounded border border-border bg-bg px-3 py-2"
-                value={form.tls_secret_name ? `${form.tls_secret_namespace}/${form.tls_secret_name}` : ''}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (!v) {
-                    setForm({ ...form, tls_secret_namespace: undefined, tls_secret_name: undefined });
-                    return;
-                  }
-                  const [ns, name] = v.split('/');
-                  setForm({ ...form, tls_secret_namespace: ns, tls_secret_name: name });
-                }}
-              >
-                <option value="">None</option>
-                {filteredTlsSecrets.map((s) => (
-                  <option key={`${s.namespace}/${s.name}`} value={`${s.namespace}/${s.name}`}>
-                    {s.namespace}/{s.name}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1 text-xs text-text-secondary">
-                TLS secret must be in the service namespace.
-              </p>
-            </label>
-          )}
+
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" className="rounded border border-border px-3 py-2 text-sm" onClick={() => setModal(false)}>Cancel</button>
             <button type="submit" disabled={saving} className="rounded bg-primary px-3 py-2 text-sm text-white disabled:opacity-50">

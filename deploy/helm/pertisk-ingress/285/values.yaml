@@ -57,3 +57,9 @@ resources:
   requests:
     cpu: "1"
     memory: 512Mi
+
+# GeoIP on Talos: init container downloads DBs (no hostPath).
+geoip:
+  enabled: true
+  download:
+    enabled: true
