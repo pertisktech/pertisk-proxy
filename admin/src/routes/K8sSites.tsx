@@ -22,6 +22,7 @@ import { getDefaultIngressNamespace } from '@/utils/ingressDefaults';
 import { useManagementInfo } from '@/context/ManagementContext';
 import { useMode } from '@/context/ModeContext';
 import { cn } from '@/utils';
+import { ConfigTextField } from '@/components/ConfigTextField';
 
 type K8sPageKind = 'ingress' | 'gateway';
 
@@ -300,12 +301,28 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    const missing = (msg: string) => {
+      setFormTab('general');
+      toast.error(msg);
+    };
+    if (!form.host.trim()) {
+      missing('Host is required');
+      return;
+    }
+    if (!form.name.trim()) {
+      missing('Resource name is required');
+      return;
+    }
+    if (!form.service_namespace.trim()) {
+      missing('Select a service namespace');
+      return;
+    }
     if (!form.service_name.trim()) {
-      toast.error('Select a service');
+      missing('Select a service');
       return;
     }
     if (!form.service_port) {
-      toast.error('Select a service port');
+      missing('Select a service port');
       return;
     }
     setSaving(true);
@@ -367,46 +384,6 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
     'mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-text placeholder:text-muted/40 placeholder:italic';
   const sectionCls = 'space-y-3 rounded-md border border-border p-4';
   const sectionTitleCls = 'text-sm font-semibold text-text';
-
-  function ConfigTextField({
-    label,
-    example,
-    value,
-    onChange,
-    disabled,
-  }: {
-    label: string;
-    example: string;
-    value: string;
-    onChange: (value: string) => void;
-    disabled?: boolean;
-  }) {
-    const hasValue = value.trim().length > 0;
-    return (
-      <label className={labelCls}>
-        <span className="flex items-center justify-between gap-2">
-          <span>{label}</span>
-          <span
-            className={cn(
-              'rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
-              hasValue ? 'bg-green-g1/15 text-green-g1' : 'bg-surface-elevated text-muted',
-            )}
-          >
-            {hasValue ? 'set' : 'empty'}
-          </span>
-        </span>
-        <span className="mt-0.5 block text-[11px] font-normal italic text-muted">
-          Example · {example}
-        </span>
-        <input
-          className={cn(inputCls, hasValue && 'border-primary/50')}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-        />
-      </label>
-    );
-  }
 
   return (
     <div className="space-y-4">
@@ -501,7 +478,7 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
       )}
 
       <Modal open={modal} onClose={() => setModal(false)} title={editRef ? 'Edit site' : 'Add site'} wide protect={saving}>
-        <form onSubmit={onSubmit} className="space-y-5">
+        <form onSubmit={onSubmit} noValidate className="space-y-5">
           <div className="tab-bar w-full sm:w-auto" role="tablist" aria-label="Site settings">
             <button
               type="button"
@@ -533,7 +510,7 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
             >
               <label className="block text-sm">
                 Host
-                <input className="mt-1 w-full rounded border border-border bg-bg px-3 py-2" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} required />
+                <input className="mt-1 w-full rounded border border-border bg-bg px-3 py-2" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} />
               </label>
               <div className="grid grid-cols-2 gap-3">
                 <label className="block text-sm">
@@ -546,7 +523,7 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
                 </label>
                 <label className="block text-sm">
                   Resource name
-                  <input className="mt-1 w-full rounded border border-border bg-bg px-3 py-2" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+                  <input className="mt-1 w-full rounded border border-border bg-bg px-3 py-2" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
                 </label>
               </div>
               <label className="block text-sm">
@@ -565,7 +542,6 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
                       tls_secret_name: current.tls_secret_namespace === ns ? current.tls_secret_name : undefined,
                     }));
                   }}
-                  required
                 >
                   <option value="">{SELECT_PLACEHOLDER}</option>
                   {namespaces.map((n) => (
@@ -580,7 +556,6 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
                     className="mt-1 w-full rounded border border-border bg-bg px-3 py-2"
                     value={form.service_name}
                     onChange={(e) => setForm({ ...form, service_name: e.target.value, service_port: 80 })}
-                    required
                     disabled={!form.service_namespace}
                   >
                     <option value="">{SELECT_PLACEHOLDER}</option>
@@ -597,7 +572,6 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
                     className="mt-1 w-full rounded border border-border bg-bg px-3 py-2"
                     value={form.service_port ? String(form.service_port) : ''}
                     onChange={(e) => setForm({ ...form, service_port: Number(e.target.value) })}
-                    required
                     disabled={servicePorts.length === 0}
                   >
                     <option value="">{SELECT_PLACEHOLDER}</option>

@@ -29,6 +29,7 @@ import {
 } from '@/utils/tlsHostMatch';
 import { useManagementInfo } from '@/context/ManagementContext';
 import { cn } from '@/utils';
+import { ConfigTextField } from '@/components/ConfigTextField';
 
 const PATH_TYPES = ['Exact', 'Prefix', 'ImplementationSpecific'];
 
@@ -525,47 +526,6 @@ export function Sites() {
   const sectionCls = 'space-y-3 rounded-md border border-border p-4';
   const sectionTitleCls = 'text-sm font-semibold text-text';
 
-  function ConfigTextField({
-    label,
-    example,
-    value,
-    onChange,
-    disabled,
-  }: {
-    label: string;
-    example: string;
-    value: string;
-    onChange: (value: string) => void;
-    disabled?: boolean;
-  }) {
-    const hasValue = value.trim().length > 0;
-    return (
-      <label className={labelCls}>
-        <span className="flex items-center justify-between gap-2">
-          <span>{label}</span>
-          <span
-            className={cn(
-              'rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
-              hasValue ? 'bg-green-g1/15 text-green-g1' : 'bg-surface-elevated text-muted',
-            )}
-          >
-            {hasValue ? 'set' : 'empty'}
-          </span>
-        </span>
-        <span className="mt-0.5 block text-[11px] font-normal italic text-muted">
-          Example · {example}
-        </span>
-        <input
-          className={cn(inputCls, hasValue && 'border-primary/50')}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-          autoComplete="off"
-        />
-      </label>
-    );
-  }
-
   if (loading) return <p className="text-text-secondary">Loading sites…</p>;
 
   return (
@@ -692,7 +652,7 @@ export function Sites() {
       <Pagination totalItems={sites.length} pageSize={pageSize} page={page} onPageChange={setPage} />
 
       <Modal open={siteModal} onClose={() => setSiteModal(false)} title={editingIndex !== null ? 'Edit site' : 'Add site'} wide>
-        <form onSubmit={submitSite} className="space-y-5">
+        <form onSubmit={submitSite} noValidate className="space-y-5">
           <div className="tab-bar w-full sm:w-auto" role="tablist" aria-label="Site settings">
             <button
               type="button"
