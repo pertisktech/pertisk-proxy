@@ -221,7 +221,7 @@ export function Layout({ onLogout, loading = false }: { onLogout: () => void; lo
                 {profileOpen ? (
                   <div
                     role="menu"
-                    className="absolute right-0 z-50 mt-1 min-w-[11rem] rounded-md border border-border bg-surface py-1 shadow-lg"
+                    className="absolute right-0 top-full z-[60] mt-1 min-w-[12rem] rounded-md border border-border bg-surface py-1 shadow-lg"
                   >
                     <button
                       type="button"

@@ -153,8 +153,10 @@ code, pre, textarea.mono {
   max-height: var(--app-topbar-height);
   background: var(--color-bg);
   border-bottom: 1px solid var(--color-border);
-  z-index: 10;
-  overflow: hidden;
+  /* Keep above main so the profile dropdown is not covered/clipped */
+  position: relative;
+  z-index: 40;
+  overflow: visible;
 }
 
 .app-content-top-inner {
