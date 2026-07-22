@@ -295,6 +295,8 @@ export type PathRewrite = {
   path: string;
   path_type?: string;
   rewrite?: string;
+  /** Optional per-route upstream URL; overrides site default upstream. */
+  upstream?: string;
 };
 
 export type TlsSource =

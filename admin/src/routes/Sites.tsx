@@ -34,14 +34,24 @@ import { ConfigTextField } from '@/components/ConfigTextField';
 const PATH_TYPES = ['Exact', 'Prefix', 'ImplementationSpecific'];
 
 function normalizeUpstream(url: string): string {
-  const s = url.trim();
+  let s = url.trim();
   if (!s) return s;
-  if (/^https?:\/\//i.test(s)) return s;
-  return 'http://' + s;
+
+  // Peel repeated / typo schemes (http://http://…, htttp://…) then add one clean prefix.
+  let secure = false;
+  for (;;) {
+    const match = /^(h[t]{2,}ps?):\/\//i.exec(s);
+    if (!match) break;
+    if (/ps$/i.test(match[1])) secure = true;
+    s = s.slice(match[0].length);
+  }
+  if (!s) return '';
+  return `${secure ? 'https' : 'http'}://${s}`;
 }
 
 function routeLabel(route: PathRewrite): string {
-  return `${route.path_type || 'Prefix'} ${route.path}${route.rewrite ? ` → ${route.rewrite}` : ''}`;
+  const dest = route.upstream?.trim() || route.rewrite?.trim();
+  return `${route.path_type || 'Prefix'} ${route.path}${dest ? ` → ${dest}` : ''}`;
 }
 
 type SiteSslStatus = { label: string; tone: string };
@@ -189,7 +199,7 @@ export function Sites() {
     setEditingIndex(null);
     setFormHost('');
     setFormUpstream('');
-    setFormRoutes([{ path: '/', path_type: 'Prefix', rewrite: '/' }]);
+    setFormRoutes([{ path: '/', path_type: 'Prefix', rewrite: '/', upstream: '' }]);
     setFormSslMode('none');
     setFormTlsIndex(0);
     setFormAcmeEmail('');
@@ -231,8 +241,9 @@ export function Sites() {
             path: r.path ?? '',
             path_type: r.path_type ?? 'Prefix',
             rewrite: r.rewrite ?? '',
+            upstream: r.upstream ?? '',
           }))
-        : [{ path: '/', path_type: 'Prefix', rewrite: '/' }],
+        : [{ path: '/', path_type: 'Prefix', rewrite: '/', upstream: '' }],
     );
     setFormSslMode(sslMode);
     setFormTlsIndex(tlsIdx >= 0 ? tlsIdx : 0);
@@ -262,7 +273,7 @@ export function Sites() {
   }
 
   function addRoute() {
-    setFormRoutes((r) => [...r, { path: '', path_type: 'Prefix', rewrite: '' }]);
+    setFormRoutes((r) => [...r, { path: '', path_type: 'Prefix', rewrite: '', upstream: '' }]);
   }
 
   function removeRoute(i: number) {
@@ -276,6 +287,7 @@ export function Sites() {
       if (field === 'path') cur.path = value;
       else if (field === 'path_type') cur.path_type = value;
       else if (field === 'rewrite') cur.rewrite = value;
+      else if (field === 'upstream') cur.upstream = value;
       next[i] = cur;
       return next;
     });
@@ -287,6 +299,7 @@ export function Sites() {
         path: r.path.trim(),
         path_type: r.path_type || 'Prefix',
         rewrite: r.rewrite?.trim() || undefined,
+        upstream: r.upstream?.trim() ? normalizeUpstream(r.upstream.trim()) : undefined,
       }))
       .filter((r) => r.path);
   }
@@ -552,7 +565,7 @@ export function Sites() {
             const tls = resolveTlsForHost(site.host, tlsList);
             const ssl = siteSslStatus(tls);
             return (
-              <div key={site.host} className="rounded-lg border border-border bg-surface p-4">
+              <div key={`${site.host}-${globalIndex}`} className="rounded-lg border border-border bg-surface p-4">
                 <div className="flex items-start justify-between gap-2">
                   <h3 className="font-semibold">{site.host}</h3>
                   <span className={cn('text-xs font-medium', ssl.tone)}>{ssl.label}</span>
@@ -610,7 +623,7 @@ export function Sites() {
                 const tls = resolveTlsForHost(site.host, tlsList);
                 const ssl = siteSslStatus(tls);
                 return (
-                  <tr key={site.host} className="border-b border-border last:border-0 hover:bg-hover/50">
+                  <tr key={`${site.host}-${globalIndex}`} className="border-b border-border last:border-0 hover:bg-hover/50">
                     <td className="px-4 py-3 font-medium">{site.host}</td>
                     <td className="px-4 py-3 font-mono text-xs">{upstreamForSite(site)}</td>
                     <td className="px-4 py-3 text-text-secondary">
@@ -652,7 +665,7 @@ export function Sites() {
       <Pagination totalItems={sites.length} pageSize={pageSize} page={page} onPageChange={setPage} />
 
       <Modal open={siteModal} onClose={() => setSiteModal(false)} title={editingIndex !== null ? 'Edit site' : 'Add site'} wide>
-        <form onSubmit={submitSite} noValidate className="space-y-5">
+        <form onSubmit={submitSite} noValidate className="space-y-5" autoComplete="off">
           <div className="tab-bar w-full sm:w-auto" role="tablist" aria-label="Site settings">
             <button
               type="button"
@@ -690,13 +703,15 @@ export function Sites() {
                     <input className={inputCls} value={formHost} onChange={(e) => setFormHost(e.target.value)} placeholder="example.com" required />
                   </label>
                   <label className={labelCls}>
-                    Upstream
+                    Default upstream
                     <input
                       className={inputCls}
                       value={formUpstream}
                       onChange={(e) => setFormUpstream(e.target.value)}
                       placeholder="http://localhost:8080 or 127.0.0.1:3000"
                       required
+                      autoComplete="off"
+                      name="pertisk-upstream"
                     />
                   </label>
                 </div>
@@ -785,6 +800,9 @@ export function Sites() {
                     <Plus size={12} /> Add route
                   </button>
                 </div>
+                <p className="text-xs text-text-secondary">
+                  Default upstream is used unless a route sets its own Upstream (e.g. /api → :7780).
+                </p>
                 <div className="space-y-2">
                   {formRoutes.map((r, i) => (
                     <div key={i} className="flex flex-wrap items-center gap-2">
@@ -798,16 +816,23 @@ export function Sites() {
                         ))}
                       </select>
                       <input
-                        className="min-w-0 flex-1 rounded-md border border-border bg-bg px-3 py-2 text-sm"
+                        className="min-w-[6rem] flex-1 rounded-md border border-border bg-bg px-3 py-2 text-sm"
                         value={r.path}
                         onChange={(e) => updateRoute(i, 'path', e.target.value)}
                         placeholder="/api"
                       />
                       <input
-                        className="min-w-0 flex-1 rounded-md border border-border bg-bg px-3 py-2 text-sm"
+                        className="min-w-[10rem] flex-[1.5] rounded-md border border-border bg-bg px-3 py-2 text-sm"
+                        value={r.upstream ?? ''}
+                        onChange={(e) => updateRoute(i, 'upstream', e.target.value)}
+                        placeholder="upstream override (optional)"
+                        autoComplete="off"
+                      />
+                      <input
+                        className="min-w-[6rem] flex-1 rounded-md border border-border bg-bg px-3 py-2 text-sm"
                         value={r.rewrite ?? ''}
                         onChange={(e) => updateRoute(i, 'rewrite', e.target.value)}
-                        placeholder="rewrite (optional)"
+                        placeholder="path rewrite (optional)"
                       />
                       <button type="button" onClick={() => removeRoute(i)} className="rounded-md border border-border p-2 text-red-r1 hover:bg-hover" title="Remove route">
                         <X size={14} />

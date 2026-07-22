@@ -60,6 +60,10 @@ pub struct PathRewrite {
     /// Rewrite target path when forwarding to upstream (e.g. "/" or "/users").
     #[serde(default)]
     pub rewrite: Option<String>,
+    /// Optional per-route upstream URL (e.g. `http://127.0.0.1:7780`).
+    /// When set, overrides the site's default backend for this path only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
 }
 
 /// Site/route: host + paths + backend reference.
