@@ -14,6 +14,7 @@ import { Gateways } from '@/routes/Gateways';
 import { DnsProviders } from '@/routes/DnsProviders';
 import { Logs } from '@/routes/Logs';
 import { Metrics } from '@/routes/Metrics';
+import { RouteMap } from '@/routes/RouteMap';
 import { Settings } from '@/routes/Settings';
 import { Profile } from '@/routes/Profile';
 import { Backup } from '@/routes/Backup';
@@ -111,6 +112,7 @@ export default function App() {
                   <Route path="dns-providers" element={<DnsProviders />} />
                   <Route path="logs" element={<Logs />} />
                   <Route path="metrics" element={<Metrics />} />
+                  <Route path="route-map" element={<RouteMap />} />
                   <Route path="backup" element={<Backup />} />
                   <Route path="settings" element={<Settings />} />
                   <Route path="profile" element={<Profile />} />
