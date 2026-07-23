@@ -8,7 +8,6 @@ import {
   LayoutGrid,
   List,
   Loader2,
-  Shield,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -16,6 +15,11 @@ import { api, type CertificateRow, type ProxyConfig, type TlsConfig, type TlsSou
 import { Modal } from '@/components/Modal';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Pagination } from '@/components/Pagination';
+import {
+  ResourceBadge,
+  ResourceCard,
+  ResourceCardGrid,
+} from '@/components/ResourceCard';
 import { usePageSize } from '@/utils/usePageSize';
 import { formatDate, formatDateOnly } from '@/utils/dateFormat';
 import { resolveTlsForHost, certRowMatchesTlsConfig } from '@/utils/tlsHostMatch';
@@ -472,38 +476,24 @@ export function Certificates() {
           </button>
         </div>
       ) : viewMode === 'card' ? (
-        <>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {pagedTlsItems.map(({ tls, id }) => {
-              const certId = getCertIdForTls(tls);
-              const pending = tls.source && isAcme(tls.source) && !certId;
-              return (
-                <div key={id} className="rounded-lg border border-border bg-surface p-4">
-                  <div className="flex items-start justify-between gap-2">
-                    <h3 className="flex items-center gap-2 font-semibold">
-                      <Award size={16} className="text-primary" />
-                      {domainLabelForTls(tls)}
-                    </h3>
-                    {pending ? <span className="badge status-yellow">Pending</span> : null}
-                  </div>
-                  <p className="mt-1 flex items-center gap-1 text-sm text-text-secondary">
-                    <Shield size={14} /> {issuerLabel(tls, certRows)}
-                  </p>
-                  <div className="mt-3 space-y-1 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-text-secondary">Expires</span>
-                      <span>{formatDate(tls.expires_at)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-text-secondary">Sites</span>
-                      <span>{getSitesUsingCert(tls)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-text-secondary">Challenge</span>
-                      <span>{challengeLabel(tls)}</span>
-                    </div>
-                  </div>
-                  <div className="mt-4 icon-actions">
+        <ResourceCardGrid>
+          {pagedTlsItems.map(({ tls, id }) => {
+            const certId = getCertIdForTls(tls);
+            const pending = tls.source && isAcme(tls.source) && !certId;
+            return (
+              <ResourceCard
+                key={id}
+                icon={<Award size={16} />}
+                title={domainLabelForTls(tls)}
+                badge={pending ? <ResourceBadge tone="warning">Pending</ResourceBadge> : undefined}
+                meta={[
+                  { label: 'Issuer', value: issuerLabel(tls, certRows) },
+                  { label: 'Expires', value: formatDate(tls.expires_at) },
+                  { label: 'Sites', value: getSitesUsingCert(tls) },
+                  { label: 'Challenge', value: challengeLabel(tls) },
+                ]}
+                actions={
+                  <>
                     <button
                       type="button"
                       onClick={() => setExpandedId((prev) => (prev === id ? null : id))}
@@ -522,13 +512,14 @@ export function Certificates() {
                     >
                       <Trash2 size={16} />
                     </button>
-                  </div>
-                  {expandedId === id ? <div className="mt-4 border-t border-border pt-4">{renderDetails(tls)}</div> : null}
-                </div>
-              );
-            })}
-          </div>
-        </>
+                  </>
+                }
+              >
+                {expandedId === id ? renderDetails(tls) : null}
+              </ResourceCard>
+            );
+          })}
+        </ResourceCardGrid>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full min-w-[800px] text-left text-sm">

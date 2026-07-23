@@ -11,6 +11,11 @@ import { Modal } from '@/components/Modal';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Pagination } from '@/components/Pagination';
 import { ListToolbar, type ViewMode } from '@/components/ListToolbar';
+import {
+  ResourceBadge,
+  ResourceCard,
+  ResourceCardGrid,
+} from '@/components/ResourceCard';
 import { usePageSize } from '@/utils/usePageSize';
 import { formatDateTime } from '@/utils/dateFormat';
 import { cn } from '@/utils';
@@ -216,42 +221,39 @@ export function DnsProviders() {
           </button>
         </div>
       ) : viewMode === 'card' ? (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <ResourceCardGrid>
           {pagedList.map((row) => (
-            <div key={row.id} className="rounded-lg border border-border bg-surface p-4">
-              <div className="flex items-start justify-between gap-2">
-                <h3 className="flex items-center gap-2 font-semibold">
-                  <Server size={16} className="text-primary" />
-                  {row.name}
-                </h3>
-                <span className="rounded-full bg-surface-elevated px-2 py-0.5 text-xs text-text-secondary">
-                  {getProviderDisplayName(row.provider_type)}
-                </span>
-              </div>
-              <p className="mt-3 text-xs text-text-secondary">Created {formatDateTime(row.created_at)}</p>
-              <div className="mt-4 icon-actions">
-                <button
-                  type="button"
-                  onClick={() => loadFullThenEdit(row.id)}
-                  className="icon-action"
-                  title="Edit DNS provider"
-                  aria-label="Edit DNS provider"
-                >
-                  <Pencil size={16} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDeleteRow(row)}
-                  className="icon-action danger"
-                  title="Remove DNS provider"
-                  aria-label="Remove DNS provider"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            </div>
+            <ResourceCard
+              key={row.id}
+              icon={<Server size={16} />}
+              title={row.name}
+              badge={<ResourceBadge tone="neutral">{getProviderDisplayName(row.provider_type)}</ResourceBadge>}
+              meta={[{ label: 'Created', value: formatDateTime(row.created_at) }]}
+              actions={
+                <>
+                  <button
+                    type="button"
+                    onClick={() => loadFullThenEdit(row.id)}
+                    className="icon-action"
+                    title="Edit DNS provider"
+                    aria-label="Edit DNS provider"
+                  >
+                    <Pencil size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDeleteRow(row)}
+                    className="icon-action danger"
+                    title="Remove DNS provider"
+                    aria-label="Remove DNS provider"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </>
+              }
+            />
           ))}
-        </div>
+        </ResourceCardGrid>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full min-w-[560px] text-left text-sm">

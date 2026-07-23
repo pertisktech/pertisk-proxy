@@ -15,6 +15,13 @@ import { Checkbox } from '@/components/Checkbox';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Pagination } from '@/components/Pagination';
 import { ListToolbar, type ViewMode } from '@/components/ListToolbar';
+import {
+  ResourceBadge,
+  ResourceCard,
+  ResourceCardGrid,
+  ResourceTag,
+} from '@/components/ResourceCard';
+import { ConfigTextField } from '@/components/ConfigTextField';
 import { usePageSize } from '@/utils/usePageSize';
 import {
   acmeChallengeFromSource,
@@ -29,7 +36,6 @@ import {
 } from '@/utils/tlsHostMatch';
 import { useManagementInfo } from '@/context/ManagementContext';
 import { cn } from '@/utils';
-import { ConfigTextField } from '@/components/ConfigTextField';
 
 const PATH_TYPES = ['Exact', 'Prefix', 'ImplementationSpecific'];
 
@@ -61,20 +67,20 @@ function routeLabel(route: PathRewrite): string {
   return `${route.path_type || 'Prefix'} ${route.path}${dest ? ` → ${dest}` : ''}`;
 }
 
-type SiteSslStatus = { label: string; tone: string };
+type SiteSslStatus = { label: string; tone: string; badge: 'neutral' | 'success' | 'warning' | 'danger' | 'info' };
 
 function siteSslStatus(tls: TlsConfig | null): SiteSslStatus {
-  if (!tls) return { label: 'No SSL', tone: 'text-muted' };
+  if (!tls) return { label: 'No SSL', tone: 'text-muted', badge: 'neutral' };
   const expiresAt = tls.expires_at?.trim();
   if (expiresAt) {
     const expiryMs = Date.parse(expiresAt);
     if (!Number.isNaN(expiryMs)) {
-      if (expiryMs > Date.now()) return { label: 'Online', tone: 'text-green-g1' };
-      return { label: 'Expired', tone: 'text-red-r1' };
+      if (expiryMs > Date.now()) return { label: 'Online', tone: 'text-green-g1', badge: 'success' };
+      return { label: 'Expired', tone: 'text-red-r1', badge: 'danger' };
     }
   }
-  if (tls.source?.type === 'acme') return { label: 'Pending', tone: 'text-yellow-y1' };
-  return { label: 'Configured', tone: 'text-text-secondary' };
+  if (tls.source?.type === 'acme') return { label: 'Pending', tone: 'text-yellow-y1', badge: 'warning' };
+  return { label: 'Configured', tone: 'text-text-secondary', badge: 'info' };
 }
 
 function resolveDnsProviderId(
@@ -566,80 +572,77 @@ export function Sites() {
           </button>
         </div>
       ) : viewMode === 'card' ? (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <ResourceCardGrid>
           {pagedSites.map((site) => {
             const globalIndex = sites.indexOf(site);
             const tls = resolveTlsForHost(site.host, tlsList);
             const ssl = siteSslStatus(tls);
             const publicUrl = sitePublicUrl(site.host, !!tls);
+            const titleNode = publicUrl ? (
+              <a href={publicUrl} target="_blank" rel="noopener noreferrer" title={`Open ${publicUrl}`}>
+                <span className="inline-flex items-center gap-1.5">
+                  {site.host}
+                  <ExternalLink size={13} className="shrink-0 opacity-70" />
+                </span>
+              </a>
+            ) : (
+              site.host
+            );
             return (
-              <div key={`${site.host}-${globalIndex}`} className="rounded-lg border border-border bg-surface p-4">
-                <div className="flex items-start justify-between gap-2">
-                  <h3 className="font-semibold">
+              <ResourceCard
+                key={`${site.host}-${globalIndex}`}
+                icon={<Globe size={16} />}
+                title={titleNode}
+                badge={<ResourceBadge tone={ssl.badge}>{ssl.label}</ResourceBadge>}
+                subtitle={upstreamForSite(site)}
+                tags={
+                  (site.routes ?? []).length
+                    ? (site.routes ?? []).map((r, i) => <ResourceTag key={i}>{routeLabel(r)}</ResourceTag>)
+                    : undefined
+                }
+                meta={
+                  tls
+                    ? [{ label: 'Certificate', value: sslLabelForCard(tls.hosts) }]
+                    : [{ label: 'Certificate', value: '—' }]
+                }
+                actions={
+                  <>
                     {publicUrl ? (
                       <a
                         href={publicUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 hover:text-primary"
-                        title={`Open ${publicUrl}`}
+                        className="icon-action"
+                        title="Open site"
+                        aria-label="Open site"
                       >
-                        {site.host}
-                        <ExternalLink size={14} className="shrink-0 text-muted" />
+                        <ExternalLink size={16} />
                       </a>
-                    ) : (
-                      site.host
-                    )}
-                  </h3>
-                  <span className={cn('text-xs font-medium', ssl.tone)}>{ssl.label}</span>
-                </div>
-                <p className="mt-2 font-mono text-xs text-text-secondary">{upstreamForSite(site)}</p>
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {(site.routes ?? []).map((r, i) => (
-                    <span key={i} className="rounded bg-surface-elevated px-2 py-0.5 text-xs text-text-secondary">
-                      {routeLabel(r)}
-                    </span>
-                  ))}
-                </div>
-                {tls ? (
-                  <p className="mt-2 text-xs text-text-secondary">Cert: {sslLabelForCard(tls.hosts)}</p>
-                ) : null}
-                <div className="mt-4 icon-actions">
-                  {publicUrl ? (
-                    <a
-                      href={publicUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => openEditSite(globalIndex)}
                       className="icon-action"
-                      title="Open site"
-                      aria-label="Open site"
+                      title="Edit site"
+                      aria-label="Edit site"
                     >
-                      <ExternalLink size={16} />
-                    </a>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => openEditSite(globalIndex)}
-                    className="icon-action"
-                    title="Edit site"
-                    aria-label="Edit site"
-                  >
-                    <Pencil size={16} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDeleteIndex(globalIndex)}
-                    className="icon-action danger"
-                    title="Remove site"
-                    aria-label="Remove site"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              </div>
+                      <Pencil size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeleteIndex(globalIndex)}
+                      className="icon-action danger"
+                      title="Remove site"
+                      aria-label="Remove site"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </>
+                }
+              />
             );
           })}
-        </div>
+        </ResourceCardGrid>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full min-w-[720px] text-left text-sm">
