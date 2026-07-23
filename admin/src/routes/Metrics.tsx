@@ -168,9 +168,10 @@ export function Metrics() {
       const https = deltaRate(curr.https, prev.https, seconds);
       const h3 = deltaRate(curr.h3, prev.h3, seconds);
       const grpc = deltaRate(curr.grpc, prev.grpc, seconds);
+      // https already includes H2/H3 (and gRPC-over-TLS); do not add h3/grpc again.
       out.push({
         time: curr.time,
-        requests: http + https + grpc,
+        requests: http + https,
         http,
         https,
         h3,
@@ -227,8 +228,9 @@ export function Metrics() {
   }, [latest]);
 
   const current = history[history.length - 1];
+  // https already includes H2/H3; gRPC is a subset — do not double-count.
   const totalRequests =
-    (latest?.http_requests_total ?? 0) + (latest?.https_requests_total ?? 0) + (latest?.grpc_requests_total ?? 0);
+    (latest?.http_requests_total ?? 0) + (latest?.https_requests_total ?? 0);
   const totalBytes = (latest?.bytes_sent_total ?? 0) + (latest?.bytes_received_total ?? 0);
 
   const rawSnapshot = useMemo(

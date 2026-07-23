@@ -345,7 +345,7 @@ async fn handle_request_inner(
     remote_addr: SocketAddr,
     metrics: &ProxyMetrics,
 ) -> Result<()> {
-    if try_serve_health(&req, stream).await? {
+    if try_serve_health(&req, stream, metrics).await? {
         return Ok(());
     }
 
@@ -741,6 +741,7 @@ fn record_h3_request(
 async fn try_serve_health(
     req: &http::Request<()>,
     stream: &mut h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
+    metrics: &ProxyMetrics,
 ) -> Result<bool> {
     if !matches!(req.method(), &http::Method::GET | &http::Method::HEAD) {
         return Ok(false);
@@ -758,6 +759,7 @@ async fn try_serve_health(
     } else {
         body
     };
+    let bytes_sent = body.len() as u64;
     let mut h3_resp = http::Response::builder()
         .status(http::StatusCode::OK)
         .header(http::header::CONTENT_TYPE, content_type)
@@ -773,6 +775,9 @@ async fn try_serve_health(
         }
     }
     send_h3_response(stream, h3_resp, body).await?;
+    // Record k6 / probe traffic so Dashboard + Metrics match load-test RPS.
+    let host = request_host(req);
+    record_h3_request(metrics, &host, 0, bytes_sent, false, false);
     Ok(true)
 }
 

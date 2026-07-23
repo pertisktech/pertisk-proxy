@@ -108,7 +108,8 @@ impl Gateway {
         host: &str,
         upstream_error: bool,
     ) {
-        if host.is_empty() || health::is_health_path(session.req_header().uri.path()) {
+        // Count probe paths (/api/health, /healthz, …) too — k6 benchmarks hit them.
+        if host.is_empty() {
             return;
         }
 

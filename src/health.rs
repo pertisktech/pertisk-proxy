@@ -1,4 +1,7 @@
 //! Probe fast paths for k6 and Kubernetes health checks (no upstream round-trip).
+//!
+//! These requests are still counted in proxy metrics so Dashboard / Metrics RPS
+//! match load tests that hit `/api/health`.
 
 use bytes::Bytes;
 use http::{Method, StatusCode};
