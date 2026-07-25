@@ -55,6 +55,19 @@ function formatRate(value: number | null | undefined): string {
   return `${value.toFixed(2)}/s`;
 }
 
+function formatUptime(secs: number | undefined | null): string {
+  if (secs == null || !Number.isFinite(secs)) return '—';
+  const total = Math.max(0, Math.floor(secs));
+  const d = Math.floor(total / 86400);
+  const h = Math.floor((total % 86400) / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (d > 0) return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  if (m > 0) return s > 0 && m < 10 ? `${m}m ${s}s` : `${m}m`;
+  return `${s}s`;
+}
+
 function deltaRate(curr: number, prev: number, seconds: number): number {
   if (seconds <= 0 || curr < prev) return 0;
   return (curr - prev) / seconds;
@@ -221,7 +234,6 @@ export function Metrics() {
           h2,
           h3,
           total: h2 + h3,
-          ratio: h2 > 0 ? h3 / h2 : h3 > 0 ? Infinity : 0,
         };
       })
       .sort((a, b) => b.total - a.total);
@@ -279,7 +291,7 @@ export function Metrics() {
 
       {(current?.cpu != null || current?.memory_mb != null) && (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Stat label="Uptime" value={`${formatNum(latest?.uptime_secs)} s`} />
+          <Stat label="Uptime" value={formatUptime(latest?.uptime_secs)} />
           <Stat label="H2 requests" value={formatNum(latest?.h2_requests_total)} />
           <Stat label="H3 requests" value={formatNum(latest?.h3_requests_total)} />
           <Stat
@@ -443,7 +455,6 @@ export function Metrics() {
                   <th className="px-3 py-2.5 font-medium">H2</th>
                   <th className="px-3 py-2.5 font-medium">H3</th>
                   <th className="px-3 py-2.5 font-medium">Total</th>
-                  <th className="px-3 py-2.5 font-medium">H3/H2</th>
                 </tr>
               </thead>
               <tbody>
@@ -453,9 +464,6 @@ export function Metrics() {
                     <td className="px-3 py-2">{formatNum(row.h2)}</td>
                     <td className="px-3 py-2">{formatNum(row.h3)}</td>
                     <td className="px-3 py-2">{formatNum(row.total)}</td>
-                    <td className="px-3 py-2">
-                      {!Number.isFinite(row.ratio) ? '∞' : row.ratio === 0 ? '—' : row.ratio.toFixed(3)}
-                    </td>
                   </tr>
                 ))}
               </tbody>

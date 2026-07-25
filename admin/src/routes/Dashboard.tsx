@@ -4,10 +4,15 @@ import { api, type K8sPodRow, type ManagementInfo, type Metrics, type ProxyConfi
 import { Card, Stat } from '@/components/Card';
 
 function formatUptime(secs: number) {
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = secs % 60;
-  return `${h}h ${m}m ${s}s`;
+  const total = Math.max(0, Math.floor(Number.isFinite(secs) ? secs : 0));
+  const d = Math.floor(total / 86400);
+  const h = Math.floor((total % 86400) / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (d > 0) return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  if (m > 0) return s > 0 && m < 10 ? `${m}m ${s}s` : `${m}m`;
+  return `${s}s`;
 }
 
 function formatBytes(bytes: number) {
