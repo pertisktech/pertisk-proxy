@@ -4,16 +4,17 @@ import { toast } from 'sonner';
 import { Globe, Pencil, Trash2 } from 'lucide-react';
 import {
   api,
+  type AccessList,
   type IngressFormRow,
   type IngressSubmitBody,
   type K8sNamespaceRow,
   type K8sServicePortDetail,
   type K8sServiceRow,
   type K8sTlsSecretRow,
+  type NamedWafPolicy,
   type Site,
 } from '@/api/client';
 import { Modal } from '@/components/Modal';
-import { Checkbox } from '@/components/Checkbox';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Pagination } from '@/components/Pagination';
 import { ListToolbar, type ViewMode } from '@/components/ListToolbar';
@@ -22,7 +23,6 @@ import { getDefaultIngressNamespace } from '@/utils/ingressDefaults';
 import { useManagementInfo } from '@/context/ManagementContext';
 import { useMode } from '@/context/ModeContext';
 import { cn } from '@/utils';
-import { ConfigTextField } from '@/components/ConfigTextField';
 
 type K8sPageKind = 'ingress' | 'gateway';
 
@@ -45,83 +45,26 @@ function portLabel(port: K8sServicePortDetail): string {
   return `${port.port} (${port.protocol})`;
 }
 
-function emptySecurityForm(): Pick<IngressFormRow, 'geoip' | 'security'> {
-  return {
-    geoip: {
-      enabled: false,
-      allow_countries: [],
-      deny_countries: [],
-      allow_asns: [],
-      deny_asns: [],
-    },
-    security: {
-      waf: { enabled: false, use_builtin_rules: true },
-      bot: { enabled: false, challenge_score: 40, block_score: 80 },
-      captcha: { enabled: false },
-    },
-  };
-}
-
-function parseCsv(raw: string): string[] {
-  return raw
-    .split(/[,;\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function parseAsns(raw: string): number[] {
-  const out = new Set<number>();
-  for (const part of parseCsv(raw)) {
-    const n = Number(part.replace(/^AS/i, ''));
-    if (Number.isFinite(n) && n > 0) out.add(n);
-  }
-  return [...out].sort((a, b) => a - b);
-}
-
 function submitBody(
   form: IngressFormRow,
-  geoipEnabled: boolean,
-  allowCountries: string,
-  denyCountries: string,
-  allowAsns: string,
-  denyAsns: string,
-  wafEnabled: boolean,
-  wafBuiltin: boolean,
-  botEnabled: boolean,
-  botChallenge: string,
-  botBlock: string,
-  captchaEnabled: boolean,
+  accessListId: string,
+  wafPolicyId: string,
+  accessLists: AccessList[],
+  wafPolicies: NamedWafPolicy[],
 ): IngressSubmitBody {
-  const geoipActive =
-    geoipEnabled ||
-    !!allowCountries.trim() ||
-    !!denyCountries.trim() ||
-    !!allowAsns.trim() ||
-    !!denyAsns.trim();
-  const securityActive = wafEnabled || botEnabled || captchaEnabled;
+  const selectedAcl = accessListId
+    ? accessLists.find((l) => l.id === accessListId)
+    : undefined;
+  const selectedWaf = wafPolicyId
+    ? wafPolicies.find((p) => p.id === wafPolicyId)
+    : undefined;
   return {
     ...form,
     ingress_namespace: form.namespace,
-    geoip: geoipActive
-      ? {
-          enabled: geoipEnabled || geoipActive,
-          allow_countries: parseCsv(allowCountries).map((c) => c.toUpperCase()),
-          deny_countries: parseCsv(denyCountries).map((c) => c.toUpperCase()),
-          allow_asns: parseAsns(allowAsns),
-          deny_asns: parseAsns(denyAsns),
-        }
-      : { enabled: false },
-    security: securityActive
-      ? {
-          waf: { enabled: wafEnabled, use_builtin_rules: wafBuiltin },
-          bot: {
-            enabled: botEnabled,
-            challenge_score: Number(botChallenge) || 40,
-            block_score: Number(botBlock) || 80,
-          },
-          captcha: { enabled: captchaEnabled },
-        }
-      : {},
+    access_list_id: accessListId || undefined,
+    waf_policy_id: wafPolicyId || undefined,
+    geoip: selectedAcl?.geoip ?? { enabled: false },
+    security: selectedWaf?.security ?? {},
   };
 }
 
@@ -129,7 +72,6 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
   const navigate = useNavigate();
   const mode = useMode();
   const management = useManagementInfo();
-  const geoipStatus = management?.geoip;
   const pageSize = usePageSize();
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
@@ -152,19 +94,12 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
     service_port: 80,
     path: '/',
     path_type: 'Prefix',
-    ...emptySecurityForm(),
+    geoip: { enabled: false }, security: {},
   });
-  const [formGeoipEnabled, setFormGeoipEnabled] = useState(false);
-  const [formGeoipAllowCountries, setFormGeoipAllowCountries] = useState('');
-  const [formGeoipDenyCountries, setFormGeoipDenyCountries] = useState('');
-  const [formGeoipAllowAsns, setFormGeoipAllowAsns] = useState('');
-  const [formGeoipDenyAsns, setFormGeoipDenyAsns] = useState('');
-  const [formWafEnabled, setFormWafEnabled] = useState(false);
-  const [formWafBuiltin, setFormWafBuiltin] = useState(true);
-  const [formBotEnabled, setFormBotEnabled] = useState(false);
-  const [formBotChallenge, setFormBotChallenge] = useState('40');
-  const [formBotBlock, setFormBotBlock] = useState('80');
-  const [formCaptchaEnabled, setFormCaptchaEnabled] = useState(false);
+  const [formAccessListId, setFormAccessListId] = useState('');
+  const [formWafPolicyId, setFormWafPolicyId] = useState('');
+  const [accessLists, setAccessLists] = useState<AccessList[]>([]);
+  const [wafPolicies, setWafPolicies] = useState<NamedWafPolicy[]>([]);
 
   useEffect(() => {
     if (mode === 'proxy') navigate('/sites', { replace: true });
@@ -194,6 +129,13 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
     if (!modal) return;
     api.kubernetes.namespaces().then(setNamespaces).catch(() => setNamespaces([]));
     api.kubernetes.tlsSecrets().then(setTlsSecrets).catch(() => setTlsSecrets([]));
+    Promise.all([
+      api.accessLists.list().catch(() => [] as AccessList[]),
+      api.wafPolicies.list().catch(() => [] as NamedWafPolicy[]),
+    ]).then(([acls, wafs]) => {
+      setAccessLists(acls);
+      setWafPolicies(wafs);
+    });
   }, [modal]);
 
   useEffect(() => {
@@ -228,18 +170,9 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
 
   const servicePorts = portsForService(k8sServices, form.service_name);
 
-  function resetSecurityFields(row?: Pick<IngressFormRow, 'geoip' | 'security'>) {
-    setFormGeoipEnabled(!!row?.geoip?.enabled);
-    setFormGeoipAllowCountries((row?.geoip?.allow_countries ?? []).join(', '));
-    setFormGeoipDenyCountries((row?.geoip?.deny_countries ?? []).join(', '));
-    setFormGeoipAllowAsns((row?.geoip?.allow_asns ?? []).join(', '));
-    setFormGeoipDenyAsns((row?.geoip?.deny_asns ?? []).join(', '));
-    setFormWafEnabled(!!row?.security?.waf?.enabled);
-    setFormWafBuiltin(row?.security?.waf?.use_builtin_rules !== false);
-    setFormBotEnabled(!!row?.security?.bot?.enabled);
-    setFormBotChallenge(String(row?.security?.bot?.challenge_score ?? 40));
-    setFormBotBlock(String(row?.security?.bot?.block_score ?? 80));
-    setFormCaptchaEnabled(!!row?.security?.captcha?.enabled);
+  function resetPolicyIds(row?: Pick<IngressFormRow, 'access_list_id' | 'waf_policy_id'>) {
+    setFormAccessListId(row?.access_list_id ?? '');
+    setFormWafPolicyId(row?.waf_policy_id ?? '');
   }
 
   function openCreate() {
@@ -256,9 +189,9 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
       path: '/',
       path_type: 'Prefix',
       ingress_class_name: management?.ingress_class || undefined,
-      ...emptySecurityForm(),
+      geoip: { enabled: false }, security: {},
     });
-    resetSecurityFields();
+    resetPolicyIds();
     setModal(true);
   }
 
@@ -290,8 +223,10 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
         gateway_name: row.gateway_name ?? undefined,
         geoip: row.geoip,
         security: row.security,
+        access_list_id: row.access_list_id,
+        waf_policy_id: row.waf_policy_id,
       });
-      resetSecurityFields(row);
+      resetPolicyIds(row);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load site');
       setModal(false);
@@ -326,20 +261,7 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
       return;
     }
     setSaving(true);
-    const body = submitBody(
-      form,
-      formGeoipEnabled,
-      formGeoipAllowCountries,
-      formGeoipDenyCountries,
-      formGeoipAllowAsns,
-      formGeoipDenyAsns,
-      formWafEnabled,
-      formWafBuiltin,
-      formBotEnabled,
-      formBotChallenge,
-      formBotBlock,
-      formCaptchaEnabled,
-    );
+    const body = submitBody(form, formAccessListId, formWafPolicyId, accessLists, wafPolicies);
     try {
       if (k8sPageKind === 'gateway') {
         if (editRef) {
@@ -635,133 +557,46 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
               aria-hidden={formTab !== 'advanced'}
             >
               <div className={sectionCls}>
-                <h3 className={sectionTitleCls}>GeoIP</h3>
-                <div className="flex flex-wrap gap-2 text-xs">
-                  <span
-                    className={cn(
-                      'rounded-full px-2.5 py-1 font-medium',
-                      geoipStatus?.country_db_loaded
-                        ? 'bg-green-g1/15 text-green-g1'
-                        : 'bg-yellow-y1/15 text-yellow-y1',
-                    )}
+                <h3 className={sectionTitleCls}>Access Control</h3>
+                <label className={labelCls}>
+                  Access Control List
+                  <select
+                    className={inputCls}
+                    value={formAccessListId}
+                    onChange={(e) => setFormAccessListId(e.target.value)}
                   >
-                    Country DB {geoipStatus?.country_db_loaded ? 'ready' : 'missing'}
-                  </span>
-                  <span
-                    className={cn(
-                      'rounded-full px-2.5 py-1 font-medium',
-                      geoipStatus?.asn_db_loaded
-                        ? 'bg-green-g1/15 text-green-g1'
-                        : 'bg-yellow-y1/15 text-yellow-y1',
-                    )}
-                  >
-                    ASN DB {geoipStatus?.asn_db_loaded ? 'ready' : 'missing'}
-                  </span>
-                </div>
-                {geoipStatus?.country_db_path || geoipStatus?.asn_db_path ? (
-                  <ul className="space-y-1 font-mono text-[11px] text-muted">
-                    {geoipStatus.country_db_path ? (
-                      <li>country: {geoipStatus.country_db_path}</li>
-                    ) : null}
-                    {geoipStatus.asn_db_path ? <li>asn: {geoipStatus.asn_db_path}</li> : null}
-                  </ul>
-                ) : null}
-                <Checkbox
-                  checked={formGeoipEnabled}
-                  onChange={setFormGeoipEnabled}
-                  className="text-sm"
-                  label="Enable GeoIP allow / deny"
-                />
-                {formGeoipEnabled && !geoipStatus?.country_db_loaded ? (
-                  <p className="rounded-md border border-yellow-y1/30 bg-yellow-y1/10 px-3 py-2 text-xs text-yellow-y1">
-                    Country DB is not loaded — mount GeoLite2-Country.mmdb into the ingress pods (see README).
-                  </p>
-                ) : null}
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <ConfigTextField
-                    label="Allow countries"
-                    example="TH, US"
-                    value={formGeoipAllowCountries}
-                    onChange={setFormGeoipAllowCountries}
-                    disabled={!formGeoipEnabled}
-                  />
-                  <ConfigTextField
-                    label="Deny countries"
-                    example="CN, RU"
-                    value={formGeoipDenyCountries}
-                    onChange={setFormGeoipDenyCountries}
-                    disabled={!formGeoipEnabled}
-                  />
-                  <ConfigTextField
-                    label="Allow ASNs"
-                    example="13335, AS15169"
-                    value={formGeoipAllowAsns}
-                    onChange={setFormGeoipAllowAsns}
-                    disabled={!formGeoipEnabled}
-                  />
-                  <ConfigTextField
-                    label="Deny ASNs"
-                    example="12345"
-                    value={formGeoipDenyAsns}
-                    onChange={setFormGeoipDenyAsns}
-                    disabled={!formGeoipEnabled}
-                  />
-                </div>
+                    <option value="">None</option>
+                    {accessLists.map((list) => (
+                      <option key={list.id} value={list.id}>
+                        {list.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="text-xs text-text-secondary">
+                  Manage lists under Access Control.
+                </p>
               </div>
 
               <div className={sectionCls}>
-                <h3 className={sectionTitleCls}>WAF / bot / captcha</h3>
-                <div className="flex flex-col gap-1">
-                  <Checkbox
-                    checked={formWafEnabled}
-                    onChange={setFormWafEnabled}
-                    className="text-sm"
-                    label="Enable WAF (built-in SQLi / XSS / path traversal)"
-                  />
-                  <Checkbox
-                    checked={formWafBuiltin}
-                    onChange={setFormWafBuiltin}
-                    className="text-sm"
-                    label="Use built-in WAF rules"
-                    disabled={!formWafEnabled}
-                  />
-                  <Checkbox
-                    checked={formBotEnabled}
-                    onChange={setFormBotEnabled}
-                    className="text-sm"
-                    label="Enable bot scoring"
-                  />
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className={labelCls}>
-                    Challenge score
-                    <input
-                      className={inputCls}
-                      value={formBotChallenge}
-                      onChange={(e) => setFormBotChallenge(e.target.value)}
-                      disabled={!formBotEnabled}
-                    />
-                  </label>
-                  <label className={labelCls}>
-                    Block score
-                    <input
-                      className={inputCls}
-                      value={formBotBlock}
-                      onChange={(e) => setFormBotBlock(e.target.value)}
-                      disabled={!formBotEnabled}
-                    />
-                  </label>
-                </div>
-                <Checkbox
-                  checked={formCaptchaEnabled}
-                  onChange={setFormCaptchaEnabled}
-                  className="text-sm"
-                  label="Enable math captcha for challenges"
-                />
+                <h3 className={sectionTitleCls}>WAF</h3>
+                <label className={labelCls}>
+                  WAF policy
+                  <select
+                    className={inputCls}
+                    value={formWafPolicyId}
+                    onChange={(e) => setFormWafPolicyId(e.target.value)}
+                  >
+                    <option value="">None</option>
+                    {wafPolicies.map((policy) => (
+                      <option key={policy.id} value={policy.id}>
+                        {policy.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <p className="text-xs text-text-secondary">
-                  Written as Ingress/HTTPRoute annotations (
-                  <code className="font-mono">proxy.pertisk.tech/*</code>). Challenge page:{' '}
-                  <code className="font-mono">/.pertisk/captcha</code>.
+                  Manage policies under WAF.
                 </p>
               </div>
             </div>

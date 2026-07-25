@@ -15,7 +15,8 @@ import {
   GitBranch,
   DoorOpen,
   LineChart,
-  Map as MapIcon,
+  ShieldAlert,
+  ListChecks,
   ChevronsLeft,
   ChevronsRight,
   Archive,
@@ -44,7 +45,8 @@ function proxyNav(): NavItem[] {
   return [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
     { to: '/sites', label: 'Sites', icon: Globe },
-    { to: '/route-map', label: 'Route Map', icon: MapIcon },
+    { to: '/access-lists', label: 'Access Control', icon: ListChecks },
+    { to: '/waf', label: 'WAF', icon: ShieldAlert },
     { to: '/certificates', label: 'Certificates', icon: Shield },
     { to: '/dns-providers', label: 'DNS Providers', icon: Server },
     { to: '/logs', label: 'Logs', icon: ScrollText },
@@ -64,7 +66,8 @@ function ingressNav(gatewayApiEnabled: boolean): NavItem[] {
     items.push({ to: '/sites/gateway/sites', label: 'HTTP Routes', icon: GitBranch });
   }
   items.push(
-    { to: '/route-map', label: 'Route Map', icon: MapIcon },
+    { to: '/access-lists', label: 'Access Control', icon: ListChecks },
+    { to: '/waf', label: 'WAF', icon: ShieldAlert },
     { to: '/certificates', label: 'Certificates', icon: Shield },
     { to: '/logs', label: 'Logs', icon: ScrollText },
     { to: '/metrics', label: 'Metrics', icon: LineChart },

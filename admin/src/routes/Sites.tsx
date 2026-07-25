@@ -3,7 +3,9 @@ import { toast } from 'sonner';
 import { Award, ExternalLink, Globe, Lock, Pencil, Plus, Trash2, X, Zap } from 'lucide-react';
 import {
   api,
+  type AccessList,
   type DnsProviderRow,
+  type NamedWafPolicy,
   type PathRewrite,
   type ProxyConfig,
   type Site,
@@ -21,7 +23,6 @@ import {
   ResourceCardGrid,
   ResourceTag,
 } from '@/components/ResourceCard';
-import { ConfigTextField } from '@/components/ConfigTextField';
 import { usePageSize } from '@/utils/usePageSize';
 import {
   acmeChallengeFromSource,
@@ -34,7 +35,6 @@ import {
   tlsIndexForHost,
   type SiteSslMode,
 } from '@/utils/tlsHostMatch';
-import { useManagementInfo } from '@/context/ManagementContext';
 import { cn } from '@/utils';
 
 const PATH_TYPES = ['Exact', 'Prefix', 'ImplementationSpecific'];
@@ -94,8 +94,6 @@ function resolveDnsProviderId(
 }
 
 export function Sites() {
-  const management = useManagementInfo();
-  const geoipStatus = management?.geoip;
   const [config, setConfig] = useState<ProxyConfig>({ sites: [], backends: [], tls: [] });
   const [dnsProviders, setDnsProviders] = useState<DnsProviderRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -115,17 +113,10 @@ export function Sites() {
   const [formDnsProviderId, setFormDnsProviderId] = useState('');
   const [formWildcard, setFormWildcard] = useState(false);
   const [formForwardClientIp, setFormForwardClientIp] = useState(true);
-  const [formGeoipEnabled, setFormGeoipEnabled] = useState(false);
-  const [formGeoipAllowCountries, setFormGeoipAllowCountries] = useState('');
-  const [formGeoipDenyCountries, setFormGeoipDenyCountries] = useState('');
-  const [formGeoipAllowAsns, setFormGeoipAllowAsns] = useState('');
-  const [formGeoipDenyAsns, setFormGeoipDenyAsns] = useState('');
-  const [formWafEnabled, setFormWafEnabled] = useState(false);
-  const [formWafBuiltin, setFormWafBuiltin] = useState(true);
-  const [formBotEnabled, setFormBotEnabled] = useState(false);
-  const [formBotChallenge, setFormBotChallenge] = useState('40');
-  const [formBotBlock, setFormBotBlock] = useState('80');
-  const [formCaptchaEnabled, setFormCaptchaEnabled] = useState(false);
+  const [formAccessListId, setFormAccessListId] = useState('');
+  const [formWafPolicyId, setFormWafPolicyId] = useState('');
+  const [accessLists, setAccessLists] = useState<AccessList[]>([]);
+  const [wafPolicies, setWafPolicies] = useState<NamedWafPolicy[]>([]);
   const [siteFormTab, setSiteFormTab] = useState<'general' | 'advanced'>('general');
   const [siteSaving, setSiteSaving] = useState(false);
   const [siteError, setSiteError] = useState('');
@@ -139,20 +130,46 @@ export function Sites() {
 
   function load() {
     setLoading(true);
-    Promise.all([api.config(), api.dnsProviders.list().catch(() => [])])
-      .then(([c, dns]) => {
-        setConfig({ sites: c.sites || [], backends: c.backends || [], tls: c.tls || [] });
+    Promise.all([
+      api.config(),
+      api.dnsProviders.list().catch(() => []),
+      api.accessLists.list().catch(() => []),
+      api.wafPolicies.list().catch(() => []),
+    ])
+      .then(([c, dns, acls, wafs]) => {
+        setConfig({
+          sites: c.sites || [],
+          backends: c.backends || [],
+          tls: c.tls || [],
+          access_lists: c.access_lists || [],
+          waf_policies: c.waf_policies || [],
+        });
         setDnsProviders(dns);
+        setAccessLists(acls);
+        setWafPolicies(wafs);
       })
       .catch((e) => toast.error(e.message))
       .finally(() => setLoading(false));
   }
 
   function refreshQuiet() {
-    Promise.all([api.config(), api.dnsProviders.list().catch(() => [])])
-      .then(([c, dns]) => {
-        setConfig({ sites: c.sites || [], backends: c.backends || [], tls: c.tls || [] });
+    Promise.all([
+      api.config(),
+      api.dnsProviders.list().catch(() => []),
+      api.accessLists.list().catch(() => []),
+      api.wafPolicies.list().catch(() => []),
+    ])
+      .then(([c, dns, acls, wafs]) => {
+        setConfig({
+          sites: c.sites || [],
+          backends: c.backends || [],
+          tls: c.tls || [],
+          access_lists: c.access_lists || [],
+          waf_policies: c.waf_policies || [],
+        });
         setDnsProviders(dns);
+        setAccessLists(acls);
+        setWafPolicies(wafs);
       })
       .catch(() => {});
   }
@@ -220,17 +237,8 @@ export function Sites() {
     setFormDnsProviderId('');
     setFormWildcard(false);
     setFormForwardClientIp(true);
-    setFormGeoipEnabled(false);
-    setFormGeoipAllowCountries('');
-    setFormGeoipDenyCountries('');
-    setFormGeoipAllowAsns('');
-    setFormGeoipDenyAsns('');
-    setFormWafEnabled(false);
-    setFormWafBuiltin(true);
-    setFormBotEnabled(false);
-    setFormBotChallenge('40');
-    setFormBotBlock('80');
-    setFormCaptchaEnabled(false);
+    setFormAccessListId('');
+    setFormWafPolicyId('');
     setSiteFormTab('general');
     setSiteError('');
     setSiteModal(true);
@@ -264,17 +272,8 @@ export function Sites() {
     setFormAcmeEmail(acmeSource?.email ?? '');
     setFormWildcard(tlsForHost ? siteUsesWildcardInTls(site.host, tlsForHost) : false);
     setFormForwardClientIp(site.forward_client_ip !== false);
-    setFormGeoipEnabled(!!site.geoip?.enabled);
-    setFormGeoipAllowCountries((site.geoip?.allow_countries ?? []).join(', '));
-    setFormGeoipDenyCountries((site.geoip?.deny_countries ?? []).join(', '));
-    setFormGeoipAllowAsns((site.geoip?.allow_asns ?? []).join(', '));
-    setFormGeoipDenyAsns((site.geoip?.deny_asns ?? []).join(', '));
-    setFormWafEnabled(!!site.security?.waf?.enabled);
-    setFormWafBuiltin(site.security?.waf?.use_builtin_rules !== false);
-    setFormBotEnabled(!!site.security?.bot?.enabled);
-    setFormBotChallenge(String(site.security?.bot?.challenge_score ?? 40));
-    setFormBotBlock(String(site.security?.bot?.block_score ?? 80));
-    setFormCaptchaEnabled(!!site.security?.captcha?.enabled);
+    setFormAccessListId(site.access_list_id ?? '');
+    setFormWafPolicyId(site.waf_policy_id ?? '');
     setSiteFormTab('general');
     setFormDnsProviderId(
       acmeSource && acmeChallengeFromSource(acmeSource) === 'dns01'
@@ -315,30 +314,6 @@ export function Sites() {
         upstream: r.upstream?.trim() ? normalizeUpstream(r.upstream.trim()) : undefined,
       }))
       .filter((r) => r.path);
-  }
-
-  function parseCountryList(raw: string): string[] {
-    return [
-      ...new Set(
-        raw
-          .split(/[,;\s]+/)
-          .map((c) => c.trim().toUpperCase())
-          .filter(Boolean),
-      ),
-    ];
-  }
-
-  function parseAsnList(raw: string): number[] {
-    return [
-      ...new Set(
-        raw
-          .split(/[,;\s]+/)
-          .map((part) => part.trim().replace(/^AS/i, ''))
-          .filter(Boolean)
-          .map((n) => Number(n))
-          .filter((n) => Number.isFinite(n) && n > 0),
-      ),
-    ];
   }
 
   async function submitSite(e: FormEvent) {
@@ -468,51 +443,22 @@ export function Sites() {
       }
     }
 
-    const allowCountries = parseCountryList(formGeoipAllowCountries);
-    const denyCountries = parseCountryList(formGeoipDenyCountries);
-    const allowAsns = parseAsnList(formGeoipAllowAsns);
-    const denyAsns = parseAsnList(formGeoipDenyAsns);
-    const geoipActive =
-      formGeoipEnabled ||
-      allowCountries.length > 0 ||
-      denyCountries.length > 0 ||
-      allowAsns.length > 0 ||
-      denyAsns.length > 0;
-
-    const challengeScore = Number(formBotChallenge) || 40;
-    const blockScore = Number(formBotBlock) || 80;
-    const securityActive = formWafEnabled || formBotEnabled || formCaptchaEnabled;
+    const selectedAcl = formAccessListId
+      ? accessLists.find((l) => l.id === formAccessListId)
+      : undefined;
+    const selectedWaf = formWafPolicyId
+      ? wafPolicies.find((p) => p.id === formWafPolicyId)
+      : undefined;
 
     const newSite: Site = {
       host,
       backend: backendName,
       routes,
       forward_client_ip: formForwardClientIp || undefined,
-      geoip: geoipActive
-        ? {
-            enabled: true,
-            allow_countries: allowCountries,
-            deny_countries: denyCountries,
-            allow_asns: allowAsns,
-            deny_asns: denyAsns,
-          }
-        : undefined,
-      security: securityActive
-        ? {
-            waf: {
-              enabled: formWafEnabled,
-              use_builtin_rules: formWafEnabled && formWafBuiltin,
-            },
-            bot: {
-              enabled: formBotEnabled,
-              challenge_score: challengeScore,
-              block_score: blockScore,
-            },
-            captcha: {
-              enabled: formCaptchaEnabled,
-            },
-          }
-        : undefined,
+      access_list_id: formAccessListId || undefined,
+      waf_policy_id: formWafPolicyId || undefined,
+      geoip: selectedAcl?.geoip,
+      security: selectedWaf?.security,
     };
     const newSites =
       editingIndex !== null ? sites.map((s, i) => (i === editingIndex ? newSite : s)) : [...sites, newSite];
@@ -926,141 +872,46 @@ export function Sites() {
               </div>
 
               <div className={sectionCls}>
-                <h3 className={sectionTitleCls}>GeoIP</h3>
-                <div className="flex flex-wrap gap-2 text-xs">
-                  <span
-                    className={cn(
-                      'rounded-full px-2.5 py-1 font-medium',
-                      geoipStatus?.country_db_loaded
-                        ? 'bg-green-g1/15 text-green-g1'
-                        : 'bg-yellow-y1/15 text-yellow-y1',
-                    )}
+                <h3 className={sectionTitleCls}>Access Control</h3>
+                <label className={labelCls}>
+                  Access Control List
+                  <select
+                    className={inputCls}
+                    value={formAccessListId}
+                    onChange={(e) => setFormAccessListId(e.target.value)}
                   >
-                    Country DB {geoipStatus?.country_db_loaded ? 'ready' : 'missing'}
-                  </span>
-                  <span
-                    className={cn(
-                      'rounded-full px-2.5 py-1 font-medium',
-                      geoipStatus?.asn_db_loaded
-                        ? 'bg-green-g1/15 text-green-g1'
-                        : 'bg-yellow-y1/15 text-yellow-y1',
-                    )}
-                  >
-                    ASN DB {geoipStatus?.asn_db_loaded ? 'ready' : 'missing'}
-                  </span>
-                </div>
-                {geoipStatus?.country_db_path || geoipStatus?.asn_db_path ? (
-                  <ul className="space-y-1 font-mono text-[11px] text-muted">
-                    {geoipStatus.country_db_path ? (
-                      <li>country: {geoipStatus.country_db_path}</li>
-                    ) : null}
-                    {geoipStatus.asn_db_path ? <li>asn: {geoipStatus.asn_db_path}</li> : null}
-                  </ul>
-                ) : null}
-                <Checkbox
-                  checked={formGeoipEnabled}
-                  onChange={setFormGeoipEnabled}
-                  className="text-sm"
-                  label="Enable GeoIP allow / deny"
-                />
-                {formGeoipEnabled && !geoipStatus?.country_db_loaded ? (
-                  <p className="rounded-md border border-yellow-y1/30 bg-yellow-y1/10 px-3 py-2 text-xs text-yellow-y1">
-                    Country DB is not loaded — country allow/deny will fail open until an MMDB is
-                    available.
-                  </p>
-                ) : null}
-                {formGeoipEnabled &&
-                (formGeoipAllowAsns.trim() || formGeoipDenyAsns.trim()) &&
-                !geoipStatus?.asn_db_loaded ? (
-                  <p className="rounded-md border border-yellow-y1/30 bg-yellow-y1/10 px-3 py-2 text-xs text-yellow-y1">
-                    ASN DB is not loaded — ASN allow/deny will fail open until GeoLite2-ASN.mmdb or ip2asn-combined.tsv is available.
-                  </p>
-                ) : null}
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <ConfigTextField
-                    label="Allow countries"
-                    example="TH, US"
-                    value={formGeoipAllowCountries}
-                    onChange={setFormGeoipAllowCountries}
-                    disabled={!formGeoipEnabled}
-                  />
-                  <ConfigTextField
-                    label="Deny countries"
-                    example="CN, RU"
-                    value={formGeoipDenyCountries}
-                    onChange={setFormGeoipDenyCountries}
-                    disabled={!formGeoipEnabled}
-                  />
-                  <ConfigTextField
-                    label="Allow ASNs"
-                    example="13335, AS15169"
-                    value={formGeoipAllowAsns}
-                    onChange={setFormGeoipAllowAsns}
-                    disabled={!formGeoipEnabled}
-                  />
-                  <ConfigTextField
-                    label="Deny ASNs"
-                    example="12345"
-                    value={formGeoipDenyAsns}
-                    onChange={setFormGeoipDenyAsns}
-                    disabled={!formGeoipEnabled}
-                  />
-                </div>
+                    <option value="">None</option>
+                    {accessLists.map((list) => (
+                      <option key={list.id} value={list.id}>
+                        {list.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="text-xs text-text-secondary">
+                  Manage lists under Access Control.
+                </p>
               </div>
 
               <div className={sectionCls}>
-                <h3 className={sectionTitleCls}>WAF / bot / captcha</h3>
-                <div className="flex flex-col gap-1">
-                  <Checkbox
-                    checked={formWafEnabled}
-                    onChange={setFormWafEnabled}
-                    className="text-sm"
-                    label="Enable WAF (built-in SQLi / XSS / path traversal)"
-                  />
-                  <Checkbox
-                    checked={formWafBuiltin}
-                    onChange={setFormWafBuiltin}
-                    className="text-sm"
-                    label="Use built-in WAF rules"
-                    disabled={!formWafEnabled}
-                  />
-                  <Checkbox
-                    checked={formBotEnabled}
-                    onChange={setFormBotEnabled}
-                    className="text-sm"
-                    label="Enable bot scoring"
-                  />
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className={labelCls}>
-                    Challenge score
-                    <input
-                      className={inputCls}
-                      value={formBotChallenge}
-                      onChange={(e) => setFormBotChallenge(e.target.value)}
-                      disabled={!formBotEnabled}
-                    />
-                  </label>
-                  <label className={labelCls}>
-                    Block score
-                    <input
-                      className={inputCls}
-                      value={formBotBlock}
-                      onChange={(e) => setFormBotBlock(e.target.value)}
-                      disabled={!formBotEnabled}
-                    />
-                  </label>
-                </div>
-                <Checkbox
-                  checked={formCaptchaEnabled}
-                  onChange={setFormCaptchaEnabled}
-                  className="text-sm"
-                  label="Enable math captcha for challenges"
-                />
+                <h3 className={sectionTitleCls}>WAF</h3>
+                <label className={labelCls}>
+                  WAF policy
+                  <select
+                    className={inputCls}
+                    value={formWafPolicyId}
+                    onChange={(e) => setFormWafPolicyId(e.target.value)}
+                  >
+                    <option value="">None</option>
+                    {wafPolicies.map((policy) => (
+                      <option key={policy.id} value={policy.id}>
+                        {policy.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <p className="text-xs text-text-secondary">
-                  Challenge page: <code className="font-mono">/.pertisk/captcha</code>. Set{' '}
-                  <code className="font-mono">PERTISK_CAPTCHA_SECRET</code> for stable cookies across
-                  restarts.
+                  Manage policies under WAF.
                 </p>
               </div>
             </div>

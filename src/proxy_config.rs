@@ -66,6 +66,28 @@ pub struct PathRewrite {
     pub upstream: Option<String>,
 }
 
+/// Named Access Control List (reusable GeoIP profile).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccessList {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "crate::geoip::GeoIpPolicy::is_default")]
+    pub geoip: crate::geoip::GeoIpPolicy,
+}
+
+/// Named WAF / bot / captcha policy profile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamedWafPolicy {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "crate::security::SecurityPolicy::is_default")]
+    pub security: crate::security::SecurityPolicy,
+}
+
 /// Site/route: host + paths + backend reference.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Site {
@@ -93,10 +115,18 @@ pub struct Site {
     /// so upstream apps (e.g. Git login notifications) see the real client IP.
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub forward_client_ip: bool,
+    /// Optional reference to a named Access Control List (GeoIP profile).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_list_id: Option<String>,
+    /// Optional reference to a named WAF policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waf_policy_id: Option<String>,
     /// GeoIP allow/deny (country + ASN). Disabled by default.
+    /// When `access_list_id` is set, apply resolves from that list (this field is a snapshot).
     #[serde(default, skip_serializing_if = "crate::geoip::GeoIpPolicy::is_default")]
     pub geoip: crate::geoip::GeoIpPolicy,
     /// WAF / bot / captcha policy. Disabled by default.
+    /// When `waf_policy_id` is set, apply resolves from that policy (this field is a snapshot).
     #[serde(default, skip_serializing_if = "crate::security::SecurityPolicy::is_default")]
     pub security: crate::security::SecurityPolicy,
 }
@@ -282,6 +312,12 @@ pub struct Config {
     pub backends: Vec<Backend>,
     /// Sites (host + routes + backend).
     pub sites: Vec<Site>,
+    /// Named Access Control Lists (GeoIP profiles) attachable to sites.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub access_lists: Vec<AccessList>,
+    /// Named WAF / bot / captcha policies attachable to sites.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waf_policies: Vec<NamedWafPolicy>,
     /// TLS configs (ACME or file).
     #[serde(default)]
     pub tls: Vec<TlsConfig>,
@@ -344,6 +380,8 @@ impl Default for Config {
             management_addr: default_management_addr(),
             backends: Vec::new(),
             sites: Vec::new(),
+            access_lists: Vec::new(),
+            waf_policies: Vec::new(),
             tls: Vec::new(),
             security_headers: default_security_headers(),
             proxy_log: true,
@@ -361,6 +399,36 @@ impl Config {
     /// Proxy listen ports and configured upstream targets (for management UI).
     pub fn upstream_ports_summary(&self) -> UpstreamPortsSummary {
         upstream_ports_summary(self)
+    }
+
+    /// Effective GeoIP for a site: named Access List when id resolves, else embedded policy.
+    pub fn resolve_site_geoip(&self, site: &Site) -> crate::geoip::GeoIpPolicy {
+        if let Some(id) = site
+            .access_list_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if let Some(list) = self.access_lists.iter().find(|l| l.id == id) {
+                return list.geoip.clone().normalized();
+            }
+        }
+        site.geoip.clone().normalized()
+    }
+
+    /// Effective security for a site: named WAF policy when id resolves, else embedded policy.
+    pub fn resolve_site_security(&self, site: &Site) -> crate::security::SecurityPolicy {
+        if let Some(id) = site
+            .waf_policy_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if let Some(policy) = self.waf_policies.iter().find(|p| p.id == id) {
+                return policy.security.clone().normalized();
+            }
+        }
+        site.security.clone().normalized()
     }
 }
 
@@ -546,6 +614,8 @@ mod upstream_parse_tests {
             security_headers: None,
             http3_alt_svc_enabled: true,
             forward_client_ip: false,
+            access_list_id: None,
+            waf_policy_id: None,
             geoip: Default::default(),
             security: Default::default(),
             ingress_namespace: None,
@@ -704,6 +774,8 @@ backends:
             k8s_resource_kind: None,
             http3_alt_svc_enabled: true,
             forward_client_ip: false,
+            access_list_id: None,
+            waf_policy_id: None,
             geoip: Default::default(),
             security: Default::default(),
         };

@@ -46,6 +46,9 @@ pub fn config_to_route_table(config: &Config) -> Result<RouteTable> {
             )
         })?;
 
+        let geoip = config.resolve_site_geoip(site);
+        let security = config.resolve_site_security(site);
+
         let routes = if site.routes.is_empty() {
             vec![site_route(
                 "/",
@@ -53,8 +56,8 @@ pub fn config_to_route_table(config: &Config) -> Result<RouteTable> {
                 None,
                 &default_target,
                 site.forward_client_ip,
-                site.geoip.clone(),
-                site.security.clone(),
+                geoip.clone(),
+                security.clone(),
             )]
         } else {
             let mut built = Vec::with_capacity(site.routes.len());
@@ -66,8 +69,8 @@ pub fn config_to_route_table(config: &Config) -> Result<RouteTable> {
                     path_only_rewrite(r.rewrite.as_deref()),
                     &target,
                     site.forward_client_ip,
-                    site.geoip.clone(),
-                    site.security.clone(),
+                    geoip.clone(),
+                    security.clone(),
                 ));
             }
             built
@@ -201,6 +204,8 @@ pub fn migrate_from_routes_yaml(yaml: &str) -> Result<Config> {
             k8s_resource_kind: None,
             http3_alt_svc_enabled: true,
             forward_client_ip: false,
+            access_list_id: None,
+            waf_policy_id: None,
             geoip: Default::default(),
             security: Default::default(),
         });
@@ -307,6 +312,8 @@ mod tests {
                 k8s_resource_kind: None,
                 http3_alt_svc_enabled: true,
                 forward_client_ip: true,
+                access_list_id: None,
+                waf_policy_id: None,
                 geoip: Default::default(),
                 security: Default::default(),
             }],
@@ -383,6 +390,8 @@ mod tests {
                     k8s_resource_kind: None,
                     http3_alt_svc_enabled: true,
                     forward_client_ip: true,
+                    access_list_id: None,
+                    waf_policy_id: None,
                     geoip: Default::default(),
                     security: Default::default(),
                 },
@@ -401,6 +410,8 @@ mod tests {
                     k8s_resource_kind: None,
                     http3_alt_svc_enabled: true,
                     forward_client_ip: true,
+                    access_list_id: None,
+                    waf_policy_id: None,
                     geoip: Default::default(),
                     security: Default::default(),
                 },

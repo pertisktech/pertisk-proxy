@@ -846,6 +846,10 @@ pub struct IngressFormRow {
     pub geoip: crate::geoip::GeoIpPolicy,
     #[serde(skip_serializing_if = "crate::security::SecurityPolicy::is_default")]
     pub security: crate::security::SecurityPolicy,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_list_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waf_policy_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -880,6 +884,10 @@ pub struct CreateIngressBody {
     pub geoip: crate::geoip::GeoIpPolicy,
     #[serde(default)]
     pub security: crate::security::SecurityPolicy,
+    #[serde(default)]
+    pub access_list_id: Option<String>,
+    #[serde(default)]
+    pub waf_policy_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1161,14 +1169,53 @@ fn backend_port(number: Option<i32>, name: Option<&str>) -> Option<ServiceBacken
     }
 }
 
+pub const ACCESS_LIST_ID_ANNOTATION: &str = "proxy.pertisk.tech/access-list-id";
+pub const WAF_POLICY_ID_ANNOTATION: &str = "proxy.pertisk.tech/waf-policy-id";
+
+/// Read named policy ids from Ingress / HTTPRoute annotations (form round-trip).
+pub fn policy_ids_from_annotations(
+    annotations: Option<&std::collections::BTreeMap<String, String>>,
+) -> (Option<String>, Option<String>) {
+    let Some(map) = annotations else {
+        return (None, None);
+    };
+    let read = |key: &str| {
+        map.get(key)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    (
+        read(ACCESS_LIST_ID_ANNOTATION),
+        read(WAF_POLICY_ID_ANNOTATION),
+    )
+}
+
+fn apply_policy_id_annotations(
+    annotations: &mut std::collections::BTreeMap<String, String>,
+    access_list_id: Option<&str>,
+    waf_policy_id: Option<&str>,
+) {
+    annotations.remove(ACCESS_LIST_ID_ANNOTATION);
+    annotations.remove(WAF_POLICY_ID_ANNOTATION);
+    if let Some(id) = access_list_id.map(str::trim).filter(|s| !s.is_empty()) {
+        annotations.insert(ACCESS_LIST_ID_ANNOTATION.to_string(), id.to_string());
+    }
+    if let Some(id) = waf_policy_id.map(str::trim).filter(|s| !s.is_empty()) {
+        annotations.insert(WAF_POLICY_ID_ANNOTATION.to_string(), id.to_string());
+    }
+}
+
 fn merge_security_annotations(
     existing: Option<std::collections::BTreeMap<String, String>>,
     geoip: &crate::geoip::GeoIpPolicy,
     security: &crate::security::SecurityPolicy,
+    access_list_id: Option<&str>,
+    waf_policy_id: Option<&str>,
 ) -> Option<std::collections::BTreeMap<String, String>> {
     let mut annotations = existing.unwrap_or_default();
     crate::geoip::apply_annotations(&mut annotations, geoip);
     crate::security::apply_annotations(&mut annotations, security);
+    apply_policy_id_annotations(&mut annotations, access_list_id, waf_policy_id);
     if annotations.is_empty() {
         None
     } else {
@@ -1333,7 +1380,13 @@ pub async fn kubernetes_ingresses_create(
         metadata: kube::core::ObjectMeta {
             name: Some(ingress_name.clone()),
             namespace: Some(ingress_ns.to_string()),
-            annotations: merge_security_annotations(None, &body.geoip, &body.security),
+            annotations: merge_security_annotations(
+                None,
+                &body.geoip,
+                &body.security,
+                body.access_list_id.as_deref(),
+                body.waf_policy_id.as_deref(),
+            ),
             ..Default::default()
         },
         spec: Some(spec),
@@ -1464,6 +1517,7 @@ pub async fn kubernetes_ingress_get(
     let first_service_port = first_route.and_then(|route| route.service_port);
     let first_service_port_name = first_route.and_then(|route| route.service_port_name.clone());
     let annotations = ingress.metadata.annotations.as_ref();
+    let (access_list_id, waf_policy_id) = policy_ids_from_annotations(annotations);
     let row = IngressFormRow {
         namespace: namespace.clone(),
         name: name.clone(),
@@ -1480,6 +1534,8 @@ pub async fn kubernetes_ingress_get(
         gateway_namespace: None,
         geoip: crate::geoip::policy_from_annotations(annotations),
         security: crate::security::policy_from_annotations(annotations),
+        access_list_id,
+        waf_policy_id,
     };
     Json(row).into_response()
 }
@@ -1580,6 +1636,8 @@ pub async fn kubernetes_ingress_update(
         current.metadata.annotations.clone(),
         &body.geoip,
         &body.security,
+        body.access_list_id.as_deref(),
+        body.waf_policy_id.as_deref(),
     );
     match api.replace(&name, &PostParams::default(), &current).await {
         Ok(_) => (
@@ -2261,7 +2319,13 @@ pub async fn kubernetes_gateway_sites_create(
         metadata: kube::core::ObjectMeta {
             name: Some(resource_name.clone()),
             namespace: Some(ns.clone()),
-            annotations: merge_security_annotations(None, &body.geoip, &body.security),
+            annotations: merge_security_annotations(
+                None,
+                &body.geoip,
+                &body.security,
+                body.access_list_id.as_deref(),
+                body.waf_policy_id.as_deref(),
+            ),
             ..Default::default()
         },
         spec: build_httproute_spec(
@@ -2362,6 +2426,7 @@ pub async fn kubernetes_gateway_site_get(
     };
     let first_route = routes.first();
     let annotations = route.metadata.annotations.as_ref();
+    let (access_list_id, waf_policy_id) = policy_ids_from_annotations(annotations);
     let row = IngressFormRow {
         namespace: namespace.clone(),
         name: name.clone(),
@@ -2388,6 +2453,8 @@ pub async fn kubernetes_gateway_site_get(
         gateway_namespace: Some(gateway_namespace),
         geoip: crate::geoip::policy_from_annotations(annotations),
         security: crate::security::policy_from_annotations(annotations),
+        access_list_id,
+        waf_policy_id,
     };
     Json(row).into_response()
 }
@@ -2504,6 +2571,8 @@ pub async fn kubernetes_gateway_site_update(
         httproute.metadata.annotations.clone(),
         &body.geoip,
         &body.security,
+        body.access_list_id.as_deref(),
+        body.waf_policy_id.as_deref(),
     );
     match route_api.replace(&name, &PostParams::default(), &httproute).await {
         Ok(_) => (

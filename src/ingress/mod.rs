@@ -132,6 +132,27 @@ pub fn run() -> anyhow::Result<()> {
         .unwrap_or_else(|_| std::env::temp_dir().join("pertisk-proxy-certs"));
     std::fs::create_dir_all(&certs_dir).ok();
 
+    let db = match crate::db::Database::open(api::resolve_db_path()) {
+        Ok(database) => {
+            info!(path = %database.path().display(), "opened SQLite for Access Control / WAF policies");
+            Some(Arc::new(database))
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "SQLite unavailable; Access Control / WAF named policies disabled"
+            );
+            None
+        }
+    };
+    if let Some(ref database) = db {
+        if let Ok(Some(stored)) = tokio_runtime.block_on(database.get_proxy_config()) {
+            let mut cfg = tokio_runtime.block_on(runtime_config.write());
+            cfg.access_lists = stored.access_lists;
+            cfg.waf_policies = stored.waf_policies;
+        }
+    }
+
     let proxy_log_enabled = Arc::new(AtomicBool::new(
         std::env::var("PERTISK_PROXY_LOG")
             .ok()
@@ -192,6 +213,7 @@ pub fn run() -> anyhow::Result<()> {
         Arc::clone(&proxy_log_enabled),
         certs_dir,
         metrics.clone(),
+        db,
     );
 
     let management_addr = api::management_addr();

@@ -154,6 +154,54 @@ export type Metrics = {
   metrics_addr: string;
 };
 
+export type GeoIpConfig = {
+  enabled?: boolean;
+  allow_countries?: string[];
+  deny_countries?: string[];
+  allow_asns?: number[];
+  deny_asns?: number[];
+};
+
+export type SecurityConfig = {
+  waf?: {
+    enabled?: boolean;
+    use_builtin_rules?: boolean;
+    rules?: Array<{
+      id: string;
+      enabled?: boolean;
+      action?: 'block' | 'log' | 'challenge';
+      methods?: string[];
+      path_contains?: string;
+      query_contains?: string;
+      ua_contains?: string;
+    }>;
+  };
+  bot?: {
+    enabled?: boolean;
+    challenge_score?: number;
+    block_score?: number;
+    rate_limit_per_min?: number;
+  };
+  captcha?: {
+    enabled?: boolean;
+    cookie_ttl_secs?: number;
+  };
+};
+
+export type AccessList = {
+  id: string;
+  name: string;
+  description?: string | null;
+  geoip: GeoIpConfig;
+};
+
+export type NamedWafPolicy = {
+  id: string;
+  name: string;
+  description?: string | null;
+  security: SecurityConfig;
+};
+
 export type Site = {
   host: string;
   backend: string;
@@ -163,40 +211,14 @@ export type Site = {
   k8s_resource_kind?: string | null;
   /** Inject X-Real-IP and X-Forwarded-For for upstream apps. */
   forward_client_ip?: boolean;
+  /** Named Access Control List id (GeoIP profile). */
+  access_list_id?: string | null;
+  /** Named WAF policy id. */
+  waf_policy_id?: string | null;
   /** GeoIP country/ASN allow/deny. */
-  geoip?: {
-    enabled?: boolean;
-    allow_countries?: string[];
-    deny_countries?: string[];
-    allow_asns?: number[];
-    deny_asns?: number[];
-  };
+  geoip?: GeoIpConfig;
   /** WAF / bot / captcha. */
-  security?: {
-    waf?: {
-      enabled?: boolean;
-      use_builtin_rules?: boolean;
-      rules?: Array<{
-        id: string;
-        enabled?: boolean;
-        action?: 'block' | 'log' | 'challenge';
-        methods?: string[];
-        path_contains?: string;
-        query_contains?: string;
-        ua_contains?: string;
-      }>;
-    };
-    bot?: {
-      enabled?: boolean;
-      challenge_score?: number;
-      block_score?: number;
-      rate_limit_per_min?: number;
-    };
-    captcha?: {
-      enabled?: boolean;
-      cookie_ttl_secs?: number;
-    };
-  };
+  security?: SecurityConfig;
 };
 
 export type K8sNamespaceRow = { name: string; created_at?: string | null };
@@ -262,6 +284,8 @@ export type IngressFormRow = {
   gateway_name?: string;
   geoip?: Site['geoip'];
   security?: Site['security'];
+  access_list_id?: string | null;
+  waf_policy_id?: string | null;
 };
 
 export type IngressSubmitBody = IngressFormRow & {
@@ -320,6 +344,8 @@ export type ProxyConfig = {
   sites: Site[];
   backends: Backend[];
   tls: TlsConfig[];
+  access_lists?: AccessList[];
+  waf_policies?: NamedWafPolicy[];
   proxy_log?: boolean;
 };
 
@@ -442,6 +468,32 @@ export const api = {
       }),
     delete: (id: string) =>
       request<{ ok: boolean }>(`/dns-providers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
+  accessLists: {
+    list: () => request<AccessList[]>('/access-lists'),
+    get: (id: string) => request<AccessList>(`/access-lists/${encodeURIComponent(id)}`),
+    create: (body: { name: string; description?: string; geoip?: GeoIpConfig }) =>
+      request<{ id: string }>('/access-lists', { method: 'POST', body: JSON.stringify(body) }),
+    update: (id: string, body: { name: string; description?: string; geoip?: GeoIpConfig }) =>
+      request<{ ok: boolean }>(`/access-lists/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+    delete: (id: string) =>
+      request<{ ok: boolean }>(`/access-lists/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
+  wafPolicies: {
+    list: () => request<NamedWafPolicy[]>('/waf-policies'),
+    get: (id: string) => request<NamedWafPolicy>(`/waf-policies/${encodeURIComponent(id)}`),
+    create: (body: { name: string; description?: string; security?: SecurityConfig }) =>
+      request<{ id: string }>('/waf-policies', { method: 'POST', body: JSON.stringify(body) }),
+    update: (id: string, body: { name: string; description?: string; security?: SecurityConfig }) =>
+      request<{ ok: boolean }>(`/waf-policies/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+    delete: (id: string) =>
+      request<{ ok: boolean }>(`/waf-policies/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   },
   kubernetes: {
     namespaces: () => request<K8sNamespaceRow[]>('/kubernetes/namespaces'),

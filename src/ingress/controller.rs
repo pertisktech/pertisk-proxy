@@ -114,12 +114,11 @@ impl IngressController {
 
             let ns = ingress.namespace().unwrap_or_else(|| "default".to_string());
             let ingress_name = ingress.name_any();
-            let geoip = crate::geoip::policy_from_annotations(
-                ingress.metadata.annotations.as_ref(),
-            );
-            let security = crate::security::policy_from_annotations(
-                ingress.metadata.annotations.as_ref(),
-            );
+            let annotations = ingress.metadata.annotations.as_ref();
+            let geoip = crate::geoip::policy_from_annotations(annotations);
+            let security = crate::security::policy_from_annotations(annotations);
+            let (access_list_id, waf_policy_id) =
+                crate::api::kubernetes::policy_ids_from_annotations(annotations);
             let rule_hosts: Vec<String> = spec
                 .rules
                 .as_deref()
@@ -171,6 +170,8 @@ impl IngressController {
                         k8s_resource_kind: Some("ingress".to_string()),
                         http3_alt_svc_enabled: true,
                         forward_client_ip: true,
+                        access_list_id: access_list_id.clone(),
+                        waf_policy_id: waf_policy_id.clone(),
                         geoip: geoip.clone(),
                         security: security.clone(),
                     });
@@ -318,10 +319,16 @@ impl IngressController {
 
         let n_backends = backends.len();
         let n_sites = sites.len();
+        let (access_lists, waf_policies) = {
+            let prev = self.runtime_config.read().await;
+            (prev.access_lists.clone(), prev.waf_policies.clone())
+        };
         let config = Config {
             backends,
             sites,
             tls: tls_from_secrets,
+            access_lists,
+            waf_policies,
             ..Config::default()
         };
         if let Err(e) = apply::apply_config(self.router.as_ref(), &config) {
@@ -507,9 +514,11 @@ impl IngressController {
         for route in &routes {
             let route_ns = route.namespace().unwrap_or_else(|| "default".to_string());
             let route_name = route.name_any();
-            let geoip = crate::geoip::policy_from_annotations(route.metadata.annotations.as_ref());
-            let security =
-                crate::security::policy_from_annotations(route.metadata.annotations.as_ref());
+            let annotations = route.metadata.annotations.as_ref();
+            let geoip = crate::geoip::policy_from_annotations(annotations);
+            let security = crate::security::policy_from_annotations(annotations);
+            let (access_list_id, waf_policy_id) =
+                crate::api::kubernetes::policy_ids_from_annotations(annotations);
             let attached = attached_gateways(&route, &managed_gateways);
             if attached.is_empty() {
                 continue;
@@ -599,6 +608,8 @@ impl IngressController {
                                 k8s_resource_kind: Some("httproute".to_string()),
                                 http3_alt_svc_enabled: true,
                                 forward_client_ip: true,
+                                access_list_id: access_list_id.clone(),
+                                waf_policy_id: waf_policy_id.clone(),
                                 geoip: geoip.clone(),
                                 security: security.clone(),
                             });

@@ -6,6 +6,9 @@ pub mod kubernetes;
 #[cfg(feature = "admin")]
 pub mod backup;
 
+#[cfg(feature = "admin")]
+pub mod policies;
+
 #[cfg(all(feature = "admin", feature = "acme"))]
 pub mod acme;
 
@@ -182,6 +185,26 @@ pub fn router(state: AdminState) -> Router {
             get(dns_providers_get)
                 .put(dns_providers_put)
                 .delete(dns_providers_delete),
+        )
+        .route(
+            "/api/access-lists",
+            get(policies::access_lists_list).post(policies::access_lists_create),
+        )
+        .route(
+            "/api/access-lists/{id}",
+            get(policies::access_lists_get)
+                .put(policies::access_lists_put)
+                .delete(policies::access_lists_delete),
+        )
+        .route(
+            "/api/waf-policies",
+            get(policies::waf_policies_list).post(policies::waf_policies_create),
+        )
+        .route(
+            "/api/waf-policies/{id}",
+            get(policies::waf_policies_get)
+                .put(policies::waf_policies_put)
+                .delete(policies::waf_policies_delete),
         )
         .route("/api/backup/export", get(backup::backup_export))
         .route("/api/backup/restore", post(backup::backup_restore));
@@ -1804,7 +1827,7 @@ async fn get_tls(State(state): State<AdminState>) -> Result<Json<TlsResponse>, (
 }
 
 #[derive(Serialize)]
-struct ApiError {
+pub(crate) struct ApiError {
     error: String,
 }
 
@@ -2013,15 +2036,19 @@ pub fn build_ingress_state(
     proxy_log_enabled: Arc<AtomicBool>,
     certs_dir: PathBuf,
     metrics: ProxyMetrics,
+    db: Option<Arc<Database>>,
 ) -> AdminState {
     let env_password = admin_password();
-    let auth_required = env_password.is_some()
+    let auth_required = db.is_some()
+        || env_password.is_some()
         || std::env::var("PERTISK_API_TOKEN")
             .ok()
             .map(|s| !s.trim().is_empty())
             .unwrap_or(false);
     if !auth_required {
         warn!("PERTISK_PASSWORD / PERTISK_API_TOKEN not set; ingress management API allows unauthenticated access");
+    } else if db.is_some() {
+        info!("ingress management API: SQLite available for Access Control / WAF policies");
     }
     let proxy_config = ProxyConfig {
         db_path: certs_dir.clone(),
@@ -2041,7 +2068,7 @@ pub fn build_ingress_state(
         sessions,
         admin_dist: resolve_admin_dist(),
         dev_origin: admin_dev_origin(),
-        db: None,
+        db,
         certs_dir,
         http01_store,
         proxy_log,
