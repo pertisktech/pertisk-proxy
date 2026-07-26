@@ -67,6 +67,7 @@ pub fn run(
     );
 
     let pingora_conf = crate::runtime::pingora_server_conf(runtime_cfg);
+    let tcp_ka = crate::runtime::downstream_tcp_keepalive_config();
     info!(
         pingora_threads = pingora_conf.threads,
         pingora_listener_tasks = pingora_conf.listener_tasks_per_fd,
@@ -74,6 +75,10 @@ pub fn run(
         grace_period_seconds = pingora_conf.grace_period_seconds,
         graceful_shutdown_timeout_seconds = pingora_conf.graceful_shutdown_timeout_seconds,
         tcp_listen_backlog = crate::runtime::tcp_listen_backlog(runtime_cfg),
+        tcp_keepalive_enabled = tcp_ka.enabled,
+        tcp_keepalive_idle_secs = tcp_ka.idle_secs,
+        tcp_keepalive_interval_secs = tcp_ka.interval_secs,
+        tcp_keepalive_count = tcp_ka.count,
         runtime_mode = runtime_cfg.resolved_mode.as_str(),
         "pingora runtime tuning"
     );
@@ -96,7 +101,7 @@ pub fn run(
     );
     let mut proxy = http_proxy_service(&server.configuration, gateway);
     for addr in tcp_bind_addrs(&server_config.http_listen) {
-        if let Some(opts) = dual_stack_tcp_options(&addr) {
+        if let Some(opts) = tcp_listener_options(&addr) {
             proxy.add_tcp_with_settings(&addr, opts);
         } else {
             proxy.add_tcp(&addr);
@@ -123,7 +128,7 @@ pub fn run(
                 acme_tls_pending,
                 https_sni_always,
             )?;
-            proxy.add_tls_with_settings(&addr, dual_stack_tcp_options(&addr), tls_settings);
+            proxy.add_tls_with_settings(&addr, tcp_listener_options(&addr), tls_settings);
             info!(
                 addr = %addr,
                 sni = sni_enabled,
@@ -187,17 +192,28 @@ pub fn run(
     server.run_forever();
 }
 
-/// Dual-stack TCP on `[::]:port` (IPV6_V6ONLY=0), matching UDP QUIC and pertisk-rproxy.
-fn dual_stack_tcp_options(addr: &str) -> Option<TcpSocketOptions> {
-    addr
+/// TCP options for Pingora listeners: dual-stack on `[::]` plus optional keepalive.
+fn tcp_listener_options(addr: &str) -> Option<TcpSocketOptions> {
+    let mut opts = TcpSocketOptions::default();
+    let mut any = false;
+
+    if let Some(ka) = crate::runtime::downstream_tcp_keepalive() {
+        opts.tcp_keepalive = Some(ka);
+        any = true;
+    }
+
+    if addr
         .parse::<std::net::SocketAddr>()
         .ok()
         .filter(|a| a.is_ipv6())
-        .map(|_| {
-            let mut opts = TcpSocketOptions::default();
-            opts.ipv6_only = Some(false);
-            opts
-        })
+        .is_some()
+    {
+        // Dual-stack TCP on `[::]:port` (IPV6_V6ONLY=0), matching UDP QUIC.
+        opts.ipv6_only = Some(false);
+        any = true;
+    }
+
+    any.then_some(opts)
 }
 
 fn https_should_listen(

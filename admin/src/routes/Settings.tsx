@@ -413,6 +413,14 @@ export function Settings() {
                       value={tuning.pingora_upstream_keepalive_pool_size}
                     />
                     <SettingRow
+                      label="Downstream TCP keepalive"
+                      value={
+                        tuning.downstream_tcp_keepalive.enabled
+                          ? `${tuning.downstream_tcp_keepalive.idle_secs}s / ${tuning.downstream_tcp_keepalive.interval_secs}s / ${tuning.downstream_tcp_keepalive.count}`
+                          : 'off'
+                      }
+                    />
+                    <SettingRow
                       label="H3 upstream idle / host"
                       value={tuning.h3_upstream_pool.max_idle_per_host}
                     />
@@ -623,6 +631,22 @@ export function Settings() {
                   <EnvVar
                     name="PERTISK_TCP_LISTEN_BACKLOG"
                     description="Application listen backlog; performance default is 8192."
+                  />
+                  <EnvVar
+                    name="PERTISK_TCP_KEEPALIVE"
+                    description="Enable client-facing TCP keepalive on HTTP/HTTPS listeners (default on; set 0 to disable)."
+                  />
+                  <EnvVar
+                    name="PERTISK_TCP_KEEPALIVE_IDLE_SECS"
+                    description="Idle time before keepalive probes; default 60."
+                  />
+                  <EnvVar
+                    name="PERTISK_TCP_KEEPALIVE_INTERVAL_SECS"
+                    description="Seconds between keepalive probes; default 10."
+                  />
+                  <EnvVar
+                    name="PERTISK_TCP_KEEPALIVE_COUNT"
+                    description="Failed probes before closing the connection; default 5."
                   />
                   <EnvVar
                     name="PERTISK_H3_UPSTREAM_POOL_MAX_IDLE"

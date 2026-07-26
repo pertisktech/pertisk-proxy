@@ -173,6 +173,24 @@ spec:
             - name: PERTISK_TCP_LISTEN_BACKLOG
               value: {{ .Values.runtime.tcpListenBacklog | quote }}
             {{- end }}
+            {{- with .Values.runtime.tcpKeepalive }}
+            {{- if hasKey . "enabled" }}
+            - name: PERTISK_TCP_KEEPALIVE
+              value: {{ ternary "1" "0" .enabled | quote }}
+            {{- end }}
+            {{- if .idleSecs }}
+            - name: PERTISK_TCP_KEEPALIVE_IDLE_SECS
+              value: {{ .idleSecs | quote }}
+            {{- end }}
+            {{- if .intervalSecs }}
+            - name: PERTISK_TCP_KEEPALIVE_INTERVAL_SECS
+              value: {{ .intervalSecs | quote }}
+            {{- end }}
+            {{- if .count }}
+            - name: PERTISK_TCP_KEEPALIVE_COUNT
+              value: {{ .count | quote }}
+            {{- end }}
+            {{- end }}
             - name: PERTISK_PROXY_LOG
               value: {{ .Values.runtime.proxyLog | quote }}
             - name: PERTISK_LOG_LEVEL

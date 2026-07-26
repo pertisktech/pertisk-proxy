@@ -123,6 +123,13 @@ runtime:
   listenerTasks: 4
   # -- TCP listen backlog (performance default: 8192)
   tcpListenBacklog: 8192
+  # -- Client-facing TCP keepalive on HTTP/HTTPS listeners (null = use binary defaults 60/10/5)
+  tcpKeepalive: null
+  # tcpKeepalive:
+  #   enabled: true
+  #   idleSecs: 60
+  #   intervalSecs: 10
+  #   count: 5
   # -- Enable proxy access logging (per-request log entries). Disable for high-throughput ingress
   # deployments: Kubernetes already captures stdout/stderr and per-request logging adds lock contention.
   proxyLog: false

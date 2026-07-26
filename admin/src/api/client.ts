@@ -94,6 +94,12 @@ export type TuningInfo = {
   pingora_upstream_keepalive_pool_size: number;
   h3_worker_threads: number;
   tcp_listen_backlog: number;
+  downstream_tcp_keepalive: {
+    enabled: boolean;
+    idle_secs: number;
+    interval_secs: number;
+    count: number;
+  };
   h3_stack: string;
   udp_offload: string;
   h3_upstream_pool: {

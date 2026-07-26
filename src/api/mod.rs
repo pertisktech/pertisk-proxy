@@ -766,6 +766,7 @@ struct TuningInfo {
     pingora_upstream_keepalive_pool_size: usize,
     h3_worker_threads: usize,
     tcp_listen_backlog: i32,
+    downstream_tcp_keepalive: DownstreamTcpKeepaliveInfo,
     h3_stack: &'static str,
     udp_offload: &'static str,
     h3_upstream_pool: H3UpstreamPoolInfo,
@@ -773,6 +774,14 @@ struct TuningInfo {
     /// Distinct from `ManagementInfo.http3`, which is route/config storage used by tokio-quiche.
     effective_quic: Option<EffectiveQuicInfo>,
     kernel: KernelTuningInfo,
+}
+
+#[derive(Serialize)]
+struct DownstreamTcpKeepaliveInfo {
+    enabled: bool,
+    idle_secs: u64,
+    interval_secs: u64,
+    count: usize,
 }
 
 #[derive(Serialize)]
@@ -889,6 +898,7 @@ fn effective_quic_info() -> Option<EffectiveQuicInfo> {
 fn tuning_info(runtime_cfg: &RuntimeConfig) -> TuningInfo {
     let pingora = crate::runtime::pingora_server_conf(runtime_cfg);
     let h3_pool = crate::h3::upstream_pool_config(runtime_cfg);
+    let tcp_ka = crate::runtime::downstream_tcp_keepalive_config();
     let h3_stack = if cfg!(feature = "h3-quinn") {
         "quinn"
     } else if cfg!(feature = "h3-quiche") {
@@ -906,6 +916,15 @@ fn tuning_info(runtime_cfg: &RuntimeConfig) -> TuningInfo {
         pingora_upstream_keepalive_pool_size: pingora.upstream_keepalive_pool_size,
         h3_worker_threads: crate::runtime::h3_worker_threads(runtime_cfg),
         tcp_listen_backlog: crate::runtime::tcp_listen_backlog(runtime_cfg),
+        downstream_tcp_keepalive: DownstreamTcpKeepaliveInfo {
+            enabled: tcp_ka.enabled
+                && tcp_ka.idle_secs > 0
+                && tcp_ka.interval_secs > 0
+                && tcp_ka.count > 0,
+            idle_secs: tcp_ka.idle_secs,
+            interval_secs: tcp_ka.interval_secs,
+            count: tcp_ka.count,
+        },
         h3_stack,
         udp_offload: if cfg!(target_os = "linux") {
             "automatic (GSO/GRO when supported)"

@@ -239,6 +239,69 @@ pub fn graceful_shutdown_timeout_seconds() -> u64 {
         .unwrap_or(DEFAULT)
 }
 
+/// Downstream (client-facing) TCP keepalive settings for Pingora listeners.
+///
+/// Defaults match common reverse-proxy practice (Aralez-style): idle 60s,
+/// probe every 10s, give up after 5 probes. Set `PERTISK_TCP_KEEPALIVE=0` to disable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownstreamTcpKeepalive {
+    pub enabled: bool,
+    pub idle_secs: u64,
+    pub interval_secs: u64,
+    pub count: usize,
+}
+
+fn env_u64(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+}
+
+fn env_usize(name: &str) -> Option<usize> {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+}
+
+pub fn downstream_tcp_keepalive_config() -> DownstreamTcpKeepalive {
+    const DEFAULT_IDLE: u64 = 60;
+    const DEFAULT_INTERVAL: u64 = 10;
+    const DEFAULT_COUNT: usize = 5;
+
+    let master = std::env::var("PERTISK_TCP_KEEPALIVE")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase());
+    let enabled = match master.as_deref() {
+        Some("0") | Some("false") | Some("off") | Some("no") => false,
+        Some("1") | Some("true") | Some("on") | Some("yes") | None => true,
+        Some(other) => other.parse::<u64>().map(|n| n != 0).unwrap_or(true),
+    };
+
+    DownstreamTcpKeepalive {
+        enabled,
+        idle_secs: env_u64("PERTISK_TCP_KEEPALIVE_IDLE_SECS").unwrap_or(DEFAULT_IDLE),
+        interval_secs: env_u64("PERTISK_TCP_KEEPALIVE_INTERVAL_SECS").unwrap_or(DEFAULT_INTERVAL),
+        count: env_usize("PERTISK_TCP_KEEPALIVE_COUNT").unwrap_or(DEFAULT_COUNT),
+    }
+}
+
+/// Pingora `TcpKeepalive` for accepted downstream connections, if enabled.
+pub fn downstream_tcp_keepalive() -> Option<pingora_core::protocols::TcpKeepalive> {
+    use std::time::Duration;
+
+    let cfg = downstream_tcp_keepalive_config();
+    if !cfg.enabled || cfg.idle_secs == 0 || cfg.interval_secs == 0 || cfg.count == 0 {
+        return None;
+    }
+    Some(pingora_core::protocols::TcpKeepalive {
+        idle: Duration::from_secs(cfg.idle_secs),
+        interval: Duration::from_secs(cfg.interval_secs),
+        count: cfg.count,
+        #[cfg(target_os = "linux")]
+        user_timeout: Duration::ZERO,
+    })
+}
+
 /// Build Pingora `ServerConf` tuned from runtime mode.
 pub fn pingora_server_conf(cfg: &RuntimeConfig) -> pingora_core::server::configuration::ServerConf {
     let mut conf = pingora_core::server::configuration::ServerConf::new()
