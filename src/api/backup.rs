@@ -14,9 +14,10 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::AdminState;
-use crate::db::DnsProviderRow;
+use crate::db::{DnsProviderRow, S3SettingsUpdate};
 use crate::log::ProxyLogEntry;
 use crate::proxy_config::Config;
+use crate::storage::s3 as s3_storage;
 
 #[derive(Debug, Deserialize)]
 pub struct BackupExportQuery {
@@ -38,6 +39,62 @@ pub struct RestoreBackupResponse {
     pub errors: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct S3SettingsResponse {
+    pub enabled: bool,
+    pub endpoint: String,
+    pub region: String,
+    pub bucket: String,
+    pub prefix: String,
+    pub access_key_id: String,
+    pub has_secret_access_key: bool,
+    pub force_path_style: bool,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateS3SettingsRequest {
+    pub enabled: bool,
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub region: String,
+    #[serde(default)]
+    pub bucket: String,
+    #[serde(default)]
+    pub prefix: String,
+    #[serde(default)]
+    pub access_key_id: String,
+    #[serde(default)]
+    pub secret_access_key: Option<String>,
+    #[serde(default)]
+    pub force_path_style: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExportS3Body {
+    #[serde(default)]
+    pub namespace: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExportS3Response {
+    pub ok: bool,
+    pub bucket: String,
+    pub key: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OkResponse {
+    pub ok: bool,
+}
+
+struct BuiltBackup {
+    filename: String,
+    content_type: &'static str,
+    body: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,13 +190,211 @@ pub async fn backup_restore(
     proxy_backup_restore(&state, body).await
 }
 
-async fn proxy_backup_export(state: &AdminState) -> Response {
-    let Some(db) = &state.db else {
+fn require_db(state: &AdminState) -> Result<&crate::db::Database, Response> {
+    state.db.as_deref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "database not configured" })),
+        )
+            .into_response()
+    })
+}
+
+fn row_to_s3_response(row: &crate::db::S3SettingsRow) -> S3SettingsResponse {
+    S3SettingsResponse {
+        enabled: row.enabled,
+        endpoint: row.endpoint.clone(),
+        region: row.region.clone(),
+        bucket: row.bucket.clone(),
+        prefix: row.prefix.clone(),
+        access_key_id: row.access_key_id.clone(),
+        has_secret_access_key: !row.secret_access_key.trim().is_empty(),
+        force_path_style: row.force_path_style,
+        updated_at: row.updated_at.clone(),
+    }
+}
+
+pub async fn s3_settings_get(State(state): State<AdminState>, headers: HeaderMap) -> Response {
+    if !super::is_authorized(&state, &headers).await {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let db = match require_db(&state) {
+        Ok(db) => db,
+        Err(r) => return r,
+    };
+    match db.get_s3_settings().await {
+        Ok(row) => Json(row_to_s3_response(&row)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn s3_settings_put(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Json(body): Json<UpdateS3SettingsRequest>,
+) -> Response {
+    if !super::is_authorized(&state, &headers).await {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let db = match require_db(&state) {
+        Ok(db) => db,
+        Err(r) => return r,
+    };
+    match db
+        .update_s3_settings(S3SettingsUpdate {
+            enabled: body.enabled,
+            endpoint: body.endpoint.trim().to_string(),
+            region: body.region.trim().to_string(),
+            bucket: body.bucket.trim().to_string(),
+            prefix: body.prefix.trim().to_string(),
+            access_key_id: body.access_key_id.trim().to_string(),
+            secret_access_key: body.secret_access_key,
+            force_path_style: body.force_path_style,
+        })
+        .await
+    {
+        Ok(row) => Json(row_to_s3_response(&row)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn s3_settings_test(State(state): State<AdminState>, headers: HeaderMap) -> Response {
+    if !super::is_authorized(&state, &headers).await {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let db = match require_db(&state) {
+        Ok(db) => db,
+        Err(r) => return r,
+    };
+    let settings = match db.get_s3_settings().await {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    match s3_storage::test_connection(&settings).await {
+        Ok(()) => Json(OkResponse { ok: true }).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn backup_export_s3(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Json(body): Json<ExportS3Body>,
+) -> Response {
+    if !super::is_authorized(&state, &headers).await {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let namespace = body.namespace;
+    let db = match require_db(&state) {
+        Ok(db) => db,
+        Err(r) => return r,
+    };
+    let settings = match db.get_s3_settings().await {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    if !settings.enabled {
         return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "S3 backup is disabled" })),
+        )
+            .into_response();
+    }
+    if settings.bucket.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "S3 bucket is not configured" })),
+        )
+            .into_response();
+    }
+
+    let built = if state.viewer_mode {
+        #[cfg(feature = "ingress")]
+        {
+            match build_ingress_backup(&state, namespace.as_deref()).await {
+                Ok(b) => b,
+                Err(r) => return r,
+            }
+        }
+        #[cfg(not(feature = "ingress"))]
+        {
+            let _ = namespace;
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Ingress mode not available" })),
+            )
+                .into_response();
+        }
+    } else {
+        let _ = namespace;
+        match build_proxy_backup(&state).await {
+            Ok(b) => b,
+            Err(r) => return r,
+        }
+    };
+
+    let key = s3_storage::object_key(&settings.prefix, &built.filename);
+    match s3_storage::put_object(&settings, &key, built.body, built.content_type).await {
+        Ok(()) => Json(ExportS3Response {
+            ok: true,
+            bucket: settings.bucket.trim().to_string(),
+            key,
+        })
+        .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn proxy_backup_export(state: &AdminState) -> Response {
+    match build_proxy_backup(state).await {
+        Ok(built) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, built.content_type)
+            .header(
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}\"", built.filename),
+            )
+            .body(Body::from(built.body))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        Err(r) => r,
+    }
+}
+
+async fn build_proxy_backup(state: &AdminState) -> Result<BuiltBackup, Response> {
+    let Some(db) = &state.db else {
+        return Err((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({ "error": "Database not configured" })),
         )
-            .into_response();
+            .into_response());
     };
 
     let config = state.runtime_config.read().await.clone();
@@ -200,13 +455,12 @@ async fn proxy_backup_export(state: &AdminState) -> Response {
         "pertisk-proxy-backup-{}.json",
         chrono::Utc::now().format("%Y%m%d-%H%M%S")
     );
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\""))
-        .body(Body::from(serde_json::to_string_pretty(&backup).unwrap_or_default()))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+    let body = serde_json::to_vec_pretty(&backup).unwrap_or_default();
+    Ok(BuiltBackup {
+        filename,
+        content_type: "application/json",
+        body,
+    })
 }
 
 async fn proxy_backup_restore(state: &AdminState, body: RestoreBackupBody) -> Response {
@@ -354,12 +608,31 @@ fn merge_proxy_config(mut merged: Config, backup: Config) -> Config {
 
 #[cfg(feature = "ingress")]
 async fn ingress_backup_export(state: &AdminState, namespace: Option<&str>) -> Response {
+    match build_ingress_backup(state, namespace).await {
+        Ok(built) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, built.content_type)
+            .header(
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}\"", built.filename),
+            )
+            .body(Body::from(built.body))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        Err(r) => r,
+    }
+}
+
+#[cfg(feature = "ingress")]
+async fn build_ingress_backup(
+    state: &AdminState,
+    namespace: Option<&str>,
+) -> Result<BuiltBackup, Response> {
     let Some(client) = &state.kube_client else {
-        return (
+        return Err((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({ "error": "Kubernetes client not available" })),
         )
-            .into_response();
+            .into_response());
     };
 
     let ingress_api: kube::Api<k8s_openapi::api::networking::v1::Ingress> = match namespace {
@@ -374,11 +647,11 @@ async fn ingress_backup_export(state: &AdminState, namespace: Option<&str>) -> R
             .map(|ing| serde_json::to_value(ing).unwrap_or(serde_json::Value::Null))
             .collect(),
         Err(e) => {
-            return (
+            return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": format!("Failed to list ingresses: {e}") })),
             )
-                .into_response();
+                .into_response());
         }
     };
 
@@ -402,11 +675,11 @@ async fn ingress_backup_export(state: &AdminState, namespace: Option<&str>) -> R
             .map(|sec| serde_json::to_value(sec).unwrap_or(serde_json::Value::Null))
             .collect(),
         Err(e) => {
-            return (
+            return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": format!("Failed to list secrets: {e}") })),
             )
-                .into_response();
+                .into_response());
         }
     };
 
@@ -457,17 +730,16 @@ async fn ingress_backup_export(state: &AdminState, namespace: Option<&str>) -> R
     );
 
     match serde_yaml::to_string(&backup) {
-        Ok(yaml) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/x-yaml")
-            .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\""))
-            .body(Body::from(yaml))
-            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
-        Err(e) => (
+        Ok(yaml) => Ok(BuiltBackup {
+            filename,
+            content_type: "application/x-yaml",
+            body: yaml.into_bytes(),
+        }),
+        Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": format!("Failed to serialize backup: {e}") })),
         )
-            .into_response(),
+            .into_response()),
     }
 }
 

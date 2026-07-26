@@ -24,7 +24,7 @@ import {
   KeyRound,
   ChevronDown,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/utils';
 import { Logo } from '@/components/Logo';
 import { useTheme } from '@/context/ThemeContext';
@@ -36,45 +36,116 @@ import { getUsername, setUsername } from '@/auth';
 const SIDEBAR_COLLAPSED_KEY = 'pertisk_sidebar_collapsed';
 
 type NavItem = { to: string; label: string; icon: typeof Globe; end?: boolean };
+type NavGroup = { id: string; label: string; items: NavItem[] };
 
 function getStoredSidebarCollapsed(): boolean {
   return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
 }
 
-function proxyNav(): NavItem[] {
+function proxyNavGroups(): NavGroup[] {
   return [
-    { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-    { to: '/sites', label: 'Sites', icon: Globe },
-    { to: '/access-lists', label: 'Access Control', icon: ListChecks },
-    { to: '/waf', label: 'WAF', icon: ShieldAlert },
-    { to: '/certificates', label: 'Certificates', icon: Shield },
-    { to: '/dns-providers', label: 'DNS Providers', icon: Server },
-    { to: '/logs', label: 'Logs', icon: ScrollText },
-    { to: '/metrics', label: 'Metrics', icon: LineChart },
-    { to: '/backup', label: 'Backup', icon: Archive },
-    { to: '/settings', label: 'Settings', icon: Settings },
+    {
+      id: 'overview',
+      label: 'Overview',
+      items: [{ to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true }],
+    },
+    {
+      id: 'routing',
+      label: 'Routing',
+      items: [{ to: '/sites', label: 'Sites', icon: Globe }],
+    },
+    {
+      id: 'security',
+      label: 'Security',
+      items: [
+        { to: '/access-lists', label: 'Access Control', icon: ListChecks },
+        { to: '/waf', label: 'WAF', icon: ShieldAlert },
+      ],
+    },
+    {
+      id: 'tls',
+      label: 'TLS & DNS',
+      items: [
+        { to: '/certificates', label: 'Certificates', icon: Shield },
+        { to: '/dns-providers', label: 'DNS Providers', icon: Server },
+      ],
+    },
+    {
+      id: 'observe',
+      label: 'Observe',
+      items: [
+        { to: '/logs', label: 'Logs', icon: ScrollText },
+        { to: '/metrics', label: 'Metrics', icon: LineChart },
+      ],
+    },
+    {
+      id: 'system',
+      label: 'System',
+      items: [
+        { to: '/backup', label: 'Backup', icon: Archive },
+        { to: '/settings', label: 'Settings', icon: Settings },
+      ],
+    },
   ];
 }
 
-function ingressNav(gatewayApiEnabled: boolean): NavItem[] {
-  const items: NavItem[] = [
-    { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-    { to: '/sites/ingress', label: 'Ingress', icon: Network },
-  ];
+function ingressNavGroups(gatewayApiEnabled: boolean): NavGroup[] {
+  const routing: NavItem[] = [{ to: '/sites/ingress', label: 'Ingress', icon: Network }];
   if (gatewayApiEnabled) {
-    items.push({ to: '/sites/gateway/gateways', label: 'Gateways', icon: DoorOpen });
-    items.push({ to: '/sites/gateway/sites', label: 'HTTP Routes', icon: GitBranch });
+    routing.push(
+      { to: '/sites/gateway/gateways', label: 'Gateways', icon: DoorOpen },
+      { to: '/sites/gateway/sites', label: 'HTTP Routes', icon: GitBranch },
+    );
   }
-  items.push(
-    { to: '/access-lists', label: 'Access Control', icon: ListChecks },
-    { to: '/waf', label: 'WAF', icon: ShieldAlert },
-    { to: '/certificates', label: 'Certificates', icon: Shield },
-    { to: '/logs', label: 'Logs', icon: ScrollText },
-    { to: '/metrics', label: 'Metrics', icon: LineChart },
-    { to: '/backup', label: 'Backup', icon: Archive },
-    { to: '/settings', label: 'Settings', icon: Settings },
-  );
-  return items;
+
+  return [
+    {
+      id: 'overview',
+      label: 'Overview',
+      items: [{ to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true }],
+    },
+    { id: 'routing', label: 'Routing', items: routing },
+    {
+      id: 'security',
+      label: 'Security',
+      items: [
+        { to: '/access-lists', label: 'Access Control', icon: ListChecks },
+        { to: '/waf', label: 'WAF', icon: ShieldAlert },
+      ],
+    },
+    {
+      id: 'tls',
+      label: 'TLS',
+      items: [{ to: '/certificates', label: 'Certificates', icon: Shield }],
+    },
+    {
+      id: 'observe',
+      label: 'Observe',
+      items: [
+        { to: '/logs', label: 'Logs', icon: ScrollText },
+        { to: '/metrics', label: 'Metrics', icon: LineChart },
+      ],
+    },
+    {
+      id: 'system',
+      label: 'System',
+      items: [
+        { to: '/backup', label: 'Backup', icon: Archive },
+        { to: '/settings', label: 'Settings', icon: Settings },
+      ],
+    },
+  ];
+}
+
+function resolveNavTitle(pathname: string, groups: NavGroup[]): string {
+  const items = groups.flatMap((g) => g.items);
+  // Prefer the longest matching path so /sites/gateway/sites wins over /sites.
+  const match = items
+    .filter((n) => (n.end ? pathname === n.to : pathname === n.to || pathname.startsWith(`${n.to}/`)))
+    .sort((a, b) => b.to.length - a.to.length)[0];
+  if (match) return match.label;
+  if (pathname.startsWith('/profile')) return 'Profile';
+  return 'Admin';
 }
 
 export function Layout({ onLogout, loading = false }: { onLogout: () => void; loading?: boolean }) {
@@ -91,9 +162,11 @@ export function Layout({ onLogout, loading = false }: { onLogout: () => void; lo
   const [canChangePassword, setCanChangePassword] = useState(mode === 'proxy');
   const profileRef = useRef<HTMLDivElement>(null);
 
-  const nav = mode === 'ingress' ? ingressNav(gatewayApiEnabled) : proxyNav();
-  const title = nav.find((n) => (n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)))?.label
-    ?? (location.pathname.startsWith('/profile') ? 'Profile' : 'Admin');
+  const navGroups = useMemo(
+    () => (mode === 'ingress' ? ingressNavGroups(gatewayApiEnabled) : proxyNavGroups()),
+    [mode, gatewayApiEnabled],
+  );
+  const title = resolveNavTitle(location.pathname, navGroups);
   const modeLabel = mode === 'ingress' ? 'Ingress mode' : 'Proxy mode';
 
   useEffect(() => {
@@ -161,19 +234,28 @@ export function Layout({ onLogout, loading = false }: { onLogout: () => void; lo
             {collapsed ? <ChevronsRight size={16} strokeWidth={2.25} /> : <ChevronsLeft size={16} strokeWidth={2.25} />}
           </button>
         </div>
-        <nav className="app-sidebar-nav">
-          {nav.map(({ to, label, icon: Icon, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              title={collapsed ? label : undefined}
-              onClick={() => setOpen(false)}
-              className={({ isActive }) => cn('app-sidebar-link', isActive && 'active')}
-            >
-              <Icon size={18} className="shrink-0" />
-              <span className={cn('truncate app-sidebar-link-label')}>{label}</span>
-            </NavLink>
+        <nav className="app-sidebar-nav" aria-label="Main">
+          {navGroups.map((group) => (
+            <div key={group.id} className="app-sidebar-group">
+              <div className="app-sidebar-group-label" title={collapsed ? group.label : undefined}>
+                <span className="app-sidebar-group-label-text">{group.label}</span>
+              </div>
+              <div className="app-sidebar-group-items" role="group" aria-label={group.label}>
+                {group.items.map(({ to, label, icon: Icon, end }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={end}
+                    title={collapsed ? label : undefined}
+                    onClick={() => setOpen(false)}
+                    className={({ isActive }) => cn('app-sidebar-link', isActive && 'active')}
+                  >
+                    <Icon size={18} className="shrink-0" />
+                    <span className="truncate app-sidebar-link-label">{label}</span>
+                  </NavLink>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
         {mode === 'ingress' && management?.ingress_class ? (

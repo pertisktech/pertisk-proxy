@@ -247,6 +247,40 @@ code, pre, textarea.mono {
   flex: 1;
   overflow-y: auto;
   padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.app-sidebar-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.app-sidebar-group-label {
+  display: flex;
+  align-items: center;
+  min-height: 1.25rem;
+  margin: 0 0 0.25rem;
+  padding: 0 0.75rem;
+}
+
+.app-sidebar-group-label-text {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-sidebar-group-items {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .app-sidebar-link {
@@ -261,6 +295,10 @@ code, pre, textarea.mono {
   color: var(--color-text-secondary);
   text-decoration: none;
   transition: background 150ms, color 150ms;
+}
+
+.app-sidebar-group-items .app-sidebar-link:last-child {
+  margin-bottom: 0;
 }
 
 .app-sidebar-link:hover {
@@ -328,7 +366,20 @@ code, pre, textarea.mono {
 
   .app-sidebar.collapsed .app-sidebar-brand-text,
   .app-sidebar.collapsed .app-sidebar-link-label,
-  .app-sidebar.collapsed .app-sidebar-footer {
+  .app-sidebar.collapsed .app-sidebar-footer,
+  .app-sidebar.collapsed .app-sidebar-group-label-text {
+    display: none;
+  }
+
+  .app-sidebar.collapsed .app-sidebar-group-label {
+    justify-content: center;
+    margin: 0.15rem 0.35rem 0.35rem;
+    padding: 0;
+    min-height: 0;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .app-sidebar.collapsed .app-sidebar-group:first-child .app-sidebar-group-label {
     display: none;
   }
 
@@ -342,6 +393,7 @@ code, pre, textarea.mono {
   .app-sidebar.collapsed .app-sidebar-nav {
     padding-left: 0.5rem;
     padding-right: 0.5rem;
+    gap: 0.35rem;
   }
 }
 

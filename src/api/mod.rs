@@ -215,6 +215,12 @@ pub fn router(state: AdminState) -> Router {
         .route("/api/backup/export", get(backup::backup_export))
         .route("/api/backup/restore", post(backup::backup_restore))
         .route(
+            "/api/backup/s3",
+            get(backup::s3_settings_get).put(backup::s3_settings_put),
+        )
+        .route("/api/backup/s3/test", post(backup::s3_settings_test))
+        .route("/api/backup/export-s3", post(backup::backup_export_s3))
+        .route(
             "/api/notifications/smtp",
             get(notifications::smtp_get).put(notifications::smtp_put),
         )

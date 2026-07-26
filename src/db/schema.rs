@@ -1,4 +1,4 @@
-//! SQLite schema: proxy_config, dns_providers, users, sessions, certificates, smtp_settings.
+//! SQLite schema: proxy_config, dns_providers, users, sessions, certificates, smtp_settings, s3_settings.
 
 use rusqlite::Connection;
 
@@ -54,11 +54,24 @@ pub fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
             notify_password_change INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS s3_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            enabled INTEGER NOT NULL DEFAULT 0,
+            endpoint TEXT NOT NULL DEFAULT '',
+            region TEXT NOT NULL DEFAULT 'us-east-1',
+            bucket TEXT NOT NULL DEFAULT '',
+            prefix TEXT NOT NULL DEFAULT '',
+            access_key_id TEXT NOT NULL DEFAULT '',
+            secret_access_key TEXT NOT NULL DEFAULT '',
+            force_path_style INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        );
         ",
     )?;
     migrate_certificates_expires_at(conn)?;
     migrate_smtp_notify_flags(conn)?;
     seed_smtp_settings(conn)?;
+    seed_s3_settings(conn)?;
     Ok(())
 }
 
@@ -75,6 +88,24 @@ fn seed_smtp_settings(conn: &Connection) -> Result<(), rusqlite::Error> {
             id, enabled, host, port, username, password, from_email, from_name,
             use_tls, alert_to, notify_login_failure, notify_login, notify_password_change, updated_at
          ) VALUES (1, 0, '', 587, '', '', '', 'Pertisk Proxy', 1, '', 0, 0, 0, ?1)",
+        rusqlite::params![updated_at],
+    )?;
+    Ok(())
+}
+
+fn seed_s3_settings(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM s3_settings WHERE id = 1", [], |r| {
+        r.get(0)
+    })?;
+    if count > 0 {
+        return Ok(());
+    }
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO s3_settings (
+            id, enabled, endpoint, region, bucket, prefix,
+            access_key_id, secret_access_key, force_path_style, updated_at
+         ) VALUES (1, 0, '', 'us-east-1', '', '', '', '', 0, ?1)",
         rusqlite::params![updated_at],
     )?;
     Ok(())

@@ -13,6 +13,8 @@ pub mod api;
 pub mod db;
 #[cfg(feature = "admin")]
 pub mod email;
+#[cfg(feature = "admin")]
+pub mod storage;
 pub mod h3;
 pub mod logging;
 pub mod log;

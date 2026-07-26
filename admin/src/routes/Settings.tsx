@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState, FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Info, Lock, Mail, Shield, Zap } from 'lucide-react';
+import { Info, Lock, Mail, Cloud, Shield, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, type ManagementInfo, type ProxyConfig } from '@/api/client';
 import { Card } from '@/components/Card';
 import { SmtpSettingsPanel } from '@/components/SmtpSettingsPanel';
+import { S3SettingsPanel } from '@/components/S3SettingsPanel';
 import { useManagementInfo } from '@/context/ManagementContext';
 import { useMode } from '@/context/ModeContext';
 import { cn } from '@/utils';
 
-type SettingsTab = 'general' | 'certificates' | 'notifications' | 'performance';
+type SettingsTab = 'general' | 'certificates' | 'notifications' | 'storage' | 'performance';
 
 function formatBytes(bytes: number | null | undefined) {
   if (bytes == null) return 'Unavailable';
@@ -134,6 +135,7 @@ function tabFromHash(hash: string, proxyOnly: boolean): SettingsTab {
   if (proxyOnly && (id === 'notifications' || id === 'email' || id === 'smtp')) {
     return 'notifications';
   }
+  if (proxyOnly && (id === 'storage' || id === 's3' || id === 'backup')) return 'storage';
   return 'general';
 }
 
@@ -239,6 +241,7 @@ export function Settings() {
       ? [
           { id: 'certificates' as const, label: 'Certificates', icon: Lock },
           { id: 'notifications' as const, label: 'Notifications', icon: Mail },
+          { id: 'storage' as const, label: 'Storage', icon: Cloud },
         ]
       : []),
     { id: 'performance' as const, label: 'Performance', icon: Zap },
@@ -362,6 +365,8 @@ export function Settings() {
       ) : null}
 
       {tab === 'notifications' && showProxyConfig ? <SmtpSettingsPanel /> : null}
+
+      {tab === 'storage' && showProxyConfig ? <S3SettingsPanel /> : null}
 
       {tab === 'performance' ? (
         <div id="performance-tuning" className="scroll-mt-6 space-y-6">

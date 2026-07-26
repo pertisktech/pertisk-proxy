@@ -97,6 +97,33 @@ pub struct SmtpSettingsUpdate {
     pub notify_password_change: bool,
 }
 
+/// Singleton S3 / object-storage settings (`id = 1`). Secret is never serialized to API clients.
+#[derive(Debug, Clone)]
+pub struct S3SettingsRow {
+    pub enabled: bool,
+    pub endpoint: String,
+    pub region: String,
+    pub bucket: String,
+    pub prefix: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub force_path_style: bool,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct S3SettingsUpdate {
+    pub enabled: bool,
+    pub endpoint: String,
+    pub region: String,
+    pub bucket: String,
+    pub prefix: String,
+    pub access_key_id: String,
+    /// `None` = leave unchanged; `Some("")` = clear; `Some(value)` = set.
+    pub secret_access_key: Option<String>,
+    pub force_path_style: bool,
+}
+
 const PROXY_CONFIG_KEY: &str = "current";
 
 impl Database {
@@ -657,6 +684,103 @@ impl Database {
                         notify_login: row.get::<_, i64>(10)? != 0,
                         notify_password_change: row.get::<_, i64>(11)? != 0,
                         updated_at: row.get(12)?,
+                    })
+                },
+            )
+            .map_err(Into::into)
+        })
+        .await?
+    }
+
+    pub async fn get_s3_settings(&self) -> Result<S3SettingsRow> {
+        let path = self.path.clone();
+        spawn_blocking(move || {
+            let conn = Connection::open(path)?;
+            conn.query_row(
+                "SELECT enabled, endpoint, region, bucket, prefix, access_key_id,
+                        secret_access_key, force_path_style, updated_at
+                 FROM s3_settings WHERE id = 1",
+                [],
+                |row| {
+                    Ok(S3SettingsRow {
+                        enabled: row.get::<_, i64>(0)? != 0,
+                        endpoint: row.get(1)?,
+                        region: row.get(2)?,
+                        bucket: row.get(3)?,
+                        prefix: row.get(4)?,
+                        access_key_id: row.get(5)?,
+                        secret_access_key: row.get(6)?,
+                        force_path_style: row.get::<_, i64>(7)? != 0,
+                        updated_at: row.get(8)?,
+                    })
+                },
+            )
+            .map_err(Into::into)
+        })
+        .await?
+    }
+
+    pub async fn update_s3_settings(&self, update: S3SettingsUpdate) -> Result<S3SettingsRow> {
+        let path = self.path.clone();
+        spawn_blocking(move || {
+            let conn = Connection::open(path)?;
+            let updated_at = chrono::Utc::now().to_rfc3339();
+            match update.secret_access_key {
+                None => {
+                    conn.execute(
+                        "UPDATE s3_settings SET
+                            enabled = ?1, endpoint = ?2, region = ?3, bucket = ?4, prefix = ?5,
+                            access_key_id = ?6, force_path_style = ?7, updated_at = ?8
+                         WHERE id = 1",
+                        rusqlite::params![
+                            update.enabled as i64,
+                            update.endpoint,
+                            update.region,
+                            update.bucket,
+                            update.prefix,
+                            update.access_key_id,
+                            update.force_path_style as i64,
+                            updated_at,
+                        ],
+                    )?;
+                }
+                Some(secret) => {
+                    conn.execute(
+                        "UPDATE s3_settings SET
+                            enabled = ?1, endpoint = ?2, region = ?3, bucket = ?4, prefix = ?5,
+                            access_key_id = ?6, secret_access_key = ?7, force_path_style = ?8,
+                            updated_at = ?9
+                         WHERE id = 1",
+                        rusqlite::params![
+                            update.enabled as i64,
+                            update.endpoint,
+                            update.region,
+                            update.bucket,
+                            update.prefix,
+                            update.access_key_id,
+                            secret,
+                            update.force_path_style as i64,
+                            updated_at,
+                        ],
+                    )?;
+                }
+            }
+            conn.query_row(
+                "SELECT enabled, endpoint, region, bucket, prefix, access_key_id,
+                        secret_access_key, force_path_style, updated_at
+                 FROM s3_settings WHERE id = 1",
+                [],
+                |row| {
+                    Ok(S3SettingsRow {
+                        enabled: row.get::<_, i64>(0)? != 0,
+                        endpoint: row.get(1)?,
+                        region: row.get(2)?,
+                        bucket: row.get(3)?,
+                        prefix: row.get(4)?,
+                        access_key_id: row.get(5)?,
+                        secret_access_key: row.get(6)?,
+                        force_path_style: row.get::<_, i64>(7)? != 0,
+                        updated_at: row.get(8)?,
                     })
                 },
             )

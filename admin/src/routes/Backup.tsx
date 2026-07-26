@@ -1,11 +1,14 @@
-import { useState } from 'react';
-import { Download, Upload, Archive } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Download, Upload, Archive, Cloud } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Card } from '@/components/Card';
 import { Checkbox } from '@/components/Checkbox';
 import { useMode } from '@/context/ModeContext';
 import { useManagementInfo } from '@/context/ManagementContext';
-import { api } from '@/api/client';
+import { api, type S3Settings } from '@/api/client';
+
+type ExportDestination = 'download' | 's3';
 
 export function Backup() {
   const mode = useMode();
@@ -20,12 +23,51 @@ export function Backup() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [mergeMode, setMergeMode] = useState(false);
   const [namespace, setNamespace] = useState('');
+  const [destination, setDestination] = useState<ExportDestination>('download');
+  const [s3, setS3] = useState<S3Settings | null>(null);
+  const [s3Loading, setS3Loading] = useState(!isIngress);
+
+  useEffect(() => {
+    if (isIngress) {
+      setS3Loading(false);
+      return;
+    }
+    let cancelled = false;
+    setS3Loading(true);
+    api.backup.s3
+      .get()
+      .then((data) => {
+        if (!cancelled) setS3(data);
+      })
+      .catch(() => {
+        if (!cancelled) setS3(null);
+      })
+      .finally(() => {
+        if (!cancelled) setS3Loading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isIngress]);
+
+  const s3Ready =
+    Boolean(s3?.enabled) &&
+    Boolean(s3?.bucket?.trim()) &&
+    Boolean(s3?.access_key_id?.trim()) &&
+    Boolean(s3?.has_secret_access_key);
 
   async function handleExport() {
     setExporting(true);
     try {
-      await api.backup.export(isIngress && namespace.trim() ? namespace.trim() : undefined);
-      toast.success('Backup exported');
+      if (destination === 's3') {
+        const result = await api.backup.exportToS3(
+          isIngress && namespace.trim() ? { namespace: namespace.trim() } : undefined,
+        );
+        toast.success(`Backup uploaded to s3://${result.bucket}/${result.key}`);
+      } else {
+        await api.backup.export(isIngress && namespace.trim() ? namespace.trim() : undefined);
+        toast.success('Backup exported');
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Export failed');
     } finally {
@@ -68,7 +110,9 @@ export function Backup() {
           Export backup
         </h2>
         <p className="mb-4 text-sm text-text-secondary">
-          Download a {fileType} backup file.
+          {destination === 's3'
+            ? `Upload a ${fileType} backup to the configured S3 bucket.`
+            : `Download a ${fileType} backup file.`}
           {!isIngress && ' DNS provider credentials are not included for security.'}
         </p>
         {isIngress && (
@@ -83,13 +127,74 @@ export function Backup() {
             />
           </label>
         )}
+
+        {!isIngress ? (
+          <div className="mb-4 space-y-2">
+            <p className="text-sm font-medium">Destination</p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setDestination('download')}
+                className={`rounded-md border px-3 py-1.5 text-sm ${
+                  destination === 'download'
+                    ? 'border-primary bg-primary text-bg'
+                    : 'border-border bg-surface-elevated text-text-secondary hover:text-text'
+                }`}
+              >
+                Download file
+              </button>
+              <button
+                type="button"
+                onClick={() => setDestination('s3')}
+                className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm ${
+                  destination === 's3'
+                    ? 'border-primary bg-primary text-bg'
+                    : 'border-border bg-surface-elevated text-text-secondary hover:text-text'
+                }`}
+              >
+                <Cloud size={14} />
+                Upload to S3
+              </button>
+            </div>
+            {destination === 's3' ? (
+              s3Loading ? (
+                <p className="text-xs text-muted">Checking S3 settings…</p>
+              ) : s3Ready ? (
+                <p className="text-xs text-text-secondary">
+                  Bucket <span className="font-mono text-text">{s3?.bucket}</span>
+                  {s3?.prefix?.trim() ? (
+                    <>
+                      {' '}
+                      · prefix <span className="font-mono text-text">{s3.prefix}</span>
+                    </>
+                  ) : null}
+                </p>
+              ) : (
+                <p className="text-xs text-yellow-y1">
+                  Configure and enable S3 under{' '}
+                  <Link to="/settings#storage" className="underline underline-offset-2">
+                    Settings → Storage
+                  </Link>{' '}
+                  first.
+                </p>
+              )
+            ) : null}
+          </div>
+        ) : null}
+
         <button
           type="button"
           onClick={handleExport}
-          disabled={exporting}
+          disabled={exporting || (destination === 's3' && !s3Ready)}
           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
         >
-          {exporting ? 'Exporting…' : `Export ${isIngress ? 'ingress' : 'proxy'} backup`}
+          {exporting
+            ? destination === 's3'
+              ? 'Uploading…'
+              : 'Exporting…'
+            : destination === 's3'
+              ? 'Upload backup to S3'
+              : `Export ${isIngress ? 'ingress' : 'proxy'} backup`}
         </button>
       </Card>
 
@@ -118,60 +223,39 @@ export function Backup() {
         />
         <label
           htmlFor="backup-file"
-          className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-dashed border-border px-4 py-2 text-sm hover:border-primary"
+          className="mb-3 inline-flex cursor-pointer items-center gap-2 rounded-md border border-border px-4 py-2 text-sm hover:bg-hover"
         >
           <Archive size={16} />
-          Choose {fileType} file
+          {selectedFile ? selectedFile.name : `Choose ${fileType} file`}
         </label>
-        {selectedFile && (
-          <p className="mt-2 text-sm text-text-secondary">
-            Selected: <code className="text-primary">{selectedFile.name}</code>
-          </p>
+
+        {!isIngress && (
+          <div className="mb-4">
+            <Checkbox
+              label="Merge with existing config"
+              checked={mergeMode}
+              onChange={setMergeMode}
+            />
+            <p className="mt-1 text-xs text-muted">
+              When enabled, existing sites and certificates are kept; only new hosts are added.
+            </p>
+          </div>
         )}
 
-        <Checkbox
-          checked={mergeMode}
-          onChange={setMergeMode}
-          className="mt-4 text-sm"
-          label="Merge with existing data (add from backup; skip duplicates unless merge updates ingress)"
-        />
+        {isIngress && helmEnabled ? (
+          <p className="mb-4 text-xs text-muted">
+            Helm values in the backup are exported for reference only and are not applied on restore.
+          </p>
+        ) : null}
 
         <button
           type="button"
           onClick={handleRestore}
           disabled={!selectedFile || restoring}
-          className="mt-4 rounded-md bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
         >
           {restoring ? 'Restoring…' : 'Restore backup'}
         </button>
-      </Card>
-
-      <Card>
-        <h2 className="mb-2 text-lg font-semibold">What is included</h2>
-        <ul className="list-disc space-y-1 pl-5 text-sm text-text-secondary">
-          {isIngress ? (
-            <>
-              <li>Kubernetes Ingress resources and TLS Secrets</li>
-              {management?.gateway_api_enabled && (
-                <>
-                  <li>Gateway API Gateways and HTTPRoutes</li>
-                </>
-              )}
-              {helmEnabled && (
-                <li>Helm release values and revision history (when PERTISK_HELM_* is configured)</li>
-              )}
-              <li>YAML format compatible with kubectl apply</li>
-              <li>Merge mode updates existing resources; without merge, existing resources are skipped</li>
-            </>
-          ) : (
-            <>
-              <li>Sites, backends, routing rules, and TLS configuration</li>
-              <li>Certificate PEM files and private keys</li>
-              <li>DNS provider names and types (not credentials)</li>
-              <li>JSON format for easy inspection</li>
-            </>
-          )}
-        </ul>
       </Card>
     </div>
   );

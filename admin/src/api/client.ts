@@ -615,6 +615,24 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ data, merge }),
       }),
+    exportToS3: (body?: { namespace?: string }) =>
+      request<{ ok: boolean; bucket: string; key: string }>('/backup/export-s3', {
+        method: 'POST',
+        body: JSON.stringify(body ?? {}),
+      }),
+    s3: {
+      get: () => request<S3Settings>('/backup/s3'),
+      update: (body: UpdateS3SettingsBody) =>
+        request<S3Settings>('/backup/s3', {
+          method: 'PUT',
+          body: JSON.stringify(body),
+        }),
+      test: () =>
+        request<{ ok: boolean }>('/backup/s3/test', {
+          method: 'POST',
+          body: JSON.stringify({}),
+        }),
+    },
   },
 
   notifications: {
@@ -667,4 +685,27 @@ export type UpdateSmtpSettingsBody = {
   notify_login: boolean;
   notify_login_failure: boolean;
   notify_password_change: boolean;
+};
+
+export type S3Settings = {
+  enabled: boolean;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  prefix: string;
+  access_key_id: string;
+  has_secret_access_key: boolean;
+  force_path_style: boolean;
+  updated_at: string;
+};
+
+export type UpdateS3SettingsBody = {
+  enabled: boolean;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  prefix: string;
+  access_key_id: string;
+  secret_access_key?: string;
+  force_path_style: boolean;
 };
