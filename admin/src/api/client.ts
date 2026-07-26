@@ -347,6 +347,8 @@ export type ProxyConfig = {
   access_lists?: AccessList[];
   waf_policies?: NamedWafPolicy[];
   proxy_log?: boolean;
+  /** Default Let's Encrypt contact email; sites can override when generating TLS. */
+  acme_email?: string | null;
 };
 
 export type CertificateRow = {

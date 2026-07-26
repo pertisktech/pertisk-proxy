@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Award, ExternalLink, Globe, Lock, Pencil, Plus, Trash2, X, Zap } from 'lucide-react';
 import {
@@ -128,6 +129,18 @@ export function Sites() {
   const backends = config.backends;
   const tlsList = config.tls;
 
+  function applyConfig(c: ProxyConfig) {
+    setConfig({
+      sites: c.sites || [],
+      backends: c.backends || [],
+      tls: c.tls || [],
+      access_lists: c.access_lists || [],
+      waf_policies: c.waf_policies || [],
+      proxy_log: c.proxy_log,
+      acme_email: c.acme_email ?? null,
+    });
+  }
+
   function load() {
     setLoading(true);
     Promise.all([
@@ -137,13 +150,7 @@ export function Sites() {
       api.wafPolicies.list().catch(() => []),
     ])
       .then(([c, dns, acls, wafs]) => {
-        setConfig({
-          sites: c.sites || [],
-          backends: c.backends || [],
-          tls: c.tls || [],
-          access_lists: c.access_lists || [],
-          waf_policies: c.waf_policies || [],
-        });
+        applyConfig(c);
         setDnsProviders(dns);
         setAccessLists(acls);
         setWafPolicies(wafs);
@@ -160,13 +167,7 @@ export function Sites() {
       api.wafPolicies.list().catch(() => []),
     ])
       .then(([c, dns, acls, wafs]) => {
-        setConfig({
-          sites: c.sites || [],
-          backends: c.backends || [],
-          tls: c.tls || [],
-          access_lists: c.access_lists || [],
-          waf_policies: c.waf_policies || [],
-        });
+        applyConfig(c);
         setDnsProviders(dns);
         setAccessLists(acls);
         setWafPolicies(wafs);
@@ -232,7 +233,7 @@ export function Sites() {
     setFormRoutes([{ path: '/', path_type: 'Prefix', rewrite: '/', upstream: '' }]);
     setFormSslMode('none');
     setFormTlsIndex(0);
-    setFormAcmeEmail('');
+    setFormAcmeEmail(config.acme_email?.trim() ?? '');
     setFormAcmeChallenge('http01');
     setFormDnsProviderId('');
     setFormWildcard(false);
@@ -242,6 +243,14 @@ export function Sites() {
     setSiteFormTab('general');
     setSiteError('');
     setSiteModal(true);
+    // Refresh Settings default so Generate SSL shows the latest contact email.
+    api
+      .config()
+      .then((c) => {
+        applyConfig(c);
+        setFormAcmeEmail((current) => current.trim() || c.acme_email?.trim() || '');
+      })
+      .catch(() => {});
   }
 
   function openEditSite(index: number) {
@@ -269,7 +278,7 @@ export function Sites() {
     setFormSslMode(sslMode);
     setFormTlsIndex(tlsIdx >= 0 ? tlsIdx : 0);
     setFormAcmeChallenge(acmeSource ? acmeChallengeFromSource(acmeSource) : 'http01');
-    setFormAcmeEmail(acmeSource?.email ?? '');
+    setFormAcmeEmail(acmeSource?.email?.trim() || config.acme_email?.trim() || '');
     setFormWildcard(tlsForHost ? siteUsesWildcardInTls(site.host, tlsForHost) : false);
     setFormForwardClientIp(site.forward_client_ip !== false);
     setFormAccessListId(site.access_list_id ?? '');
@@ -391,10 +400,14 @@ export function Sites() {
       }
     } else if (formSslMode === 'generate') {
       newTls = removeHostFromTls(newTls);
-      const acmeEmailTrim = formAcmeEmail.trim();
+      const acmeEmailTrim = formAcmeEmail.trim() || config.acme_email?.trim() || '';
       if (!acmeEmailTrim || acmeEmailTrim.includes('@example.com')) {
-        setSiteError("A valid contact email is required for Let's Encrypt (e.g. you@yourdomain.com)");
+        setSiteError("A valid contact email is required for Let's Encrypt. Set one under Settings or enter it here.");
+        setSiteFormTab('general');
         return;
+      }
+      if (formAcmeEmail.trim() !== acmeEmailTrim) {
+        setFormAcmeEmail(acmeEmailTrim);
       }
       if (formAcmeChallenge === 'dns01' && !formDnsProviderId) {
         setSiteError('Select a DNS Provider for DNS-01 challenge');
@@ -746,7 +759,18 @@ export function Sites() {
                         formSslMode === mode ? 'border-primary bg-primary/5' : 'border-border hover:bg-hover/50',
                       )}
                     >
-                      <input type="radio" name="sslMode" checked={formSslMode === mode} onChange={() => setFormSslMode(mode)} className="mt-1" />
+                      <input
+                        type="radio"
+                        name="sslMode"
+                        checked={formSslMode === mode}
+                        onChange={() => {
+                          setFormSslMode(mode);
+                          if (mode === 'generate' && !formAcmeEmail.trim()) {
+                            setFormAcmeEmail(config.acme_email?.trim() ?? '');
+                          }
+                        }}
+                        className="mt-1"
+                      />
                       <span>
                         <span className="flex items-center gap-1.5 text-sm font-medium">
                           <Icon size={14} /> {title}
@@ -756,9 +780,6 @@ export function Sites() {
                     </label>
                   ))}
                 </div>
-                {formSslMode === 'generate' ? (
-                  <p className="text-xs text-text-secondary">Certificate is issued automatically when you save (no restart).</p>
-                ) : null}
                 {formSslMode === 'from_list' ? (
                   <label className={labelCls}>
                     Certificate
@@ -772,10 +793,41 @@ export function Sites() {
                 ) : null}
                 {formSslMode === 'generate' ? (
                   <div className="space-y-3">
+                    <p className="text-xs text-text-secondary">
+                      Certificate is issued automatically when you save (no restart).
+                    </p>
                     <label className={labelCls}>
                       Contact email (Let&apos;s Encrypt)
-                      <input type="email" className={inputCls} value={formAcmeEmail} onChange={(e) => setFormAcmeEmail(e.target.value)} placeholder="you@yourdomain.com" required />
+                      <input
+                        type="email"
+                        className={inputCls}
+                        value={formAcmeEmail}
+                        onChange={(e) => setFormAcmeEmail(e.target.value)}
+                        placeholder={config.acme_email?.trim() || 'you@yourdomain.com'}
+                        required={!config.acme_email?.trim()}
+                      />
                     </label>
+                    <p className="text-xs text-text-secondary">
+                      {config.acme_email?.trim() ? (
+                        <>
+                          Default from{' '}
+                          <Link to="/settings" className="text-primary hover:underline">
+                            Settings
+                          </Link>
+                          {formAcmeEmail.trim() === config.acme_email.trim() || !formAcmeEmail.trim()
+                            ? ` (${config.acme_email.trim()}). Change the field to override for this site.`
+                            : ' — overridden for this site.'}
+                        </>
+                      ) : (
+                        <>
+                          No default set. Add one under{' '}
+                          <Link to="/settings" className="text-primary hover:underline">
+                            Settings → Let&apos;s Encrypt
+                          </Link>{' '}
+                          or enter an email above.
+                        </>
+                      )}
+                    </p>
                     <label className={labelCls}>
                       Challenge type
                       <select className={inputCls} value={formAcmeChallenge} onChange={(e) => setFormAcmeChallenge(e.target.value as 'http01' | 'dns01')}>

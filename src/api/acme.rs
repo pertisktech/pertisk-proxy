@@ -350,9 +350,23 @@ pub async fn spawn_auto_ssl_for_config(
             continue;
         }
 
+        let mut source = tls.source.clone();
+        if let TlsSource::Acme { email, .. } = &mut source {
+            let empty = email.as_ref().map(|e| e.trim().is_empty()).unwrap_or(true);
+            if empty {
+                if let Some(default) = config
+                    .acme_email
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|e| !e.is_empty())
+                {
+                    *email = Some(default.to_string());
+                }
+            }
+        }
         let tls_config = crate::proxy_config::TlsConfig {
             hosts: hosts_for_acme.clone(),
-            source: tls.source.clone(),
+            source,
             expires_at: None,
         };
         let acme_clone = acme.clone();

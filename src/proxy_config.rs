@@ -327,6 +327,9 @@ pub struct Config {
     /// Enable access / proxy log.
     #[serde(default = "default_true")]
     pub proxy_log: bool,
+    /// Default Let's Encrypt / ACME contact email (sites can override per TLS entry).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acme_email: Option<String>,
     /// HTTP/3 / QUIC tuning (optional).
     #[serde(default)]
     pub http3: crate::http3_options::Http3Options,
@@ -385,6 +388,7 @@ impl Default for Config {
             tls: Vec::new(),
             security_headers: default_security_headers(),
             proxy_log: true,
+            acme_email: None,
             http3: crate::http3_options::Http3Options::default(),
         }
     }

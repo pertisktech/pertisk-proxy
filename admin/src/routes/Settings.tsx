@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type ManagementInfo } from '@/api/client';
+import { toast } from 'sonner';
+import { api, type ManagementInfo, type ProxyConfig } from '@/api/client';
 import { Card } from '@/components/Card';
 import { useManagementInfo } from '@/context/ManagementContext';
 import { useMode } from '@/context/ModeContext';
@@ -128,6 +129,10 @@ export function Settings() {
   const [authRequired, setAuthRequired] = useState(false);
   const [management, setManagement] = useState<ManagementInfo | null>(null);
   const [error, setError] = useState('');
+  const [config, setConfig] = useState<ProxyConfig | null>(null);
+  const [acmeEmail, setAcmeEmail] = useState('');
+  const [acmeSaving, setAcmeSaving] = useState(false);
+  const [configError, setConfigError] = useState('');
 
   useEffect(() => {
     Promise.all([api.version(), api.authConfig(), api.management()])
@@ -138,6 +143,50 @@ export function Settings() {
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load settings'));
   }, []);
+
+  useEffect(() => {
+    if (mode === 'ingress') return;
+    let cancelled = false;
+    setConfigError('');
+    api
+      .config()
+      .then((cfg) => {
+        if (cancelled) return;
+        setConfig(cfg);
+        setAcmeEmail(cfg.acme_email?.trim() ?? '');
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setConfigError(e instanceof Error ? e.message : 'Failed to load config');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode]);
+
+  async function saveAcmeEmail(e: FormEvent) {
+    e.preventDefault();
+    const email = acmeEmail.trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      toast.error('Enter a valid email address');
+      return;
+    }
+    setAcmeSaving(true);
+    setConfigError('');
+    try {
+      const latest = await api.config();
+      const next = { ...latest, acme_email: email || null };
+      await api.saveConfig(next);
+      setConfig(next);
+      toast.success(email ? 'Contact email saved' : 'Contact email cleared');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to save';
+      setConfigError(msg);
+      toast.error(msg);
+    } finally {
+      setAcmeSaving(false);
+    }
+  }
 
   const info = management ?? sharedInfo;
   const isIngress = (mode ?? info?.mode) === 'ingress';
@@ -150,6 +199,7 @@ export function Settings() {
       info.http3.max_stream_data != null ||
       info.http3.max_streams_bidi != null ||
       info.http3.congestion_control != null);
+  const showAcmeSettings = !isIngress;
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -184,6 +234,44 @@ export function Settings() {
           </p>
         )}
       </Card>
+
+      {showAcmeSettings ? (
+        <Card>
+          <h2 className="mb-1 text-lg font-semibold">Let&apos;s Encrypt</h2>
+          <p className="mb-4 text-sm text-text-secondary">
+            Default contact email for ACME certificate issuance. Used when adding a site with Generate
+            SSL; each site can override it.
+          </p>
+          {configError ? <p className="mb-3 text-sm text-red-r1">{configError}</p> : null}
+          <form onSubmit={saveAcmeEmail} className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <label className="block min-w-0 flex-1 text-sm text-text-secondary">
+              Contact email (Let&apos;s Encrypt)
+              <input
+                type="email"
+                className="mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-text"
+                value={acmeEmail}
+                onChange={(e) => setAcmeEmail(e.target.value)}
+                placeholder="you@yourdomain.com"
+                autoComplete="email"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={acmeSaving}
+              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-bg hover:opacity-90 disabled:opacity-50"
+            >
+              {acmeSaving ? 'Saving…' : 'Save'}
+            </button>
+          </form>
+          {config?.acme_email?.trim() ? (
+            <p className="mt-3 text-xs text-text-secondary">
+              Saved default: <span className="font-mono text-text">{config.acme_email.trim()}</span>
+            </p>
+          ) : (
+            <p className="mt-3 text-xs text-muted">No default saved yet.</p>
+          )}
+        </Card>
+      ) : null}
 
       <div id="performance-tuning" className="scroll-mt-6 space-y-6">
         <Card>
