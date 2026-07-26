@@ -21,6 +21,7 @@ admin = [
     "dep:once_cell",
     "dep:sysinfo",
     "dep:local-ip-address",
+    "dep:lettre",
 ]
 ingress = ["admin"]
 acme = ["dep:acme-lib", "dep:openssl"]
@@ -95,6 +96,7 @@ sha1 = { version = "0.10", optional = true }
 hex = { version = "0.4", optional = true }
 local-ip-address = { version = "0.6", optional = true }
 sysinfo = { version = "0.31", optional = true }
+lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"], optional = true }
 maxminddb = "0.26"
 hmac = "0.12"
 sha2 = "0.10"

@@ -62,6 +62,37 @@ pub struct CertificateRow {
     pub expires_at: Option<String>,
 }
 
+/// Singleton SMTP / notification settings (`id = 1`). Password is never serialized to API clients.
+#[derive(Debug, Clone)]
+pub struct SmtpSettingsRow {
+    pub enabled: bool,
+    pub host: String,
+    pub port: i64,
+    pub username: String,
+    pub password: String,
+    pub from_email: String,
+    pub from_name: String,
+    pub use_tls: bool,
+    pub alert_to: String,
+    pub notify_login_failure: bool,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SmtpSettingsUpdate {
+    pub enabled: bool,
+    pub host: String,
+    pub port: i64,
+    pub username: String,
+    /// `None` = leave unchanged; `Some("")` = clear; `Some(value)` = set.
+    pub password: Option<String>,
+    pub from_email: String,
+    pub from_name: String,
+    pub use_tls: bool,
+    pub alert_to: String,
+    pub notify_login_failure: bool,
+}
+
 const PROXY_CONFIG_KEY: &str = "current";
 
 impl Database {
@@ -508,5 +539,113 @@ pub fn cert_validity_from_pem(cert_pem: &[u8]) -> CertValidity {
     CertValidity {
         issued_at: None,
         expires_at: cert_expiry_from_pem(cert_pem),
+    }
+}
+
+impl Database {
+    pub async fn get_smtp_settings(&self) -> Result<SmtpSettingsRow> {
+        let path = self.path.clone();
+        spawn_blocking(move || {
+            let conn = Connection::open(path)?;
+            conn.query_row(
+                "SELECT enabled, host, port, username, password, from_email, from_name,
+                        use_tls, alert_to, notify_login_failure, updated_at
+                 FROM smtp_settings WHERE id = 1",
+                [],
+                |row| {
+                    Ok(SmtpSettingsRow {
+                        enabled: row.get::<_, i64>(0)? != 0,
+                        host: row.get(1)?,
+                        port: row.get(2)?,
+                        username: row.get(3)?,
+                        password: row.get(4)?,
+                        from_email: row.get(5)?,
+                        from_name: row.get(6)?,
+                        use_tls: row.get::<_, i64>(7)? != 0,
+                        alert_to: row.get(8)?,
+                        notify_login_failure: row.get::<_, i64>(9)? != 0,
+                        updated_at: row.get(10)?,
+                    })
+                },
+            )
+            .map_err(Into::into)
+        })
+        .await?
+    }
+
+    pub async fn update_smtp_settings(&self, update: SmtpSettingsUpdate) -> Result<SmtpSettingsRow> {
+        let path = self.path.clone();
+        spawn_blocking(move || {
+            let conn = Connection::open(path)?;
+            let updated_at = chrono::Utc::now().to_rfc3339();
+            match update.password {
+                None => {
+                    conn.execute(
+                        "UPDATE smtp_settings SET
+                            enabled = ?1, host = ?2, port = ?3, username = ?4,
+                            from_email = ?5, from_name = ?6, use_tls = ?7,
+                            alert_to = ?8, notify_login_failure = ?9, updated_at = ?10
+                         WHERE id = 1",
+                        rusqlite::params![
+                            update.enabled as i64,
+                            update.host,
+                            update.port,
+                            update.username,
+                            update.from_email,
+                            update.from_name,
+                            update.use_tls as i64,
+                            update.alert_to,
+                            update.notify_login_failure as i64,
+                            updated_at,
+                        ],
+                    )?;
+                }
+                Some(password) => {
+                    conn.execute(
+                        "UPDATE smtp_settings SET
+                            enabled = ?1, host = ?2, port = ?3, username = ?4, password = ?5,
+                            from_email = ?6, from_name = ?7, use_tls = ?8,
+                            alert_to = ?9, notify_login_failure = ?10, updated_at = ?11
+                         WHERE id = 1",
+                        rusqlite::params![
+                            update.enabled as i64,
+                            update.host,
+                            update.port,
+                            update.username,
+                            password,
+                            update.from_email,
+                            update.from_name,
+                            update.use_tls as i64,
+                            update.alert_to,
+                            update.notify_login_failure as i64,
+                            updated_at,
+                        ],
+                    )?;
+                }
+            }
+            conn.query_row(
+                "SELECT enabled, host, port, username, password, from_email, from_name,
+                        use_tls, alert_to, notify_login_failure, updated_at
+                 FROM smtp_settings WHERE id = 1",
+                [],
+                |row| {
+                    Ok(SmtpSettingsRow {
+                        enabled: row.get::<_, i64>(0)? != 0,
+                        host: row.get(1)?,
+                        port: row.get(2)?,
+                        username: row.get(3)?,
+                        password: row.get(4)?,
+                        from_email: row.get(5)?,
+                        from_name: row.get(6)?,
+                        use_tls: row.get::<_, i64>(7)? != 0,
+                        alert_to: row.get(8)?,
+                        notify_login_failure: row.get::<_, i64>(9)? != 0,
+                        updated_at: row.get(10)?,
+                    })
+                },
+            )
+            .map_err(Into::into)
+        })
+        .await?
     }
 }

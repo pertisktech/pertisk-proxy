@@ -1,4 +1,4 @@
-//! SQLite schema: proxy_config, dns_providers, users, sessions, certificates.
+//! SQLite schema: proxy_config, dns_providers, users, sessions, certificates, smtp_settings.
 
 use rusqlite::Connection;
 
@@ -38,9 +38,42 @@ pub fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
             source_type TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS smtp_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            enabled INTEGER NOT NULL DEFAULT 0,
+            host TEXT NOT NULL DEFAULT '',
+            port INTEGER NOT NULL DEFAULT 587,
+            username TEXT NOT NULL DEFAULT '',
+            password TEXT NOT NULL DEFAULT '',
+            from_email TEXT NOT NULL DEFAULT '',
+            from_name TEXT NOT NULL DEFAULT '',
+            use_tls INTEGER NOT NULL DEFAULT 1,
+            alert_to TEXT NOT NULL DEFAULT '',
+            notify_login_failure INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        );
         ",
     )?;
     migrate_certificates_expires_at(conn)?;
+    seed_smtp_settings(conn)?;
+    Ok(())
+}
+
+fn seed_smtp_settings(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM smtp_settings WHERE id = 1", [], |r| {
+        r.get(0)
+    })?;
+    if count > 0 {
+        return Ok(());
+    }
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO smtp_settings (
+            id, enabled, host, port, username, password, from_email, from_name,
+            use_tls, alert_to, notify_login_failure, updated_at
+         ) VALUES (1, 0, '', 587, '', '', '', 'Pertisk Proxy', 1, '', 0, ?1)",
+        rusqlite::params![updated_at],
+    )?;
     Ok(())
 }
 

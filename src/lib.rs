@@ -11,6 +11,8 @@ pub mod proxy_config;
 pub mod api;
 #[cfg(feature = "admin")]
 pub mod db;
+#[cfg(feature = "admin")]
+pub mod email;
 pub mod h3;
 pub mod logging;
 pub mod log;

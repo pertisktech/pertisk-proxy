@@ -616,4 +616,51 @@ export const api = {
         body: JSON.stringify({ data, merge }),
       }),
   },
+
+  notifications: {
+    smtp: {
+      get: () => request<SmtpSettings>('/notifications/smtp'),
+      update: (body: UpdateSmtpSettingsBody) =>
+        request<SmtpSettings>('/notifications/smtp', {
+          method: 'PUT',
+          body: JSON.stringify(body),
+        }),
+      test: (body?: { to?: string }) =>
+        request<{ ok: boolean; to: string }>('/notifications/smtp/test', {
+          method: 'POST',
+          body: JSON.stringify(body ?? {}),
+        }),
+      preview: (template: 'test' | 'login_failure') =>
+        request<{ html: string }>(
+          `/notifications/smtp/preview?template=${encodeURIComponent(template)}`,
+        ),
+    },
+  },
+};
+
+export type SmtpSettings = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  username: string;
+  has_password: boolean;
+  from_email: string;
+  from_name: string;
+  use_tls: boolean;
+  alert_to: string;
+  notify_login_failure: boolean;
+  updated_at: string;
+};
+
+export type UpdateSmtpSettingsBody = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  username: string;
+  password?: string;
+  from_email: string;
+  from_name: string;
+  use_tls: boolean;
+  alert_to: string;
+  notify_login_failure: boolean;
 };

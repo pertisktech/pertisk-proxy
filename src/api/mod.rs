@@ -9,6 +9,9 @@ pub mod backup;
 #[cfg(feature = "admin")]
 pub mod policies;
 
+#[cfg(feature = "admin")]
+pub mod notifications;
+
 #[cfg(all(feature = "admin", feature = "acme"))]
 pub mod acme;
 
@@ -22,7 +25,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use axum::{
     body::Body,
-    extract::{Path as AxumPath, Query, Request, State},
+    extract::{ConnectInfo, Path as AxumPath, Query, Request, State},
     http::{header, HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Redirect, Response},
@@ -110,9 +113,12 @@ pub async fn serve(state: AdminState, addr: SocketAddr) -> Result<()> {
     let app = router(state);
     let listener = bind_management_listener(addr).await?;
     info!("Management API listening on http://{addr}");
-    axum::serve(listener, app)
-        .await
-        .context("management API server stopped")?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .context("management API server stopped")?;
     Ok(())
 }
 
@@ -207,7 +213,19 @@ pub fn router(state: AdminState) -> Router {
                 .delete(policies::waf_policies_delete),
         )
         .route("/api/backup/export", get(backup::backup_export))
-        .route("/api/backup/restore", post(backup::backup_restore));
+        .route("/api/backup/restore", post(backup::backup_restore))
+        .route(
+            "/api/notifications/smtp",
+            get(notifications::smtp_get).put(notifications::smtp_put),
+        )
+        .route(
+            "/api/notifications/smtp/test",
+            post(notifications::smtp_test),
+        )
+        .route(
+            "/api/notifications/smtp/preview",
+            get(notifications::smtp_preview),
+        );
 
     #[cfg(feature = "ingress")]
     let protected = protected
@@ -391,6 +409,8 @@ struct LoginResponse {
 
 async fn auth_login(
     State(state): State<AdminState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, (StatusCode, Json<ApiError>)> {
     if !state.auth_required {
@@ -432,6 +452,7 @@ async fn auth_login(
                 )
             })?
         else {
+            notify_auth_login_failure(&state, username, &headers, addr);
             return Err((
                 StatusCode::UNAUTHORIZED,
                 Json(ApiError {
@@ -447,6 +468,7 @@ async fn auth_login(
     };
 
     if !authenticated {
+        notify_auth_login_failure(&state, username, &headers, addr);
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(ApiError {
@@ -480,6 +502,30 @@ async fn auth_login(
         username: username.to_string(),
         expires_in: ttl_secs,
     }))
+}
+
+fn notify_auth_login_failure(
+    state: &AdminState,
+    username: &str,
+    headers: &HeaderMap,
+    peer: SocketAddr,
+) {
+    let Some(db) = state.db.clone() else {
+        return;
+    };
+    let socket_ip = peer.ip().to_string();
+    let xff = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok());
+    let x_real_ip = headers.get("x-real-ip").and_then(|v| v.to_str().ok());
+    let ip = crate::proxy::forward::resolve_client_ip(Some(&socket_ip), xff, x_real_ip)
+        .unwrap_or(socket_ip);
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    notifications::notify_login_failure(db, username.to_string(), ip, user_agent);
 }
 
 #[derive(Serialize)]
