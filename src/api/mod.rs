@@ -497,6 +497,8 @@ async fn auth_login(
         }
     }
 
+    notify_auth_login_success(&state, username, &headers, addr);
+
     Ok(Json(LoginResponse {
         token,
         username: username.to_string(),
@@ -504,15 +506,10 @@ async fn auth_login(
     }))
 }
 
-fn notify_auth_login_failure(
-    state: &AdminState,
-    username: &str,
+fn client_auth_context(
     headers: &HeaderMap,
     peer: SocketAddr,
-) {
-    let Some(db) = state.db.clone() else {
-        return;
-    };
+) -> (String, String) {
     let socket_ip = peer.ip().to_string();
     let xff = headers
         .get("x-forwarded-for")
@@ -525,7 +522,46 @@ fn notify_auth_login_failure(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
+    (ip, user_agent)
+}
+
+fn notify_auth_login_failure(
+    state: &AdminState,
+    username: &str,
+    headers: &HeaderMap,
+    peer: SocketAddr,
+) {
+    let Some(db) = state.db.clone() else {
+        return;
+    };
+    let (ip, user_agent) = client_auth_context(headers, peer);
     notifications::notify_login_failure(db, username.to_string(), ip, user_agent);
+}
+
+fn notify_auth_login_success(
+    state: &AdminState,
+    username: &str,
+    headers: &HeaderMap,
+    peer: SocketAddr,
+) {
+    let Some(db) = state.db.clone() else {
+        return;
+    };
+    let (ip, user_agent) = client_auth_context(headers, peer);
+    notifications::notify_login(db, username.to_string(), ip, user_agent);
+}
+
+fn notify_auth_password_change(
+    state: &AdminState,
+    username: &str,
+    headers: &HeaderMap,
+    peer: SocketAddr,
+) {
+    let Some(db) = state.db.clone() else {
+        return;
+    };
+    let (ip, user_agent) = client_auth_context(headers, peer);
+    notifications::notify_password_change(db, username.to_string(), ip, user_agent);
 }
 
 #[derive(Serialize)]
@@ -560,6 +596,7 @@ struct ChangePasswordResponse {
 
 async fn auth_change_password(
     State(state): State<AdminState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(body): Json<ChangePasswordRequest>,
 ) -> Result<Json<ChangePasswordResponse>, (StatusCode, Json<ApiError>)> {
@@ -647,6 +684,7 @@ async fn auth_change_password(
     }
 
     info!(username = %username, "admin password changed");
+    notify_auth_password_change(&state, &username, &headers, addr);
     Ok(Json(ChangePasswordResponse { ok: true }))
 }
 

@@ -50,11 +50,14 @@ pub fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
             use_tls INTEGER NOT NULL DEFAULT 1,
             alert_to TEXT NOT NULL DEFAULT '',
             notify_login_failure INTEGER NOT NULL DEFAULT 0,
+            notify_login INTEGER NOT NULL DEFAULT 0,
+            notify_password_change INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL
         );
         ",
     )?;
     migrate_certificates_expires_at(conn)?;
+    migrate_smtp_notify_flags(conn)?;
     seed_smtp_settings(conn)?;
     Ok(())
 }
@@ -70,21 +73,47 @@ fn seed_smtp_settings(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT INTO smtp_settings (
             id, enabled, host, port, username, password, from_email, from_name,
-            use_tls, alert_to, notify_login_failure, updated_at
-         ) VALUES (1, 0, '', 587, '', '', '', 'Pertisk Proxy', 1, '', 0, ?1)",
+            use_tls, alert_to, notify_login_failure, notify_login, notify_password_change, updated_at
+         ) VALUES (1, 0, '', 587, '', '', '', 'Pertisk Proxy', 1, '', 0, 0, 0, ?1)",
         rusqlite::params![updated_at],
     )?;
     Ok(())
 }
 
 fn migrate_certificates_expires_at(conn: &Connection) -> Result<(), rusqlite::Error> {
+    add_column_if_missing(conn, "certificates", "expires_at", "TEXT")?;
+    Ok(())
+}
+
+fn migrate_smtp_notify_flags(conn: &Connection) -> Result<(), rusqlite::Error> {
+    add_column_if_missing(
+        conn,
+        "smtp_settings",
+        "notify_login",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        conn,
+        "smtp_settings",
+        "notify_password_change",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    Ok(())
+}
+
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    decl: &str,
+) -> Result<(), rusqlite::Error> {
     let has_col: bool = conn.query_row(
-        "SELECT COUNT(1) FROM pragma_table_info('certificates') WHERE name = 'expires_at'",
+        &format!("SELECT COUNT(1) FROM pragma_table_info('{table}') WHERE name = '{column}'"),
         [],
         |r| r.get(0),
     )?;
     if !has_col {
-        conn.execute("ALTER TABLE certificates ADD COLUMN expires_at TEXT", [])?;
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
     }
     Ok(())
 }

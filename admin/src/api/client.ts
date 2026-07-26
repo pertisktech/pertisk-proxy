@@ -630,7 +630,7 @@ export const api = {
           method: 'POST',
           body: JSON.stringify(body ?? {}),
         }),
-      preview: (template: 'test' | 'login_failure') =>
+      preview: (template: 'test' | 'login' | 'login_failure' | 'password_change') =>
         request<{ html: string }>(
           `/notifications/smtp/preview?template=${encodeURIComponent(template)}`,
         ),
@@ -648,7 +648,9 @@ export type SmtpSettings = {
   from_name: string;
   use_tls: boolean;
   alert_to: string;
+  notify_login: boolean;
   notify_login_failure: boolean;
+  notify_password_change: boolean;
   updated_at: string;
 };
 
@@ -662,5 +664,7 @@ export type UpdateSmtpSettingsBody = {
   from_name: string;
   use_tls: boolean;
   alert_to: string;
+  notify_login: boolean;
   notify_login_failure: boolean;
+  notify_password_change: boolean;
 };

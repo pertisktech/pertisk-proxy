@@ -11,7 +11,9 @@ import { Checkbox } from '@/components/Checkbox';
 
 const EMAIL_TEMPLATES = [
   { id: 'test' as const, label: 'SMTP test' },
+  { id: 'login' as const, label: 'Login' },
   { id: 'login_failure' as const, label: 'Login failure' },
+  { id: 'password_change' as const, label: 'Password change' },
 ];
 
 type EmailTemplateId = (typeof EMAIL_TEMPLATES)[number]['id'];
@@ -26,7 +28,9 @@ type FormState = {
   from_name: string;
   use_tls: boolean;
   alert_to: string;
+  notify_login: boolean;
   notify_login_failure: boolean;
+  notify_password_change: boolean;
 };
 
 function toForm(settings: SmtpSettings): FormState {
@@ -40,7 +44,9 @@ function toForm(settings: SmtpSettings): FormState {
     from_name: settings.from_name,
     use_tls: settings.use_tls,
     alert_to: settings.alert_to,
+    notify_login: settings.notify_login,
     notify_login_failure: settings.notify_login_failure,
+    notify_password_change: settings.notify_password_change,
   };
 }
 
@@ -55,7 +61,9 @@ function toPayload(form: FormState, includePassword: boolean): UpdateSmtpSetting
     from_name: form.from_name.trim(),
     use_tls: form.use_tls,
     alert_to: form.alert_to.trim(),
+    notify_login: form.notify_login,
     notify_login_failure: form.notify_login_failure,
+    notify_password_change: form.notify_password_change,
   };
   if (includePassword) {
     body.password = form.password;
@@ -283,21 +291,45 @@ export function SmtpSettingsPanel() {
                 placeholder="ops@example.com"
               />
               <span className="mt-1 block text-xs text-muted">
-                Recipient for login-failure alerts and the default test email address.
+                Recipient for auth alerts and the default test email address.
               </span>
             </label>
           </div>
 
           <div className="border-t border-border pt-4">
             <p className="mb-3 text-sm font-medium">Notify on</p>
-            <Checkbox
-              label="Login failure"
-              checked={form.notify_login_failure}
-              onChange={(checked) => setForm({ ...form, notify_login_failure: checked })}
-            />
-            <p className="mt-1 text-xs text-muted">
-              Emails the alert address when a management UI login fails.
-            </p>
+            <div className="space-y-3">
+              <div>
+                <Checkbox
+                  label="Login"
+                  checked={form.notify_login}
+                  onChange={(checked) => setForm({ ...form, notify_login: checked })}
+                />
+                <p className="mt-1 text-xs text-muted">
+                  Emails when someone successfully signs in to the management UI.
+                </p>
+              </div>
+              <div>
+                <Checkbox
+                  label="Login failure"
+                  checked={form.notify_login_failure}
+                  onChange={(checked) => setForm({ ...form, notify_login_failure: checked })}
+                />
+                <p className="mt-1 text-xs text-muted">
+                  Emails when a management UI login fails.
+                </p>
+              </div>
+              <div>
+                <Checkbox
+                  label="Password change"
+                  checked={form.notify_password_change}
+                  onChange={(checked) => setForm({ ...form, notify_password_change: checked })}
+                />
+                <p className="mt-1 text-xs text-muted">
+                  Emails when an admin password is changed.
+                </p>
+              </div>
+            </div>
           </div>
 
           <div className="flex flex-wrap gap-2 pt-1">

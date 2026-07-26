@@ -75,6 +75,8 @@ pub struct SmtpSettingsRow {
     pub use_tls: bool,
     pub alert_to: String,
     pub notify_login_failure: bool,
+    pub notify_login: bool,
+    pub notify_password_change: bool,
     pub updated_at: String,
 }
 
@@ -91,6 +93,8 @@ pub struct SmtpSettingsUpdate {
     pub use_tls: bool,
     pub alert_to: String,
     pub notify_login_failure: bool,
+    pub notify_login: bool,
+    pub notify_password_change: bool,
 }
 
 const PROXY_CONFIG_KEY: &str = "current";
@@ -549,7 +553,8 @@ impl Database {
             let conn = Connection::open(path)?;
             conn.query_row(
                 "SELECT enabled, host, port, username, password, from_email, from_name,
-                        use_tls, alert_to, notify_login_failure, updated_at
+                        use_tls, alert_to, notify_login_failure, notify_login,
+                        notify_password_change, updated_at
                  FROM smtp_settings WHERE id = 1",
                 [],
                 |row| {
@@ -564,7 +569,9 @@ impl Database {
                         use_tls: row.get::<_, i64>(7)? != 0,
                         alert_to: row.get(8)?,
                         notify_login_failure: row.get::<_, i64>(9)? != 0,
-                        updated_at: row.get(10)?,
+                        notify_login: row.get::<_, i64>(10)? != 0,
+                        notify_password_change: row.get::<_, i64>(11)? != 0,
+                        updated_at: row.get(12)?,
                     })
                 },
             )
@@ -584,7 +591,8 @@ impl Database {
                         "UPDATE smtp_settings SET
                             enabled = ?1, host = ?2, port = ?3, username = ?4,
                             from_email = ?5, from_name = ?6, use_tls = ?7,
-                            alert_to = ?8, notify_login_failure = ?9, updated_at = ?10
+                            alert_to = ?8, notify_login_failure = ?9, notify_login = ?10,
+                            notify_password_change = ?11, updated_at = ?12
                          WHERE id = 1",
                         rusqlite::params![
                             update.enabled as i64,
@@ -596,6 +604,8 @@ impl Database {
                             update.use_tls as i64,
                             update.alert_to,
                             update.notify_login_failure as i64,
+                            update.notify_login as i64,
+                            update.notify_password_change as i64,
                             updated_at,
                         ],
                     )?;
@@ -605,7 +615,8 @@ impl Database {
                         "UPDATE smtp_settings SET
                             enabled = ?1, host = ?2, port = ?3, username = ?4, password = ?5,
                             from_email = ?6, from_name = ?7, use_tls = ?8,
-                            alert_to = ?9, notify_login_failure = ?10, updated_at = ?11
+                            alert_to = ?9, notify_login_failure = ?10, notify_login = ?11,
+                            notify_password_change = ?12, updated_at = ?13
                          WHERE id = 1",
                         rusqlite::params![
                             update.enabled as i64,
@@ -618,6 +629,8 @@ impl Database {
                             update.use_tls as i64,
                             update.alert_to,
                             update.notify_login_failure as i64,
+                            update.notify_login as i64,
+                            update.notify_password_change as i64,
                             updated_at,
                         ],
                     )?;
@@ -625,7 +638,8 @@ impl Database {
             }
             conn.query_row(
                 "SELECT enabled, host, port, username, password, from_email, from_name,
-                        use_tls, alert_to, notify_login_failure, updated_at
+                        use_tls, alert_to, notify_login_failure, notify_login,
+                        notify_password_change, updated_at
                  FROM smtp_settings WHERE id = 1",
                 [],
                 |row| {
@@ -640,7 +654,9 @@ impl Database {
                         use_tls: row.get::<_, i64>(7)? != 0,
                         alert_to: row.get(8)?,
                         notify_login_failure: row.get::<_, i64>(9)? != 0,
-                        updated_at: row.get(10)?,
+                        notify_login: row.get::<_, i64>(10)? != 0,
+                        notify_password_change: row.get::<_, i64>(11)? != 0,
+                        updated_at: row.get(12)?,
                     })
                 },
             )

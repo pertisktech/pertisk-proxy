@@ -32,15 +32,23 @@ impl EmailContent {
 }
 
 #[derive(Debug, Clone)]
-pub struct LoginFailureDetails {
+pub struct AuthEventDetails {
     pub username: String,
     pub ip_address: String,
-    pub attempted_at: String,
+    pub occurred_at: String,
     pub user_agent: String,
 }
 
-pub fn login_failure_content(details: &LoginFailureDetails) -> EmailContent {
-    let ua = truncate_ua(&details.user_agent);
+fn auth_detail_rows(details: &AuthEventDetails) -> Vec<(String, String)> {
+    vec![
+        ("Username".into(), details.username.clone()),
+        ("IP address".into(), details.ip_address.clone()),
+        ("Time".into(), details.occurred_at.clone()),
+        ("User agent".into(), truncate_ua(&details.user_agent)),
+    ]
+}
+
+pub fn login_failure_content(details: &AuthEventDetails) -> EmailContent {
     EmailContent::with_details(
         "Failed management login",
         vec![
@@ -51,12 +59,36 @@ pub fn login_failure_content(details: &LoginFailureDetails) -> EmailContent {
             "If this was not you, review management access and consider changing the admin password."
                 .into(),
         ],
+        auth_detail_rows(details),
+    )
+}
+
+pub fn login_content(details: &AuthEventDetails) -> EmailContent {
+    EmailContent::with_details(
+        "Successful management login",
         vec![
-            ("Username".into(), details.username.clone()),
-            ("IP address".into(), details.ip_address.clone()),
-            ("Time".into(), details.attempted_at.clone()),
-            ("User agent".into(), ua),
+            format!(
+                "User “{}” signed in to the management UI.",
+                details.username
+            ),
+            "If this was not you, change the admin password immediately.".into(),
         ],
+        auth_detail_rows(details),
+    )
+}
+
+pub fn password_change_content(details: &AuthEventDetails) -> EmailContent {
+    EmailContent::with_details(
+        "Management password changed",
+        vec![
+            format!(
+                "The password for user “{}” was changed.",
+                details.username
+            ),
+            "If you did not make this change, secure the account and review access immediately."
+                .into(),
+        ],
+        auth_detail_rows(details),
     )
 }
 
@@ -70,17 +102,28 @@ pub fn test_content() -> EmailContent {
     )
 }
 
+pub fn sample_details() -> AuthEventDetails {
+    AuthEventDetails {
+        username: "admin".into(),
+        ip_address: "203.0.113.42".into(),
+        occurred_at: "2026-07-23 04:12:08 UTC".into(),
+        user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36".into(),
+    }
+}
+
 pub fn sample_content(kind: &str) -> (String, EmailContent) {
     match kind {
+        "login" => (
+            "Successful management login".into(),
+            login_content(&sample_details()),
+        ),
         "login_failure" => (
             "Failed management login".into(),
-            login_failure_content(&LoginFailureDetails {
-                username: "admin".into(),
-                ip_address: "203.0.113.42".into(),
-                attempted_at: "2026-07-23 04:12:08 UTC".into(),
-                user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-                    .into(),
-            }),
+            login_failure_content(&sample_details()),
+        ),
+        "password_change" => (
+            "Management password changed".into(),
+            password_change_content(&sample_details()),
         ),
         _ => ("Pertisk Proxy SMTP test".into(), test_content()),
     }
@@ -207,10 +250,10 @@ mod tests {
 
     #[test]
     fn login_failure_html_includes_username() {
-        let content = login_failure_content(&LoginFailureDetails {
+        let content = login_failure_content(&AuthEventDetails {
             username: "alice".into(),
             ip_address: "1.2.3.4".into(),
-            attempted_at: "now".into(),
+            occurred_at: "now".into(),
             user_agent: "curl/8".into(),
         });
         let html = render_html("Pertisk Proxy", &content);

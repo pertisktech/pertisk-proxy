@@ -1,4 +1,4 @@
-//! SMTP settings API and fire-and-forget login-failure alerts.
+//! SMTP settings API and fire-and-forget auth alert emails.
 
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AdminState};
-use crate::db::{Database, SmtpSettingsUpdate};
+use crate::db::{Database, SmtpSettingsRow, SmtpSettingsUpdate};
 use crate::email::{smtp, templates};
 
 #[derive(Serialize)]
@@ -25,6 +25,8 @@ pub struct SmtpSettingsResponse {
     pub use_tls: bool,
     pub alert_to: String,
     pub notify_login_failure: bool,
+    pub notify_login: bool,
+    pub notify_password_change: bool,
     pub updated_at: String,
 }
 
@@ -46,6 +48,10 @@ pub struct UpdateSmtpSettingsRequest {
     pub alert_to: String,
     #[serde(default)]
     pub notify_login_failure: bool,
+    #[serde(default)]
+    pub notify_login: bool,
+    #[serde(default)]
+    pub notify_password_change: bool,
 }
 
 #[derive(Deserialize)]
@@ -75,6 +81,47 @@ pub struct TestSmtpResponse {
     pub to: String,
 }
 
+#[derive(Clone, Copy)]
+pub enum AuthNotifyKind {
+    Login,
+    LoginFailure,
+    PasswordChange,
+}
+
+impl AuthNotifyKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Login => "login",
+            Self::LoginFailure => "login failure",
+            Self::PasswordChange => "password change",
+        }
+    }
+
+    fn subject(self) -> &'static str {
+        match self {
+            Self::Login => "Successful management login",
+            Self::LoginFailure => "Failed management login",
+            Self::PasswordChange => "Management password changed",
+        }
+    }
+
+    fn enabled(self, settings: &SmtpSettingsRow) -> bool {
+        match self {
+            Self::Login => settings.notify_login,
+            Self::LoginFailure => settings.notify_login_failure,
+            Self::PasswordChange => settings.notify_password_change,
+        }
+    }
+
+    fn content(self, details: &templates::AuthEventDetails) -> templates::EmailContent {
+        match self {
+            Self::Login => templates::login_content(details),
+            Self::LoginFailure => templates::login_failure_content(details),
+            Self::PasswordChange => templates::password_change_content(details),
+        }
+    }
+}
+
 fn require_db(state: &AdminState) -> Result<&Database, (StatusCode, Json<ApiError>)> {
     state.db.as_deref().ok_or_else(|| {
         (
@@ -86,7 +133,7 @@ fn require_db(state: &AdminState) -> Result<&Database, (StatusCode, Json<ApiErro
     })
 }
 
-fn row_to_response(row: &crate::db::SmtpSettingsRow) -> SmtpSettingsResponse {
+fn row_to_response(row: &SmtpSettingsRow) -> SmtpSettingsResponse {
     SmtpSettingsResponse {
         enabled: row.enabled,
         host: row.host.clone(),
@@ -98,6 +145,8 @@ fn row_to_response(row: &crate::db::SmtpSettingsRow) -> SmtpSettingsResponse {
         use_tls: row.use_tls,
         alert_to: row.alert_to.clone(),
         notify_login_failure: row.notify_login_failure,
+        notify_login: row.notify_login,
+        notify_password_change: row.notify_password_change,
         updated_at: row.updated_at.clone(),
     }
 }
@@ -142,6 +191,8 @@ pub(crate) async fn smtp_put(
             use_tls: body.use_tls,
             alert_to: body.alert_to.trim().to_string(),
             notify_login_failure: body.notify_login_failure,
+            notify_login: body.notify_login,
+            notify_password_change: body.notify_password_change,
         })
         .await
         .map_err(|e| {
@@ -214,11 +265,14 @@ pub(crate) async fn smtp_preview(
         )
     })?;
     let kind = query.template.trim();
-    if kind != "test" && kind != "login_failure" {
+    if !matches!(
+        kind,
+        "test" | "login" | "login_failure" | "password_change"
+    ) {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ApiError {
-                error: "template must be test or login_failure".into(),
+                error: "template must be test, login, login_failure, or password_change".into(),
             }),
         ));
     }
@@ -233,9 +287,10 @@ pub(crate) async fn smtp_preview(
     }))
 }
 
-/// Fire-and-forget alert when a management UI login fails.
-pub fn notify_login_failure(
+/// Fire-and-forget alert for auth events (login, login failure, password change).
+pub fn notify_auth_event(
     db: Arc<Database>,
+    kind: AuthNotifyKind,
     username: String,
     ip_address: String,
     user_agent: String,
@@ -244,40 +299,80 @@ pub fn notify_login_failure(
         let settings = match db.get_smtp_settings().await {
             Ok(s) => s,
             Err(err) => {
-                tracing::warn!(error = %err, "smtp: failed to load settings for login failure alert");
+                tracing::warn!(
+                    error = %err,
+                    event = kind.label(),
+                    "smtp: failed to load settings for auth alert"
+                );
                 return;
             }
         };
-        if !settings.enabled {
-            return;
-        }
-        if !settings.notify_login_failure {
+        if !settings.enabled || !kind.enabled(&settings) {
             return;
         }
         let to = settings.alert_to.trim();
         if to.is_empty() {
-            tracing::warn!("smtp: login failure notify enabled but alert_to is empty");
+            tracing::warn!(
+                event = kind.label(),
+                "smtp: notify enabled but alert_to is empty"
+            );
             return;
         }
-        let attempted_at = chrono::Utc::now()
+        let occurred_at = chrono::Utc::now()
             .format("%Y-%m-%d %H:%M:%S UTC")
             .to_string();
-        let content = templates::login_failure_content(&templates::LoginFailureDetails {
+        let content = kind.content(&templates::AuthEventDetails {
             username: username.clone(),
             ip_address,
-            attempted_at,
+            occurred_at,
             user_agent,
         });
-        if let Err(err) = smtp::send_email(
-            &settings,
-            to,
-            "Failed management login",
-            content,
-            true,
-        )
-        .await
-        {
-            tracing::warn!(error = %err, username = %username, "smtp: login failure alert failed");
+        if let Err(err) = smtp::send_email(&settings, to, kind.subject(), content, true).await {
+            tracing::warn!(
+                error = %err,
+                username = %username,
+                event = kind.label(),
+                "smtp: auth alert failed"
+            );
         }
     });
+}
+
+pub fn notify_login_failure(
+    db: Arc<Database>,
+    username: String,
+    ip_address: String,
+    user_agent: String,
+) {
+    notify_auth_event(
+        db,
+        AuthNotifyKind::LoginFailure,
+        username,
+        ip_address,
+        user_agent,
+    );
+}
+
+pub fn notify_login(
+    db: Arc<Database>,
+    username: String,
+    ip_address: String,
+    user_agent: String,
+) {
+    notify_auth_event(db, AuthNotifyKind::Login, username, ip_address, user_agent);
+}
+
+pub fn notify_password_change(
+    db: Arc<Database>,
+    username: String,
+    ip_address: String,
+    user_agent: String,
+) {
+    notify_auth_event(
+        db,
+        AuthNotifyKind::PasswordChange,
+        username,
+        ip_address,
+        user_agent,
+    );
 }

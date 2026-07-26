@@ -1,5 +1,7 @@
 //! SMTP send via lettre.
 
+use std::time::Duration;
+
 use anyhow::{anyhow, bail, Result};
 use lettre::message::{header::ContentType, Mailbox, Message, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
@@ -8,6 +10,9 @@ use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
 use crate::db::SmtpSettingsRow;
 
 use super::templates::{self, EmailContent};
+
+/// Cap SMTP connect/handshake/send so the management API never hangs indefinitely.
+const SMTP_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub async fn send_email(
     settings: &SmtpSettingsRow,
@@ -91,12 +96,17 @@ pub async fn send_email(
     );
 
     let mailer = build_mailer(settings, password)?;
-    mailer
-        .send(email)
-        .await
-        .map_err(|err| anyhow!("SMTP send to {to} failed: {err}"))?;
-    tracing::info!(to = %to, "email sent");
-    Ok(())
+    match tokio::time::timeout(SMTP_TIMEOUT, mailer.send(email)).await {
+        Ok(Ok(_)) => {
+            tracing::info!(to = %to, "email sent");
+            Ok(())
+        }
+        Ok(Err(err)) => Err(anyhow!("SMTP send to {to} failed: {err}")),
+        Err(_) => Err(anyhow!(
+            "SMTP send to {to} timed out after {}s (check host, port, TLS, and firewall)",
+            SMTP_TIMEOUT.as_secs()
+        )),
+    }
 }
 
 fn build_mailer(
@@ -113,7 +123,7 @@ fn build_mailer(
     } else {
         AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)?
     };
-    builder = builder.port(port);
+    builder = builder.port(port).timeout(Some(SMTP_TIMEOUT));
 
     if !settings.username.trim().is_empty() {
         let pass = password.ok_or_else(|| {
