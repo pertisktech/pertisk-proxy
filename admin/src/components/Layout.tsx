@@ -23,6 +23,8 @@ import {
   User,
   KeyRound,
   ChevronDown,
+  Plus,
+  FileUp,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/utils';
@@ -37,6 +39,7 @@ const SIDEBAR_COLLAPSED_KEY = 'pertisk_sidebar_collapsed';
 
 type NavItem = { to: string; label: string; icon: typeof Globe; end?: boolean };
 type NavGroup = { id: string; label: string; items: NavItem[] };
+type CreateItem = { to: string; label: string; icon: typeof Globe };
 
 function getStoredSidebarCollapsed(): boolean {
   return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
@@ -148,6 +151,22 @@ function resolveNavTitle(pathname: string, groups: NavGroup[]): string {
   return 'Admin';
 }
 
+function createMenuItems(mode: 'proxy' | 'ingress' | undefined): CreateItem[] {
+  const siteTo = mode === 'ingress' ? '/sites/ingress?new=1' : '/sites?new=1';
+  const items: CreateItem[] = [
+    { to: siteTo, label: 'Site', icon: Globe },
+  ];
+  if (mode !== 'ingress') {
+    items.push({ to: '/dns-providers?new=1', label: 'DNS provider', icon: Server });
+  }
+  items.push(
+    { to: '/certificates?import=1', label: 'Import certificate', icon: FileUp },
+    { to: '/access-lists?new=1', label: 'Access Control', icon: ListChecks },
+    { to: '/waf?new=1', label: 'WAF', icon: ShieldAlert },
+  );
+  return items;
+}
+
 export function Layout({ onLogout, loading = false }: { onLogout: () => void; loading?: boolean }) {
   const { toggleTheme, isDark } = useTheme();
   const location = useLocation();
@@ -158,14 +177,17 @@ export function Layout({ onLogout, loading = false }: { onLogout: () => void; lo
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(getStoredSidebarCollapsed);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [username, setUser] = useState(getUsername() || 'admin');
   const [canChangePassword, setCanChangePassword] = useState(mode === 'proxy');
   const profileRef = useRef<HTMLDivElement>(null);
+  const createRef = useRef<HTMLDivElement>(null);
 
   const navGroups = useMemo(
     () => (mode === 'ingress' ? ingressNavGroups(gatewayApiEnabled) : proxyNavGroups()),
     [mode, gatewayApiEnabled],
   );
+  const createItems = useMemo(() => createMenuItems(mode), [mode]);
   const title = resolveNavTitle(location.pathname, navGroups);
   const modeLabel = mode === 'ingress' ? 'Ingress mode' : 'Proxy mode';
 
@@ -178,7 +200,8 @@ export function Layout({ onLogout, loading = false }: { onLogout: () => void; lo
   useEffect(() => {
     setOpen(false);
     setProfileOpen(false);
-  }, [location.pathname]);
+    setCreateOpen(false);
+  }, [location.pathname, location.search]);
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed));
@@ -202,10 +225,11 @@ export function Layout({ onLogout, loading = false }: { onLogout: () => void; lo
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!profileRef.current?.contains(e.target as Node)) setProfileOpen(false);
+      if (!createRef.current?.contains(e.target as Node)) setCreateOpen(false);
     }
-    if (profileOpen) document.addEventListener('mousedown', onDocClick);
+    if (profileOpen || createOpen) document.addEventListener('mousedown', onDocClick);
     return () => document.removeEventListener('mousedown', onDocClick);
-  }, [profileOpen]);
+  }, [profileOpen, createOpen]);
 
   return (
     <div className="app-shell text-text">
@@ -286,6 +310,43 @@ export function Layout({ onLogout, loading = false }: { onLogout: () => void; lo
               <span className="hidden rounded border border-border px-2 py-0.5 text-xs text-text-secondary sm:inline">
                 {modeLabel}
               </span>
+              <div className="relative" ref={createRef}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreateOpen((v) => !v);
+                    setProfileOpen(false);
+                  }}
+                  className="topbar-create-btn"
+                  aria-expanded={createOpen}
+                  aria-haspopup="menu"
+                >
+                  <Plus size={15} strokeWidth={2.5} className="shrink-0" />
+                  <span className="hidden sm:inline">Create</span>
+                  <ChevronDown size={14} className="shrink-0 opacity-80" />
+                </button>
+                {createOpen ? (
+                  <div role="menu" className="topbar-create-menu">
+                    {createItems.map(({ to, label, icon: Icon }) => (
+                      <button
+                        key={to}
+                        type="button"
+                        role="menuitem"
+                        className="topbar-create-item"
+                        onClick={() => {
+                          setCreateOpen(false);
+                          navigate(to);
+                        }}
+                      >
+                        <span className="topbar-create-item-icon">
+                          <Icon size={14} />
+                        </span>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <button
                 type="button"
                 onClick={toggleTheme}
@@ -297,7 +358,10 @@ export function Layout({ onLogout, loading = false }: { onLogout: () => void; lo
               <div className="relative" ref={profileRef}>
                 <button
                   type="button"
-                  onClick={() => setProfileOpen((v) => !v)}
+                  onClick={() => {
+                    setProfileOpen((v) => !v);
+                    setCreateOpen(false);
+                  }}
                   className="inline-flex h-8 max-w-[10rem] items-center gap-1.5 rounded-md border border-border px-2.5 text-sm hover:bg-hover"
                   aria-expanded={profileOpen}
                   aria-haspopup="menu"

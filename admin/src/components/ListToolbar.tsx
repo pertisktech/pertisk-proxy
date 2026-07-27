@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { LayoutGrid, List, Plus } from 'lucide-react';
 import { cn } from '@/utils';
 
@@ -8,38 +9,59 @@ type ListToolbarProps = {
   onViewModeChange: (mode: ViewMode) => void;
   addLabel: string;
   onAdd: () => void;
+  /** Filled primary (default) or outline secondary-style action. */
+  actionVariant?: 'primary' | 'outline';
+  /** Defaults to Plus. Pass e.g. FileUp for import actions. */
+  actionIcon?: ReactNode;
+  /** Optional actions rendered between the primary button and the view toggle. */
+  children?: ReactNode;
 };
 
-export function ListToolbar({ viewMode, onViewModeChange, addLabel, onAdd }: ListToolbarProps) {
+export function ListToolbar({
+  viewMode,
+  onViewModeChange,
+  addLabel,
+  onAdd,
+  actionVariant = 'primary',
+  actionIcon,
+  children,
+}: ListToolbarProps) {
   return (
-    <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-      <button
-        type="button"
-        onClick={onAdd}
-        className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-bg hover:opacity-90"
-      >
-        <Plus size={16} /> {addLabel}
-      </button>
-      <div className="inline-flex rounded-md border border-border p-0.5">
+    <div className="list-toolbar">
+      <div className="list-toolbar-actions">
+        <button
+          type="button"
+          onClick={onAdd}
+          className={cn(
+            'list-toolbar-btn',
+            actionVariant === 'outline' ? 'list-toolbar-btn--outline' : 'list-toolbar-btn--primary',
+          )}
+        >
+          {actionIcon ?? <Plus size={16} strokeWidth={2.25} />}
+          {addLabel}
+        </button>
+        {children}
+      </div>
+      <div className="list-toolbar-view" role="group" aria-label="View mode">
         <button
           type="button"
           onClick={() => onViewModeChange('card')}
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm',
-            viewMode === 'card' ? 'bg-hover font-medium text-primary' : 'text-text-secondary hover:text-text',
-          )}
+          className={cn('list-toolbar-view-btn', viewMode === 'card' && 'active')}
+          aria-pressed={viewMode === 'card'}
+          title="Cards"
         >
-          <LayoutGrid size={14} /> Cards
+          <LayoutGrid size={14} />
+          <span className="list-toolbar-view-label">Cards</span>
         </button>
         <button
           type="button"
           onClick={() => onViewModeChange('list')}
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm',
-            viewMode === 'list' ? 'bg-hover font-medium text-primary' : 'text-text-secondary hover:text-text',
-          )}
+          className={cn('list-toolbar-view-btn', viewMode === 'list' && 'active')}
+          aria-pressed={viewMode === 'list'}
+          title="List"
         >
-          <List size={14} /> List
+          <List size={14} />
+          <span className="list-toolbar-view-label">List</span>
         </button>
       </div>
     </div>

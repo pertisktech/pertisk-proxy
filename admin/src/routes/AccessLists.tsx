@@ -10,6 +10,7 @@ import { ResourceBadge, ResourceCard, ResourceCardGrid } from '@/components/Reso
 import { Checkbox } from '@/components/Checkbox';
 import { ConfigTextField } from '@/components/ConfigTextField';
 import { usePageSize } from '@/utils/usePageSize';
+import { useOpenOnQuery } from '@/utils/useOpenOnQuery';
 import { cn } from '@/utils';
 
 type SortKey = 'name' | 'usage';
@@ -125,6 +126,8 @@ export function AccessLists() {
     setFormError('');
     setModalOpen(true);
   }
+
+  useOpenOnQuery('new', openAdd);
 
   function openEdit(row: AccessList) {
     setEditingId(row.id);

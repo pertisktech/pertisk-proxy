@@ -17,6 +17,7 @@ import {
   ResourceCardGrid,
 } from '@/components/ResourceCard';
 import { usePageSize } from '@/utils/usePageSize';
+import { useOpenOnQuery } from '@/utils/useOpenOnQuery';
 import { formatDateTime } from '@/utils/dateFormat';
 import { cn } from '@/utils';
 
@@ -110,6 +111,8 @@ export function DnsProviders() {
     setFormError('');
     setModalOpen(true);
   }
+
+  useOpenOnQuery('new', openAdd);
 
   function openEdit(row: DnsProviderRow) {
     setEditingId(row.id);

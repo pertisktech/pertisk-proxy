@@ -19,6 +19,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Pagination } from '@/components/Pagination';
 import { ListToolbar, type ViewMode } from '@/components/ListToolbar';
 import { usePageSize } from '@/utils/usePageSize';
+import { useOpenOnQuery } from '@/utils/useOpenOnQuery';
 import { getDefaultIngressNamespace } from '@/utils/ingressDefaults';
 import { useManagementInfo } from '@/context/ManagementContext';
 import { useMode } from '@/context/ModeContext';
@@ -194,6 +195,8 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
     resetPolicyIds();
     setModal(true);
   }
+
+  useOpenOnQuery('new', openCreate);
 
   async function openEdit(site: Site) {
     const ns = site.ingress_namespace || 'default';

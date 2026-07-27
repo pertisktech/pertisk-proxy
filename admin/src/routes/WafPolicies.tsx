@@ -9,6 +9,7 @@ import { ListToolbar, type ViewMode } from '@/components/ListToolbar';
 import { ResourceBadge, ResourceCard, ResourceCardGrid } from '@/components/ResourceCard';
 import { Checkbox } from '@/components/Checkbox';
 import { usePageSize } from '@/utils/usePageSize';
+import { useOpenOnQuery } from '@/utils/useOpenOnQuery';
 
 type SortKey = 'name' | 'usage';
 
@@ -105,6 +106,8 @@ export function WafPolicies() {
     setFormError('');
     setModalOpen(true);
   }
+
+  useOpenOnQuery('new', openAdd);
 
   function openEdit(row: NamedWafPolicy) {
     setEditingId(row.id);

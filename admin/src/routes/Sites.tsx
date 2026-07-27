@@ -25,6 +25,7 @@ import {
   ResourceTag,
 } from '@/components/ResourceCard';
 import { usePageSize } from '@/utils/usePageSize';
+import { useOpenOnQuery } from '@/utils/useOpenOnQuery';
 import {
   acmeChallengeFromSource,
   hostToWildcard,
@@ -252,6 +253,8 @@ export function Sites() {
       })
       .catch(() => {});
   }
+
+  useOpenOnQuery('new', openAddSite);
 
   function openEditSite(index: number) {
     const site = sites[index];

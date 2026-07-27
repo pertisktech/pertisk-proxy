@@ -5,8 +5,6 @@ import {
   ChevronDown,
   ChevronUp,
   FileUp,
-  LayoutGrid,
-  List,
   Loader2,
   Trash2,
   Upload,
@@ -15,17 +13,18 @@ import { api, type CertificateRow, type ProxyConfig, type TlsConfig, type TlsSou
 import { Modal } from '@/components/Modal';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Pagination } from '@/components/Pagination';
+import { ListToolbar, type ViewMode } from '@/components/ListToolbar';
 import {
   ResourceBadge,
   ResourceCard,
   ResourceCardGrid,
 } from '@/components/ResourceCard';
 import { usePageSize } from '@/utils/usePageSize';
+import { useOpenOnQuery } from '@/utils/useOpenOnQuery';
 import { formatDate, formatDateOnly } from '@/utils/dateFormat';
 import { resolveTlsForHost, certRowMatchesTlsConfig } from '@/utils/tlsHostMatch';
 import { cn } from '@/utils';
 
-type ViewMode = 'card' | 'list';
 type SortKey = 'domain' | 'issuer' | 'challenge' | 'expires' | 'sites';
 
 function isAcme(source: TlsSource): source is Extract<TlsSource, { type: 'acme' }> {
@@ -275,6 +274,8 @@ export function Certificates() {
     setUploadOpen(true);
   }
 
+  useOpenOnQuery('import', openUploadModal);
+
   async function readFileAsText(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
       const r = new FileReader();
@@ -442,27 +443,14 @@ export function Certificates() {
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <button type="button" onClick={openUploadModal} className="inline-flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm hover:bg-hover">
-          <FileUp size={16} /> Import certificate
-        </button>
-        <div className="inline-flex rounded-md border border-border p-0.5">
-          <button
-            type="button"
-            onClick={() => setViewMode('card')}
-            className={cn('inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm', viewMode === 'card' ? 'bg-hover font-medium text-primary' : 'text-text-secondary')}
-          >
-            <LayoutGrid size={14} /> Cards
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('list')}
-            className={cn('inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-sm', viewMode === 'list' ? 'bg-hover font-medium text-primary' : 'text-text-secondary')}
-          >
-            <List size={14} /> List
-          </button>
-        </div>
-      </div>
+      <ListToolbar
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        addLabel="Import certificate"
+        onAdd={openUploadModal}
+        actionVariant="outline"
+        actionIcon={<FileUp size={16} />}
+      />
 
       {tlsList.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border py-16 text-center">
