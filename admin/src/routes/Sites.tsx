@@ -64,6 +64,11 @@ function sitePublicUrl(host: string, hasTls: boolean): string | null {
   return `${hasTls ? 'https' : 'http'}://${h}`;
 }
 
+/** Client-facing protocol from TLS presence. */
+function siteProtocol(hasTls: boolean): 'HTTPS' | 'HTTP' {
+  return hasTls ? 'HTTPS' : 'HTTP';
+}
+
 function routeLabel(route: PathRewrite): string {
   const dest = route.upstream?.trim() || route.rewrite?.trim();
   return `${route.path_type || 'Prefix'} ${route.path}${dest ? ` → ${dest}` : ''}`;
@@ -539,7 +544,9 @@ export function Sites() {
             const globalIndex = sites.indexOf(site);
             const tls = resolveTlsForHost(site.host, tlsList);
             const ssl = siteSslStatus(tls);
-            const publicUrl = sitePublicUrl(site.host, !!tls);
+            const hasTls = !!tls;
+            const protocol = siteProtocol(hasTls);
+            const publicUrl = sitePublicUrl(site.host, hasTls);
             const titleNode = publicUrl ? (
               <a href={publicUrl} target="_blank" rel="noopener noreferrer" title={`Open ${publicUrl}`}>
                 <span className="inline-flex items-center gap-1.5">
@@ -562,11 +569,13 @@ export function Sites() {
                     ? (site.routes ?? []).map((r, i) => <ResourceTag key={i}>{routeLabel(r)}</ResourceTag>)
                     : undefined
                 }
-                meta={
-                  tls
-                    ? [{ label: 'Certificate', value: sslLabelForCard(tls.hosts) }]
-                    : [{ label: 'Certificate', value: '—' }]
-                }
+                meta={[
+                  { label: 'Protocol', value: protocol },
+                  {
+                    label: 'Certificate',
+                    value: tls ? sslLabelForCard(tls.hosts) : '—',
+                  },
+                ]}
                 actions={
                   <>
                     {publicUrl ? (
@@ -607,10 +616,11 @@ export function Sites() {
         </ResourceCardGrid>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-border">
-          <table className="w-full min-w-[720px] text-left text-sm">
+          <table className="w-full min-w-[800px] text-left text-sm">
             <thead className="border-b border-border bg-surface-elevated text-text-secondary">
               <tr>
                 <th className="px-4 py-3 font-medium">Domain</th>
+                <th className="px-4 py-3 font-medium">Protocol</th>
                 <th className="px-4 py-3 font-medium">Upstream</th>
                 <th className="px-4 py-3 font-medium">Routes</th>
                 <th className="px-4 py-3 font-medium">SSL</th>
@@ -622,7 +632,9 @@ export function Sites() {
                 const globalIndex = sites.indexOf(site);
                 const tls = resolveTlsForHost(site.host, tlsList);
                 const ssl = siteSslStatus(tls);
-                const publicUrl = sitePublicUrl(site.host, !!tls);
+                const hasTls = !!tls;
+                const protocol = siteProtocol(hasTls);
+                const publicUrl = sitePublicUrl(site.host, hasTls);
                 return (
                   <tr key={`${site.host}-${globalIndex}`} className="border-b border-border last:border-0 hover:bg-hover/50">
                     <td className="px-4 py-3 font-medium">
@@ -640,6 +652,9 @@ export function Sites() {
                       ) : (
                         site.host
                       )}
+                    </td>
+                    <td className={cn('px-4 py-3 font-mono text-xs', hasTls ? 'text-green-g1' : 'text-muted')}>
+                      {protocol}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs">{upstreamForSite(site)}</td>
                     <td className="px-4 py-3 text-text-secondary">
