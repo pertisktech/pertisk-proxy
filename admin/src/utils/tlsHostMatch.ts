@@ -129,16 +129,21 @@ function hostsSet(arr: string[] | undefined): Set<string> {
   return new Set((arr ?? []).map((h) => h.trim()).filter(Boolean));
 }
 
-/** Match backend `cert_row_covers_tls_hosts`. */
+/** Match backend `cert_row_covers_tls_hosts` — every TLS host covered exactly or by wildcard. */
 export function certRowCoversTls(certHosts: string[] | undefined, tlsHosts: string[] | undefined): boolean {
-  const want = hostsSet(tlsHosts);
-  if (want.size === 0) return false;
+  const want = (tlsHosts ?? []).map((h) => h.trim()).filter(Boolean);
+  if (want.length === 0) return false;
+  return want.every((h) => hostCoveredByCertHosts(certHosts, h));
+}
+
+/** True when `host` is listed in cert hosts or covered by a wildcard entry. */
+export function hostCoveredByCertHosts(certHosts: string[] | undefined, host: string): boolean {
+  const h = host.trim();
+  if (!h) return false;
   const have = hostsSet(certHosts);
-  if (have.size === want.size && [...have].every((h) => want.has(h))) return true;
-  const wildcardOnly = [...want].filter((h) => h.startsWith('*'));
-  if (wildcardOnly.length === 0) return false;
-  const wildSet = new Set(wildcardOnly);
-  return have.size === wildSet.size && [...have].every((h) => wildSet.has(h));
+  if (h.startsWith('*')) return have.has(h);
+  if (have.has(h)) return true;
+  return [...have].some((w) => wildcardCoversHost(w, h));
 }
 
 /** True when `*.example.com` covers `app.example.com` (single DNS label). */
@@ -155,14 +160,5 @@ export function wildcardCoversHost(wildcard: string, host: string): boolean {
 
 /** Match backend `cert_row_matches_tls_config`. */
 export function certRowMatchesTlsConfig(certHosts: string[] | undefined, tlsHosts: string[] | undefined): boolean {
-  if (!certRowCoversTls(certHosts, tlsHosts)) return false;
-  const have = hostsSet(certHosts);
-  for (const h of tlsHosts ?? []) {
-    const t = h.trim();
-    if (!t || t.startsWith('*')) continue;
-    if (have.has(t)) continue;
-    if ([...have].some((w) => wildcardCoversHost(w, t))) continue;
-    return false;
-  }
-  return true;
+  return certRowCoversTls(certHosts, tlsHosts);
 }

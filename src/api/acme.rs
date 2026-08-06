@@ -43,48 +43,53 @@ fn cert_row_covers_hosts(row: &CertificateRow, hosts: &[String]) -> bool {
     cert_row_covers_tls_hosts(&row.hosts, hosts)
 }
 
-/// True when a DB certificate row satisfies a TLS config host list (including wildcard + apex).
-pub fn cert_row_covers_tls_hosts(cert_hosts: &[String], tls_hosts: &[String]) -> bool {
-    let want = hosts_set(tls_hosts);
-    if want.is_empty() {
+/// True when `host` is listed in `cert_hosts` or covered by a wildcard entry there.
+pub fn host_covered_by_cert_hosts(cert_hosts: &[String], host: &str) -> bool {
+    let host = host.trim();
+    if host.is_empty() {
         return false;
     }
     let have = hosts_set(cert_hosts);
-    if have == want {
+    if host.starts_with('*') {
+        return have.contains(host);
+    }
+    if have.contains(host) {
         return true;
     }
-    // Cert with only wildcard(s) covers config that lists wildcard + apex names.
-    let wildcard_only: HashSet<String> = want
-        .iter()
-        .filter(|s| s.starts_with('*'))
-        .cloned()
-        .collect();
-    !wildcard_only.is_empty() && have == wildcard_only
+    have.iter()
+        .any(|w| crate::proxy_config::wildcard_covers_host(w, host))
 }
 
-/// Every non-wildcard TLS hostname must appear in the cert SAN or be covered by a wildcard SAN.
+/// True when every TLS host is covered by the certificate host list (exact or wildcard).
+///
+/// Adding new names under an existing `*.apps.example` must not invalidate a cert that
+/// already lists that wildcard — otherwise Auto-SSL re-orders the same identifiers and
+/// burns Let's Encrypt rate limits.
+pub fn cert_row_covers_tls_hosts(cert_hosts: &[String], tls_hosts: &[String]) -> bool {
+    let want: Vec<String> = tls_hosts
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if want.is_empty() {
+        return false;
+    }
+    want.iter()
+        .all(|h| host_covered_by_cert_hosts(cert_hosts, h))
+}
+
+/// Every TLS hostname must appear in the cert host list or be covered by a wildcard there.
 pub fn cert_row_matches_tls_config(row: &CertificateRow, tls_hosts: &[String]) -> bool {
-    if !cert_row_covers_tls_hosts(&row.hosts, tls_hosts) {
-        return false;
-    }
-    let have = hosts_set(&row.hosts);
-    for h in tls_hosts {
-        let h = h.trim();
-        if h.is_empty() || h.starts_with('*') {
-            continue;
-        }
-        if have.contains(h) {
-            continue;
-        }
-        if have
-            .iter()
-            .any(|w| crate::proxy_config::wildcard_covers_host(w, h))
-        {
-            continue;
-        }
-        return false;
-    }
-    true
+    cert_row_covers_tls_hosts(&row.hosts, tls_hosts)
+}
+
+/// TLS hosts from `tls_hosts` that this certificate row can serve.
+fn hosts_covered_by_row(row: &CertificateRow, tls_hosts: &[String]) -> Vec<String> {
+    tls_hosts
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|h| !h.is_empty() && host_covered_by_cert_hosts(&row.hosts, h))
+        .collect()
 }
 
 fn acme_cert_is_valid(row: &CertificateRow, tls_hosts: &[String]) -> bool {
@@ -269,12 +274,44 @@ pub async fn spawn_auto_ssl_for_config(
             }
         }
 
-        if let Some(row) = find_acme_cert_for_hosts(&cert_rows, &hosts) {
-            let missing = hosts_missing_from_store(&cert_store, &hosts);
+        let hosts_for_acme = acme_hosts_for_order(&hosts, challenge);
+        if hosts_for_acme.is_empty() {
+            tracing::warn!(
+                "Auto-SSL: no eligible domains for {} challenge on {}; \
+                 HTTP-01 requires a non-wildcard hostname, DNS-01 requires DNS provider credentials",
+                challenge,
+                hosts.join(", ")
+            );
+            continue;
+        }
+
+        // Decide renew/obtain from the ACME order identifiers (e.g. `*.apps…`), not the full
+        // TLS host list. New names under an existing wildcard must not re-issue the same order.
+        if let Some(row) = find_acme_cert_for_hosts(&cert_rows, &hosts_for_acme) {
+            let covered = hosts_covered_by_row(row, &hosts);
+            let uncovered: Vec<String> = hosts
+                .iter()
+                .filter(|h| {
+                    let h = h.trim();
+                    !h.is_empty() && !host_covered_by_cert_hosts(&row.hosts, h)
+                })
+                .cloned()
+                .collect();
+            if !uncovered.is_empty() {
+                tracing::warn!(
+                    "Auto-SSL: certificate {} covers ACME order {} but not TLS host(s) {} — \
+                     leave those hosts on a separate TLS/ACME entry (do not re-issue the same order)",
+                    row.id,
+                    hosts_for_acme.join(", "),
+                    uncovered.join(", ")
+                );
+            }
+
+            let missing = hosts_missing_from_store(&cert_store, &covered);
             if missing.is_empty() {
                 tracing::info!(
                     "Auto-SSL: valid ACME certificate already present for {} (id={})",
-                    hosts.join(", "),
+                    hosts_for_acme.join(", "),
                     row.id
                 );
                 continue;
@@ -289,31 +326,33 @@ pub async fn spawn_auto_ssl_for_config(
                 cert_store.as_ref(),
                 &certs_dir,
                 row,
-                &hosts,
+                &covered,
             )
             .await
             {
                 Ok(()) => {
                     tracing::info!(
                         "Auto-SSL: reloaded ACME certificate for {} — restart pertisk-proxy if HTTPS is not listening yet",
-                        hosts.join(", ")
+                        covered.join(", ")
                     );
                     continue;
                 }
                 Err(e) => tracing::warn!(
                     "Auto-SSL: failed to reload ACME certificate for {}: {}",
-                    hosts.join(", "),
+                    covered.join(", "),
                     e
                 ),
             }
         }
 
-        // Drop any other stale ACME rows for these hosts before obtain.
+        // Drop stale ACME rows that claim the order hosts but are expired / incomplete.
         for row in cert_rows.iter() {
-            if !row.source_type.eq_ignore_ascii_case("acme") || !cert_row_covers_hosts(row, &hosts) {
+            if !row.source_type.eq_ignore_ascii_case("acme")
+                || !cert_row_covers_hosts(row, &hosts_for_acme)
+            {
                 continue;
             }
-            if acme_cert_is_valid(row, &hosts) {
+            if acme_cert_is_valid(row, &hosts_for_acme) {
                 continue;
             }
             if db.delete_certificate(&row.id).await.ok() == Some(true) {
@@ -328,13 +367,11 @@ pub async fn spawn_auto_ssl_for_config(
 
         cert_rows = db.list_certificates().await.unwrap_or(cert_rows);
 
-        let hosts_for_acme = acme_hosts_for_order(&hosts, challenge);
-        if hosts_for_acme.is_empty() {
-            tracing::warn!(
-                "Auto-SSL: no eligible domains for {} challenge on {}; \
-                 HTTP-01 requires a non-wildcard hostname, DNS-01 requires DNS provider credentials",
-                challenge,
-                hosts.join(", ")
+        // If a still-valid order cert exists after cleanup, do not re-obtain.
+        if find_acme_cert_for_hosts(&cert_rows, &hosts_for_acme).is_some() {
+            tracing::info!(
+                "Auto-SSL: valid ACME certificate already present for {}; skipping obtain",
+                hosts_for_acme.join(", ")
             );
             continue;
         }
@@ -492,4 +529,66 @@ pub async fn spawn_auto_ssl_for_config(
     _cert_store: Arc<CertStore>,
     _certs_dir: std::path::PathBuf,
 ) {
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::CertificateRow;
+
+    fn row(hosts: &[&str]) -> CertificateRow {
+        CertificateRow {
+            id: "test".into(),
+            hosts: hosts.iter().map(|s| (*s).to_string()).collect(),
+            source_type: "acme".into(),
+            created_at: "now".into(),
+            expires_at: Some("2026-10-29T02:25:59Z".into()),
+        }
+    }
+
+    #[test]
+    fn wildcard_cert_covers_new_names_under_same_wildcard() {
+        let cert = ["*.apps.example.com"];
+        let tls = [
+            "*.apps.example.com".into(),
+            "admin.apps.example.com".into(),
+            "new.apps.example.com".into(),
+        ];
+        assert!(cert_row_covers_tls_hosts(
+            &cert.iter().map(|s| (*s).to_string()).collect::<Vec<_>>(),
+            &tls
+        ));
+        assert!(cert_row_matches_tls_config(&row(&cert), &tls));
+    }
+
+    #[test]
+    fn mismatched_label_not_covered_by_apps_wildcard() {
+        let cert = ["*.apps.example.com"];
+        let tls = [
+            "*.apps.example.com".into(),
+            "gtt.app.example.com".into(), // note: app vs apps
+        ];
+        assert!(!cert_row_covers_tls_hosts(
+            &cert.iter().map(|s| (*s).to_string()).collect::<Vec<_>>(),
+            &tls
+        ));
+        assert!(!cert_row_matches_tls_config(&row(&cert), &tls));
+    }
+
+    #[test]
+    fn expanded_db_host_list_still_covers_new_tls_names() {
+        // DB row listed every site at import time; TLS later gained more names under *.apps
+        let cert = [
+            "*.apps.example.com",
+            "admin.apps.example.com",
+            "omni.apps.example.com",
+        ];
+        let tls = [
+            "*.apps.example.com".into(),
+            "admin.apps.example.com".into(),
+            "omni.apps.example.com".into(),
+            "la.apps.example.com".into(),
+        ];
+        assert!(cert_row_matches_tls_config(&row(&cert), &tls));
+    }
 }
