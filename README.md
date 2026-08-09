@@ -4,6 +4,14 @@ Reverse proxy and Kubernetes Ingress controller built on [Pingora](https://githu
 
 Structured like [pertisk-rproxy](https://github.com/pertisktech/pertisk-rproxy): **two binaries**, separate configs, and packaging via `build/package.sh`.
 
+## Admin UI
+
+Web console for sites, TLS, access control, WAF, certificates, DNS, logs, metrics, backup, and settings. The **Sites** list shows domain, protocol (HTTP/HTTPS), upstream, routes, and SSL status:
+
+![Pertisk-Proxy Admin — Sites list](docs/resources/1786259569903.jpg)
+
+Default management API listen: `[::]:9080` (IPv4 + IPv6 dual-stack).
+
 ## Binaries
 
 | Binary | Mode | Purpose |
@@ -218,6 +226,10 @@ src/
   runtime.rs              # PERTISK_*_MODE tuning
   geoip.rs                # Country/ASN lookup + policy
   security/               # WAF / bot / captcha
+admin/                    # React admin UI (Sites, TLS, WAF, …)
+docs/
+  resources/              # README screenshots
+  performance-tuning.md
 build/
   package.sh              # DEB/RPM/tar packaging
   pertisk-proxy.conf
