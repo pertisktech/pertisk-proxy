@@ -79,8 +79,29 @@ pub fn is_connect_request(headers: &http::HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
-/// Long-lived `/api/` streams (Connect Watch, gRPC Watch, etc.).
+/// Server-Sent Events (`GET` + `Accept: text/event-stream`, or common `/events` paths).
+///
+/// H3 upstream hop buffers the full response body (`bytes().await`), so SSE never flushes.
+pub fn is_sse_request(method: &Method, path: &str, headers: &http::HeaderMap) -> bool {
+    if *method != Method::GET {
+        return false;
+    }
+    if headers
+        .get(header::ACCEPT.as_str())
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|a| a.split(',').any(|p| p.trim().starts_with("text/event-stream")))
+    {
+        return true;
+    }
+    let path = path.split('?').next().unwrap_or(path);
+    path == "/events" || path == "/api/events" || path.ends_with("/events")
+}
+
+/// Long-lived streams: Connect/gRPC Watch, SSE, etc.
 pub fn is_long_lived_api_stream(method: &Method, path: &str, headers: &http::HeaderMap) -> bool {
+    if is_sse_request(method, path, headers) {
+        return true;
+    }
     *method == Method::POST
         && is_grpc_rpc_path(path)
         && (is_grpc_server_streaming(path) || is_connect_request(headers))
@@ -133,10 +154,23 @@ pub fn is_grpc_like_request(headers: &http::HeaderMap, method: &Method, path: &s
     is_grpc_request(headers) || is_grpc_web_request(headers, method, path)
 }
 
-/// HTTP/3 cannot proxy Omni `/api/` RPC streams (buffering + wrong semantics). Force HTTP/2.
+/// HTTP/3 cannot proxy long-lived streams (full-body buffering). Force HTTP/2.
 pub fn is_h3_incompatible_request(headers: &http::HeaderMap, method: &Method, path: &str) -> bool {
-    is_grpc_like_request(headers, method, path)
+    is_sse_request(method, path, headers)
+        || is_grpc_like_request(headers, method, path)
         || (*method == Method::POST && is_grpc_rpc_path(path))
+}
+
+/// Extend downstream read/write timeouts for long-lived streams (Pingora default is 60s).
+pub fn prepare_long_lived_downstream_session(session: &mut Session) {
+    let timeout = grpc_upstream_timeout();
+    if timeout == std::time::Duration::MAX {
+        session.set_read_timeout(None);
+        session.set_write_timeout(None);
+    } else {
+        session.set_read_timeout(Some(timeout));
+        session.set_write_timeout(Some(timeout));
+    }
 }
 
 /// h2c upstream: native gRPC only (never for `/api/` gRPC-Web/Connect paths on the UI host).
@@ -481,6 +515,34 @@ mod tests {
             &headers,
             &Method::POST,
             "/api/foo.Bar/Get"
+        ));
+    }
+
+    #[test]
+    fn sse_is_long_lived_and_h3_incompatible() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(header::ACCEPT, "text/event-stream".parse().unwrap());
+        assert!(is_sse_request(
+            &Method::GET,
+            "/api/events",
+            &headers
+        ));
+        assert!(is_long_lived_api_stream(
+            &Method::GET,
+            "/api/events",
+            &headers
+        ));
+        assert!(is_h3_incompatible_request(
+            &headers,
+            &Method::GET,
+            "/api/events"
+        ));
+        // Path fallback without Accept (defensive).
+        assert!(is_sse_request(&Method::GET, "/api/events", &http::HeaderMap::new()));
+        assert!(!is_sse_request(
+            &Method::POST,
+            "/api/events",
+            &headers
         ));
     }
 

@@ -249,6 +249,18 @@ async fn handle_proxied_request(
         .map(|pq| pq.as_str())
         .unwrap_or(path);
 
+    if crate::proxy::grpc::is_h3_incompatible_request(req.headers(), req.method(), path) {
+        send_error(
+            &mut send,
+            error_response(
+                http::StatusCode::MISDIRECTED_REQUEST,
+                "long-lived stream requires HTTP/2 (Alt-Svc: clear)",
+            ),
+        )
+        .await;
+        return Ok(());
+    }
+
     let plan = match resolve_forward(router.snapshot().as_ref(), &host, path_q) {
         Ok(plan) => plan,
         Err(_) => {

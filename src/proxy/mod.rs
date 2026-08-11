@@ -193,6 +193,9 @@ impl ProxyHttp for Gateway {
         ctx.is_long_lived_stream =
             grpc::is_long_lived_api_stream(&req.method, req.uri.path(), &req.headers);
         ctx.is_registry = registry::is_oci_registry_path(req.uri.path());
+        if ctx.is_long_lived_stream {
+            grpc::prepare_long_lived_downstream_session(session);
+        }
         if ctx.is_registry {
             registry::prepare_registry_downstream_session(session);
         }
@@ -622,6 +625,14 @@ impl ProxyHttp for Gateway {
         ctx: &mut Self::CTX,
     ) -> Result<()> {
         let path = session.req_header().uri.path();
+        let sse_response = upstream_response
+            .headers
+            .get(http::header::CONTENT_TYPE.as_str())
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|ct| ct.starts_with("text/event-stream"));
+        if sse_response {
+            ctx.is_long_lived_stream = true;
+        }
         let streaming = ctx.is_long_lived_stream
             || (ctx.is_grpc && grpc::is_grpc_server_streaming(path));
         if streaming && upstream_response.status.is_success() {
@@ -648,6 +659,14 @@ impl ProxyHttp for Gateway {
             .ok();
 
         let path = session.req_header().uri.path();
+        let sse_response = upstream_response
+            .headers
+            .get(http::header::CONTENT_TYPE.as_str())
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|ct| ct.starts_with("text/event-stream"));
+        if sse_response {
+            ctx.is_long_lived_stream = true;
+        }
         if registry::is_oci_registry_path(path) {
             registry::prepare_registry_response_headers(
                 upstream_response,
@@ -1006,6 +1025,16 @@ mod alt_svc_tests {
         ctx.is_grpc = true;
         assert_eq!(
             alt_svc_header_value(true, 443, "example.com", &ctx).as_deref(),
+            Some("clear")
+        );
+    }
+
+    #[test]
+    fn alt_svc_clear_for_long_lived_sse() {
+        let mut ctx = RequestCtx::default();
+        ctx.is_long_lived_stream = true;
+        assert_eq!(
+            alt_svc_header_value(true, 443, "ptkos.apps.thaidevops.co", &ctx).as_deref(),
             Some("clear")
         );
     }

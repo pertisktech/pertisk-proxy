@@ -350,13 +350,14 @@ async fn handle_request_inner(
     }
 
     if grpc::is_h3_incompatible_request(req.headers(), req.method(), req.uri().path()) {
+        // H3 upstream hop buffers the full body — SSE / gRPC streams never flush.
         send_h3_response(
             stream,
             plain_response(
                 http::StatusCode::MISDIRECTED_REQUEST,
-                b"Omni /api/ RPC requires HTTP/2 (Alt-Svc: clear)",
+                b"long-lived stream requires HTTP/2 (Alt-Svc: clear)",
             ),
-            Bytes::from_static(b"Omni /api/ RPC requires HTTP/2 (Alt-Svc: clear)"),
+            Bytes::from_static(b"long-lived stream requires HTTP/2 (Alt-Svc: clear)"),
         )
         .await?;
         return Ok(());
