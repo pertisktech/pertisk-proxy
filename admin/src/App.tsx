@@ -94,12 +94,7 @@ export default function App() {
     <ThemeProvider>
       <ModeContext.Provider value={mode}>
         <ManagementContext.Provider value={managementInfo}>
-          <BrowserRouter
-            future={{
-              v7_startTransition: true,
-              v7_relativeSplatPath: true,
-            }}
-          >
+          <BrowserRouter>
             <Routes>
               <Route path="/login" element={<Login />} />
               <Route element={<AuthGate onAuthed={refreshManagement} onLogout={logout} />}>

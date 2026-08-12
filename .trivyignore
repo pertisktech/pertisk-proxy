@@ -1,0 +1,17 @@
+# Transitive deps with no fixed version on our dependency path yet.
+# Re-run: trivy fs . --skip-dirs "data,out" --scanners vuln
+# Remove entries when pingora / aws-sdk / acme-lib publish fixes.
+
+# pingora-core → prometheus 0.13 → protobuf 2.x (needs pingora bump to prometheus 0.14+)
+CVE-2025-53605
+
+# tokio-quiche → foundations → opentelemetry-proto 0.31 pins opentelemetry_sdk 0.31
+CVE-2026-48504
+
+# aws-smithy-http-client default TLS stack still pulls rustls 0.21 / webpki 0.101
+GHSA-82j2-j2ch-gfr8
+GHSA-965h-392x-2mh5
+GHSA-xgp8-3hg3-c2mh
+
+# acme-lib 0.9.1 (unmaintained) depends on time 0.1; used only for ACME obtain/renew
+CVE-2020-26235

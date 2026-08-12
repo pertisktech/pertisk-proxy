@@ -158,9 +158,15 @@ impl AsnTsvDb {
 impl AsnDb {
     fn lookup(&self, addr: IpAddr) -> Option<u32> {
         match self {
-            AsnDb::Mmdb(reader) => match reader.lookup::<geoip2::Asn>(addr) {
-                Ok(Some(record)) => record.autonomous_system_number,
-                Ok(None) => None,
+            AsnDb::Mmdb(reader) => match reader.lookup(addr) {
+                Ok(result) => match result.decode::<geoip2::Asn>() {
+                    Ok(Some(record)) => record.autonomous_system_number,
+                    Ok(None) => None,
+                    Err(err) => {
+                        debug!(error = %err, "GeoIP ASN MMDB decode failed");
+                        None
+                    }
+                },
                 Err(err) => {
                     debug!(error = %err, "GeoIP ASN MMDB lookup failed");
                     None
@@ -268,14 +274,15 @@ impl GeoIpEngine {
         let addr: IpAddr = ip.trim().parse().ok()?;
         let mut info = GeoInfo::default();
         if let Some(reader) = &self.country {
-            match reader.lookup::<geoip2::Country>(addr) {
-                Ok(Some(record)) => {
-                    info.country = record
-                        .country
-                        .and_then(|c| c.iso_code)
-                        .map(|code| code.to_ascii_uppercase());
+            match reader.lookup(addr) {
+                Ok(result) => {
+                    if let Ok(Some(record)) = result.decode::<geoip2::Country>() {
+                        info.country = record
+                            .country
+                            .iso_code
+                            .map(|code| code.to_ascii_uppercase());
+                    }
                 }
-                Ok(None) => {}
                 Err(err) => debug!(ip = %ip, error = %err, "GeoIP country lookup failed"),
             }
         }
