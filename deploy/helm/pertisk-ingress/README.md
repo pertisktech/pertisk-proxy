@@ -9,6 +9,21 @@ Deploy **pertisk-proxy-ingress** as a Kubernetes Ingress + Gateway API controlle
 
 ## Install
 
+**Package chart locally** (writes `release/pertisk-ingress-<version>.tgz`):
+
+```bash
+make package-helm VERSION=0.1.0
+# alias: make helm-package VERSION=0.1.0
+```
+
+**Publish chart** to the Pertisk chart repo:
+
+```bash
+HELM_CHART_TOKEN=<jwt> make release-helm VERSION=0.1.0
+# or: HELM_USER=... HELM_PASSWORD=... make release-helm VERSION=0.1.0
+# alias: make publish-helm VERSION=0.1.0
+```
+
 **Helm only** (image must already exist in registry):
 
 ```bash

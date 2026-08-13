@@ -153,6 +153,8 @@ Like pertisk-rproxy's `build/package.sh`:
 ./build/package.sh amd64 0.1.0 proxy  # proxy only
 ./build/package.sh amd64 0.1.0 ingress # ingress only
 make package-amd64
+make package-helm VERSION=0.1.0       # Helm chart → release/*.tgz
+make release-helm VERSION=0.1.0       # package + publish chart repo
 ```
 
 Installs:

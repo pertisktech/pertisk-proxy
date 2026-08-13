@@ -1,6 +1,7 @@
 .PHONY: build build-ingress build-all run run-release run-ingress run-ingress-release \
 	test check package package-clean package-amd64 package-arm64 package-deb package-rpm \
-	package-proxy package-ingress release release-amd release-arm \
+	package-proxy package-ingress package-helm helm-package \
+	release release-amd release-arm release-helm publish-helm \
 	deploy deploy-package deploy-package-ingress deploy-remote \
 	deploy-deb deploy-deb-ingress deploy-deb-arm deploy-rpm deploy-rpm-ingress deploy-rpm-arm deploy-rpm-arm64 apply-ingress-rbac \
 	deploy-ingress-helm deploy-ingress deploy-cloud deploy-285h uninstall-legacy-ingress-helm \
@@ -221,6 +222,29 @@ release-proxy:
 release-ingress:
 	$(MAKE) package-clean
 	$(MAKE) package-ingress VERSION=$(VERSION)
+
+# --- Helm chart: package + publish (pertisk-ingress) ---
+# make package-helm VERSION=0.1.74   — helm package → release/pertisk-ingress-*.tgz
+# make release-helm VERSION=0.1.74   — package + upload to chart repo
+# Auth for release-helm: HELM_CHART_TOKEN=...  or  HELM_USER=... HELM_PASSWORD=...
+HELM_CHART_REPO_URL ?= https://chart.cloud.pertisksoft.net
+HELM_CHART_DIR ?= deploy/helm/pertisk-ingress
+HELM_CHART_TOKEN ?=
+HELM_USER ?=
+HELM_PASSWORD ?=
+
+package-helm helm-package:
+	chmod +x build/publish-helm-ingress.sh
+	VERSION="$(VERSION)" PACKAGE_ONLY=1 \
+		HELM_CHART_REPO_URL="$(HELM_CHART_REPO_URL)" HELM_CHART_DIR="$(HELM_CHART_DIR)" \
+		./build/publish-helm-ingress.sh
+
+release-helm publish-helm:
+	chmod +x build/publish-helm-ingress.sh
+	VERSION="$(VERSION)" PACKAGE_ONLY=0 \
+		HELM_CHART_REPO_URL="$(HELM_CHART_REPO_URL)" HELM_CHART_DIR="$(HELM_CHART_DIR)" \
+		HELM_CHART_TOKEN="$(HELM_CHART_TOKEN)" HELM_USER="$(HELM_USER)" HELM_PASSWORD="$(HELM_PASSWORD)" \
+		./build/publish-helm-ingress.sh
 
 # One-time: IngressClass + ClusterRole for external systemd ingress controller
 apply-ingress-rbac:
