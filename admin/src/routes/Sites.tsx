@@ -28,11 +28,14 @@ import { usePageSize } from '@/utils/usePageSize';
 import { useOpenOnQuery } from '@/utils/useOpenOnQuery';
 import {
   acmeChallengeFromSource,
+  attachSitesToWildcardTls,
   hostToWildcard,
   inferSslModeForSite,
   isInvalidAcmeIdentifier,
   removeRelatedHostsFromTls,
   resolveTlsForHost,
+  siteHostsCoveredByWildcard,
+  wildcardCoversHost,
   siteUsesWildcardInTls,
   sslLabelForCard,
   sslLabelForDropdown,
@@ -389,27 +392,36 @@ export function Sites() {
     }
 
     let newTls = [...tlsList];
-    // Detach previous + current site hosts (and related wildcards) so renames / SSL
-    // changes do not leave orphan ACME entries like `*.com` from a bad apex wildcard.
-    if (editingIndex !== null) {
-      const previousHost = sites[editingIndex]?.host?.trim();
-      if (previousHost) newTls = removeRelatedHostsFromTls(newTls, previousHost);
+    const previousHost =
+      editingIndex !== null ? sites[editingIndex]?.host?.trim() ?? '' : '';
+    // Rename: drop the old site's names (including a mistaken `*.com` wildcard).
+    if (previousHost && previousHost.toLowerCase() !== host.toLowerCase()) {
+      newTls = removeRelatedHostsFromTls(newTls, previousHost);
     }
-    newTls = removeRelatedHostsFromTls(newTls, host);
+    // Keep a shared `*.zone` cert when this site switches to a dedicated name.
+    newTls = newTls
+      .map((t) => ({
+        ...t,
+        hosts: (t.hosts ?? []).filter((h) => h.trim().toLowerCase() !== host.toLowerCase()),
+      }))
+      .filter((t) => (t.hosts ?? []).length > 0);
 
     if (formSslMode === 'none') {
       // already detached above
     } else if (formSslMode === 'from_list') {
       const orig = tlsList[formTlsIndex];
       if (orig) {
-        const rest = removeRelatedHostsFromTls([orig], host)[0]?.hosts ?? orig.hosts.filter((h) => h !== host);
-        const idx = newTls.findIndex(
-          (t) => t.hosts.length === rest.length && rest.every((h) => t.hosts.includes(h)),
-        );
-        if (idx >= 0) {
-          newTls = newTls.map((t, i) => (i === idx ? { ...t, hosts: [...t.hosts, host] } : t));
-        } else {
-          newTls = [...newTls, { ...orig, hosts: [host, ...rest] }];
+        const coveredByWildcard = (orig.hosts ?? []).some((h) => wildcardCoversHost(h, host));
+        if (!coveredByWildcard) {
+          const rest = orig.hosts.filter((h) => h.trim().toLowerCase() !== host.toLowerCase());
+          const idx = newTls.findIndex(
+            (t) => t.hosts.length === rest.length && rest.every((h) => t.hosts.includes(h)),
+          );
+          if (idx >= 0) {
+            newTls = newTls.map((t, i) => (i === idx ? { ...t, hosts: [...t.hosts, host] } : t));
+          } else {
+            newTls = [...newTls, { ...orig, hosts: [host, ...rest] }];
+          }
         }
       }
     } else if (formSslMode === 'generate') {
@@ -422,11 +434,17 @@ export function Sites() {
       if (formAcmeEmail.trim() !== acmeEmailTrim) {
         setFormAcmeEmail(acmeEmailTrim);
       }
+      if (formWildcard && formAcmeChallenge !== 'dns01') {
+        setSiteError('Wildcard certificates require DNS-01. Switch the challenge type and select a DNS provider.');
+        setSiteFormTab('general');
+        return;
+      }
       if (formAcmeChallenge === 'dns01' && !formDnsProviderId) {
         setSiteError('Select a DNS Provider for DNS-01 challenge');
         return;
       }
-      const hosts = formWildcard ? [hostToWildcard(host), host] : [host];
+      const wildcardName = formWildcard ? hostToWildcard(host) : null;
+      const hosts = wildcardName ? [wildcardName, host] : [host];
       if (hosts.some((h) => isInvalidAcmeIdentifier(h))) {
         setSiteError(
           `Invalid certificate hostname (${hosts.filter(isInvalidAcmeIdentifier).join(', ')}). Use a real domain like example.com, not a public TLD.`,
@@ -434,15 +452,22 @@ export function Sites() {
         setSiteFormTab('general');
         return;
       }
+      const upcomingSiteHosts = [
+        ...sites
+          .map((s, i) => (editingIndex !== null && i === editingIndex ? host : s.host.trim()))
+          .filter(Boolean),
+        ...(editingIndex === null ? [host] : []),
+      ];
       const mergeAcmeTls = (acmeSource: TlsSource) => {
-        const wildcardKey = formWildcard ? hostToWildcard(host).toLowerCase() : null;
+        if (wildcardName) {
+          const covered = siteHostsCoveredByWildcard(wildcardName, upcomingSiteHosts);
+          newTls = attachSitesToWildcardTls(newTls, wildcardName, covered, acmeSource);
+          return;
+        }
         const existingIdx = newTls.findIndex((t) => {
           if (t.source?.type !== 'acme') return false;
           if (acmeChallengeFromSource(t.source as Extract<TlsSource, { type: 'acme' }>) !== formAcmeChallenge) {
             return false;
-          }
-          if (wildcardKey) {
-            return (t.hosts ?? []).some((h) => h.trim().toLowerCase() === wildcardKey);
           }
           return (t.hosts ?? []).some((h) => h.trim().toLowerCase() === host.trim().toLowerCase());
         });
@@ -881,7 +906,10 @@ export function Sites() {
                     ) : null}
                     <Checkbox
                       checked={formWildcard}
-                      onChange={setFormWildcard}
+                      onChange={(v) => {
+                        setFormWildcard(v);
+                        if (v) setFormAcmeChallenge('dns01');
+                      }}
                       className="text-sm"
                       label={`Wildcard certificate (${formHost.trim() ? hostToWildcard(formHost.trim()) : '*.domain'})`}
                     />

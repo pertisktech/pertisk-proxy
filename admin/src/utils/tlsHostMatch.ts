@@ -68,18 +68,77 @@ export function removeRelatedHostsFromTls(list: TlsConfig[], siteHost: string): 
     .filter((t) => (t.hosts ?? []).length > 0);
 }
 
+/** Site hostnames covered by `*.zone` (single DNS label). */
+export function siteHostsCoveredByWildcard(wildcard: string, siteHosts: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of siteHosts) {
+    const h = raw.trim();
+    if (!h || seen.has(normalizeHost(h))) continue;
+    if (wildcardCoversHost(wildcard, h)) {
+      seen.add(normalizeHost(h));
+      out.push(h);
+    }
+  }
+  return out;
+}
+
+/**
+ * Point every covered site at one wildcard TLS entry and drop leftover per-domain ACME rows.
+ * SSL labels then show `*.proxmox.example.com`, not a sibling leaf like `13900hx.proxmox.example.com`.
+ */
+export function attachSitesToWildcardTls(
+  list: TlsConfig[],
+  wildcard: string,
+  coveredSiteHosts: string[],
+  acmeSource: TlsSource,
+): TlsConfig[] {
+  const wild = normalizeHost(wildcard);
+  if (!wild.startsWith('*.') || isInvalidAcmeIdentifier(wildcard)) return list;
+  const covered = new Set(coveredSiteHosts.map((h) => normalizeHost(h)).filter(Boolean));
+
+  const stripped = list
+    .map((t) => ({
+      ...t,
+      hosts: (t.hosts ?? []).filter((h) => {
+        const n = normalizeHost(h);
+        if (!n) return false;
+        if (n === wild) return false;
+        if (covered.has(n)) return false;
+        return true;
+      }),
+    }))
+    .filter((t) => (t.hosts ?? []).length > 0);
+
+  const existingIdx = stripped.findIndex(
+    (t) =>
+      t.source?.type === 'acme' &&
+      (t.hosts ?? []).some((h) => normalizeHost(h) === wild),
+  );
+  const wildcardEntry: TlsConfig = { hosts: [wildcard.trim()], source: acmeSource };
+  if (existingIdx >= 0) {
+    return stripped.map((t, i) => (i === existingIdx ? { ...t, ...wildcardEntry } : t));
+  }
+  return [...stripped, wildcardEntry];
+}
+
 function tlsEntryIdentityKey(entry: TlsConfig): string {
   const hosts = [...(entry.hosts ?? [])].map(normalizeHost).filter(Boolean).sort();
   const sourceType = entry.source?.type ?? '';
   return `${sourceType}\0${hosts.join('\0')}`;
 }
 
-export function isDedicatedAcmeTlsForSite(siteHost: string, tls: TlsConfig): boolean {
-  if (tls.source?.type !== 'acme') return false;
+/** True when this TLS row only names this site (exact and/or its own wildcard). */
+export function isDedicatedTlsForSite(siteHost: string, tls: TlsConfig): boolean {
   const related = relatedHostsForSite(siteHost);
   const hosts = (tls.hosts ?? []).map((h) => normalizeHost(h)).filter(Boolean);
   if (!hosts.length) return false;
   return hosts.every((h) => related.has(h));
+}
+
+export function isDedicatedAcmeTlsForSite(siteHost: string, tls: TlsConfig): boolean {
+  if (tls.source?.type !== 'acme') return false;
+  return isDedicatedTlsForSite(siteHost, tls);
 }
 
 export function inferSslModeForSite(host: string, tlsList: TlsConfig[]): SiteSslMode {
@@ -101,42 +160,50 @@ export function siteUsesWildcardInTls(siteHost: string, tls: TlsConfig): boolean
   return (tls.hosts ?? []).some((h) => normalizeHost(h) === normalizeHost(wildcardHost));
 }
 
-/** Find the TLS config entry that covers a site host (exact match, then most specific wildcard). */
+function coveringWildcardScore(entry: TlsConfig, host: string): number {
+  let best = 0;
+  for (const rawHost of entry.hosts ?? []) {
+    const h = normalizeHost(rawHost);
+    if (h === '*') {
+      best = Math.max(best, 1);
+      continue;
+    }
+    if (!wildcardCoversHost(h, host)) continue;
+    best = Math.max(best, h.length);
+  }
+  return best;
+}
+
+/**
+ * TLS for a site: dedicated per-host cert, else covering wildcard (domain TLS),
+ * else a shared exact-host row. Shared leaf rows must not beat `*.zone`.
+ */
 export function resolveTlsForHost(host: string, tlsList: TlsConfig[]): TlsConfig | null {
   const normalizedHost = normalizeHost(host);
   if (!normalizedHost) return null;
 
+  let bestWildcard: { entry: TlsConfig; score: number } | null = null;
+  for (const entry of tlsList) {
+    const score = coveringWildcardScore(entry, normalizedHost);
+    if (score > 0 && (!bestWildcard || score > bestWildcard.score)) {
+      bestWildcard = { entry, score };
+    }
+  }
+
   const exactCandidates = tlsList.filter((entry) =>
     (entry.hosts ?? []).some((h) => normalizeHost(h) === normalizedHost),
   );
+  const dedicated = exactCandidates.filter((entry) => isDedicatedTlsForSite(host, entry));
+  if (dedicated.length > 0) {
+    dedicated.sort((a, b) => (a.hosts ?? []).length - (b.hosts ?? []).length);
+    return dedicated[0] ?? null;
+  }
+  if (bestWildcard) return bestWildcard.entry;
   if (exactCandidates.length > 0) {
-    exactCandidates.sort((a, b) => {
-      const aHosts = a.hosts ?? [];
-      const bHosts = b.hosts ?? [];
-      const aHasWildcard = aHosts.some((h) => h.trim().startsWith('*'));
-      const bHasWildcard = bHosts.some((h) => h.trim().startsWith('*'));
-      if (aHasWildcard !== bHasWildcard) return aHasWildcard ? 1 : -1;
-      return aHosts.length - bHosts.length;
-    });
+    exactCandidates.sort((a, b) => (a.hosts ?? []).length - (b.hosts ?? []).length);
     return exactCandidates[0] ?? null;
   }
-
-  let best: { entry: TlsConfig; score: number } | null = null;
-  for (const entry of tlsList) {
-    for (const rawHost of entry.hosts ?? []) {
-      const h = normalizeHost(rawHost);
-      if (h === '*') {
-        if (!best || best.score < 1) best = { entry, score: 1 };
-        continue;
-      }
-      if (!h.startsWith('*.')) continue;
-      const suffix = h.slice(1);
-      if (!normalizedHost.endsWith(suffix) || normalizedHost.length <= suffix.length) continue;
-      const score = suffix.length;
-      if (!best || score > best.score) best = { entry, score };
-    }
-  }
-  return best?.entry ?? null;
+  return null;
 }
 
 export function tlsIndexForHost(host: string, tlsList: TlsConfig[]): number {
