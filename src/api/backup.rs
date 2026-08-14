@@ -1054,6 +1054,7 @@ pub async fn activate_proxy_config(
         .cert_store
         .reload_from_configs(&config.tls)
         .map_err(|e| e.to_string())?;
+    state.cert_store.set_expected_from_config(config);
     if let Err(err) =
         super::load_db_certs_into_store(db, state.cert_store.as_ref(), &state.certs_dir).await
     {

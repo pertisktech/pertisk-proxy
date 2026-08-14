@@ -230,7 +230,23 @@ fn tls_entries_should_merge(a: &TlsConfig, b: &TlsConfig) -> bool {
     }
 }
 
+/// True when Let's Encrypt (and similar CAs) reject this identifier.
+/// Examples: `*.com`, `com`, `*.net` (public TLD / too few labels).
+pub fn is_invalid_acme_identifier(host: &str) -> bool {
+    let h = host.trim().to_ascii_lowercase();
+    if h.is_empty() {
+        return true;
+    }
+    let labels: Vec<&str> = if let Some(rest) = h.strip_prefix("*.") {
+        rest.split('.').filter(|p| !p.is_empty()).collect()
+    } else {
+        h.split('.').filter(|p| !p.is_empty()).collect()
+    };
+    labels.len() < 2
+}
+
 /// Merge duplicate TLS rows (e.g. repeated ACME wildcard entries from site saves).
+/// Also drops ACME hosts that are invalid identifiers (e.g. leftover `*.com`).
 pub fn normalize_tls_config(tls: &mut Vec<TlsConfig>) {
     let mut merged: Vec<TlsConfig> = Vec::new();
     for entry in tls.drain(..) {
@@ -254,6 +270,16 @@ pub fn normalize_tls_config(tls: &mut Vec<TlsConfig>) {
             merged.push(entry);
         }
     }
+    for entry in &mut merged {
+        if matches!(entry.source, TlsSource::Acme { .. }) {
+            let before = entry.hosts.len();
+            entry.hosts.retain(|h| !is_invalid_acme_identifier(h));
+            if entry.hosts.len() != before {
+                entry.expires_at = None;
+            }
+        }
+    }
+    merged.retain(|t| !t.hosts.is_empty());
     *tls = merged;
 }
 
@@ -987,6 +1013,40 @@ mod tls_normalize_tests {
         normalize_tls_config(&mut tls);
         assert_eq!(tls.len(), 1);
         assert_eq!(tls[0].hosts, vec!["ok.example.com"]);
+    }
+
+    #[test]
+    fn normalize_tls_drops_invalid_acme_tld_wildcards() {
+        let mut tls = vec![TlsConfig {
+            hosts: vec!["*.com".into(), "pertisk.com".into(), "*.pertisk.com".into()],
+            source: acme_source(),
+            expires_at: None,
+        }];
+        normalize_tls_config(&mut tls);
+        assert_eq!(tls.len(), 1);
+        assert!(!tls[0].hosts.iter().any(|h| h == "*.com"));
+        assert!(tls[0].hosts.iter().any(|h| h == "pertisk.com"));
+        assert!(tls[0].hosts.iter().any(|h| h == "*.pertisk.com"));
+    }
+
+    #[test]
+    fn normalize_tls_removes_entry_that_only_had_invalid_hosts() {
+        let mut tls = vec![TlsConfig {
+            hosts: vec!["*.com".into()],
+            source: acme_source(),
+            expires_at: None,
+        }];
+        normalize_tls_config(&mut tls);
+        assert!(tls.is_empty());
+    }
+
+    #[test]
+    fn is_invalid_acme_identifier_detects_tld_wildcards() {
+        assert!(is_invalid_acme_identifier("*.com"));
+        assert!(is_invalid_acme_identifier("com"));
+        assert!(!is_invalid_acme_identifier("*.pertisk.com"));
+        assert!(!is_invalid_acme_identifier("pertisk.com"));
+        assert!(!is_invalid_acme_identifier("admin.pertisk.com"));
     }
 
     #[test]

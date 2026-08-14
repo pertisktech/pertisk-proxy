@@ -151,21 +151,27 @@ async fn reload_acme_cert_into_store(
 
 fn acme_hosts_for_order(hosts: &[String], challenge: &str) -> Vec<String> {
     let is_dns01 = challenge.eq_ignore_ascii_case("dns01") || challenge.eq_ignore_ascii_case("dns-01");
-    if is_dns01 {
+    let eligible: Vec<String> = if is_dns01 {
         let wildcards: Vec<String> = hosts
             .iter()
             .filter(|h| h.starts_with('*'))
             .cloned()
             .collect();
         if !wildcards.is_empty() {
-            return wildcards;
+            wildcards
+        } else {
+            hosts.to_vec()
         }
-        return hosts.to_vec();
-    }
-    hosts
-        .iter()
-        .filter(|h| !h.starts_with('*'))
-        .cloned()
+    } else {
+        hosts
+            .iter()
+            .filter(|h| !h.starts_with('*'))
+            .cloned()
+            .collect()
+    };
+    eligible
+        .into_iter()
+        .filter(|h| !crate::proxy_config::is_invalid_acme_identifier(h))
         .collect()
 }
 

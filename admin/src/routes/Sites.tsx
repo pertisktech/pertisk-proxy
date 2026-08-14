@@ -30,6 +30,8 @@ import {
   acmeChallengeFromSource,
   hostToWildcard,
   inferSslModeForSite,
+  isInvalidAcmeIdentifier,
+  removeRelatedHostsFromTls,
   resolveTlsForHost,
   siteUsesWildcardInTls,
   sslLabelForCard,
@@ -387,19 +389,23 @@ export function Sites() {
     }
 
     let newTls = [...tlsList];
-    const removeHostFromTls = (list: TlsConfig[]) =>
-      list
-        .map((t) => ({ ...t, hosts: t.hosts.filter((h) => h !== host) }))
-        .filter((t) => t.hosts.length > 0);
+    // Detach previous + current site hosts (and related wildcards) so renames / SSL
+    // changes do not leave orphan ACME entries like `*.com` from a bad apex wildcard.
+    if (editingIndex !== null) {
+      const previousHost = sites[editingIndex]?.host?.trim();
+      if (previousHost) newTls = removeRelatedHostsFromTls(newTls, previousHost);
+    }
+    newTls = removeRelatedHostsFromTls(newTls, host);
 
     if (formSslMode === 'none') {
-      newTls = removeHostFromTls(newTls);
+      // already detached above
     } else if (formSslMode === 'from_list') {
-      newTls = removeHostFromTls(newTls);
       const orig = tlsList[formTlsIndex];
       if (orig) {
-        const rest = orig.hosts.filter((h) => h !== host);
-        const idx = newTls.findIndex((t) => t.hosts.length === rest.length && rest.every((h) => t.hosts.includes(h)));
+        const rest = removeRelatedHostsFromTls([orig], host)[0]?.hosts ?? orig.hosts.filter((h) => h !== host);
+        const idx = newTls.findIndex(
+          (t) => t.hosts.length === rest.length && rest.every((h) => t.hosts.includes(h)),
+        );
         if (idx >= 0) {
           newTls = newTls.map((t, i) => (i === idx ? { ...t, hosts: [...t.hosts, host] } : t));
         } else {
@@ -407,7 +413,6 @@ export function Sites() {
         }
       }
     } else if (formSslMode === 'generate') {
-      newTls = removeHostFromTls(newTls);
       const acmeEmailTrim = formAcmeEmail.trim() || config.acme_email?.trim() || '';
       if (!acmeEmailTrim || acmeEmailTrim.includes('@example.com')) {
         setSiteError("A valid contact email is required for Let's Encrypt. Set one under Settings or enter it here.");
@@ -422,6 +427,13 @@ export function Sites() {
         return;
       }
       const hosts = formWildcard ? [hostToWildcard(host), host] : [host];
+      if (hosts.some((h) => isInvalidAcmeIdentifier(h))) {
+        setSiteError(
+          `Invalid certificate hostname (${hosts.filter(isInvalidAcmeIdentifier).join(', ')}). Use a real domain like example.com, not a public TLD.`,
+        );
+        setSiteFormTab('general');
+        return;
+      }
       const mergeAcmeTls = (acmeSource: TlsSource) => {
         const wildcardKey = formWildcard ? hostToWildcard(host).toLowerCase() : null;
         const existingIdx = newTls.findIndex((t) => {
@@ -502,9 +514,11 @@ export function Sites() {
     if (deleteIndex === null) return;
     setDeleting(true);
     try {
+      const deletedHost = sites[deleteIndex]?.host?.trim() ?? '';
       const newSites = sites.filter((_, i) => i !== deleteIndex);
-      const res = await api.saveConfig({ ...config, sites: newSites });
-      setConfig({ ...config, sites: newSites });
+      const newTls = deletedHost ? removeRelatedHostsFromTls(tlsList, deletedHost) : tlsList;
+      const res = await api.saveConfig({ ...config, sites: newSites, tls: newTls });
+      setConfig({ ...config, sites: newSites, tls: newTls });
       toast.success(`Site removed (${res.route_count} routes active)`);
       setDeleteIndex(null);
     } catch (err) {

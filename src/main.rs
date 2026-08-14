@@ -61,6 +61,7 @@ fn main() -> Result<()> {
 
     apply::apply_config(&router, &runtime_config)?;
     cert_store.reload_from_configs(&runtime_config.tls)?;
+    cert_store.set_expected_from_config(&runtime_config);
 
     tokio_runtime.block_on(async {
         proxy_log
@@ -89,6 +90,7 @@ fn main() -> Result<()> {
         .await
         {
             cert_store.reload_from_configs(&runtime_config.tls).ok();
+            cert_store.set_expected_from_config(&runtime_config);
             if let Err(err) = pertisk_proxy::api::load_db_certs_into_store(
                 db.as_ref(),
                 cert_store.as_ref(),

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::RwLock;
 
@@ -40,6 +40,8 @@ impl StoredCert {
 struct CertStoreInner {
     by_host: HashMap<String, StoredCert>,
     default: Option<StoredCert>,
+    /// Configured site / TLS hostnames (exact or wildcard). Used to decide log level on SNI miss.
+    expected: HashSet<String>,
 }
 
 /// In-memory map of hostname -> certificate file paths.
@@ -157,6 +159,49 @@ impl CertStore {
 
     pub fn has_cert_for_host(&self, host: &str) -> bool {
         self.lookup_sni(host).is_some()
+    }
+
+    /// Remember which hostnames are configured (sites + TLS entries).
+    /// Unknown SNI probes are logged at debug; missing certs for these hosts stay at warn.
+    pub fn set_expected_hosts(&self, hosts: impl IntoIterator<Item = impl AsRef<str>>) {
+        let expected: HashSet<String> = hosts
+            .into_iter()
+            .map(|h| normalize_host(h.as_ref()))
+            .filter(|h| !h.is_empty())
+            .collect();
+        if let Ok(mut g) = self.inner.write() {
+            g.expected = expected;
+        }
+    }
+
+    /// Populate expected hosts from proxy sites + TLS config.
+    pub fn set_expected_from_config(&self, config: &crate::proxy_config::Config) {
+        let mut hosts: Vec<String> = config
+            .sites
+            .iter()
+            .map(|s| s.host.clone())
+            .collect();
+        for tls in &config.tls {
+            hosts.extend(tls.hosts.iter().cloned());
+        }
+        self.set_expected_hosts(hosts);
+    }
+
+    /// True when `host` is a configured site/TLS name (exact or covered by an expected wildcard).
+    pub fn expects_host(&self, host: &str) -> bool {
+        let host = normalize_host(host);
+        if host.is_empty() {
+            return false;
+        }
+        let Ok(g) = self.inner.read() else {
+            return false;
+        };
+        if g.expected.contains(&host) {
+            return true;
+        }
+        g.expected
+            .iter()
+            .any(|e| crate::proxy_config::wildcard_covers_host(e, &host))
     }
 
     /// True when any certificate is loaded (per-host or global default).
@@ -485,5 +530,15 @@ mod tests {
             .unwrap();
         assert!(store.default_paths().is_none());
         assert!(store.default_cert().is_some());
+    }
+
+    #[test]
+    fn expects_host_matches_configured_sites_and_wildcards() {
+        let store = CertStore::new();
+        store.set_expected_hosts(["admin.apps.example.com", "*.apps.example.com"]);
+        assert!(store.expects_host("admin.apps.example.com"));
+        assert!(store.expects_host("minio.apps.example.com"));
+        assert!(!store.expects_host("minio.apps.socket9.com"));
+        assert!(!store.expects_host("proxy.arm.thaidevops.co"));
     }
 }

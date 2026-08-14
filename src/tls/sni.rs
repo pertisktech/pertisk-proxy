@@ -6,7 +6,7 @@ use pingora_core::protocols::tls::TlsRef;
 use pingora_core::tls::ext::{ssl_add_chain_cert, ssl_use_certificate, ssl_use_private_key};
 use pingora_core::tls::ssl::NameType;
 use pingora_core::tls::{pkey, pkey::Private, x509};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::store::{CertStore, StoredCert};
 
@@ -33,7 +33,17 @@ impl TlsAccept for CertStoreSniCallback {
             });
 
         let Some(cert) = cert else {
-            warn!(sni = ?sni, "TLS handshake: no certificate for SNI");
+            // Scanners / wrong DNS often hit :443 with unrelated SNI. Only warn when the
+            // hostname is a configured site/TLS entry that is missing a certificate.
+            let configured = sni
+                .as_deref()
+                .map(|h| self.store.expects_host(h))
+                .unwrap_or(false);
+            if configured {
+                warn!(sni = ?sni, "TLS handshake: no certificate for configured host");
+            } else {
+                debug!(sni = ?sni, "TLS handshake: no certificate for unknown SNI");
+            }
             return;
         };
 

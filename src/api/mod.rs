@@ -1469,6 +1469,7 @@ async fn reload_config(State(state): State<AdminState>) -> Result<Json<ReloadRes
         )
     })?;
     state.cert_store.reload_from_configs(&cfg.tls).ok();
+    state.cert_store.set_expected_from_config(&cfg);
     if let Err(err) = load_db_certs_into_store(db.as_ref(), state.cert_store.as_ref(), &state.certs_dir).await
     {
         tracing::warn!(error = %err, "reload: failed to load certificates from database");

@@ -8,17 +8,38 @@ function normalizeHost(host: string): string {
   return host.trim().toLowerCase();
 }
 
-/** Wildcard SAN for a site host (e.g. app.example.com → *.example.com). */
+/**
+ * Wildcard SAN for a site host.
+ * - `admin.example.com` → `*.example.com` (parent zone)
+ * - `example.com` (apex) → `*.example.com` (not `*.com`, which LE rejects)
+ * - already `*.x` → unchanged
+ */
 export function hostToWildcard(host: string): string {
   const trimmed = host.trim();
   if (!trimmed) return '*.domain';
   if (trimmed.startsWith('*.')) return trimmed;
-  const parts = trimmed.split('.');
-  if (parts.length >= 2) return '*.' + parts.slice(1).join('.');
-  return '*.' + trimmed;
+  const parts = trimmed.split('.').filter(Boolean);
+  if (parts.length >= 3) return `*.${parts.slice(1).join('.')}`;
+  if (parts.length === 2) return `*.${trimmed}`;
+  return `*.${trimmed}`;
 }
 
-function relatedHostsForSite(siteHost: string): Set<string> {
+/** True when ACME would reject this identifier (e.g. `*.com`, bare TLD). */
+export function isInvalidAcmeIdentifier(host: string): boolean {
+  const h = normalizeHost(host);
+  if (!h) return true;
+  if (h.startsWith('*.')) {
+    const suffix = h.slice(2);
+    return suffix.split('.').filter(Boolean).length < 2;
+  }
+  return h.split('.').filter(Boolean).length < 2;
+}
+
+/**
+ * Hostnames tied to a site for TLS attach/detach (exact + wildcard forms).
+ * Includes the legacy parent-slice form so apex mistakes like `*.com` are cleaned on edit.
+ */
+export function relatedHostsForSite(siteHost: string): Set<string> {
   const normalized = normalizeHost(siteHost);
   const related = new Set<string>();
   if (!normalized) return related;
@@ -27,8 +48,24 @@ function relatedHostsForSite(siteHost: string): Set<string> {
     related.add(normalized.slice(2));
   } else {
     related.add(normalizeHost(hostToWildcard(siteHost)));
+    const parts = normalized.split('.').filter(Boolean);
+    if (parts.length >= 2) {
+      related.add(normalizeHost(`*.${parts.slice(1).join('.')}`));
+    }
   }
   return related;
+}
+
+/** Drop a site's related hostnames from TLS entries; remove empty entries. */
+export function removeRelatedHostsFromTls(list: TlsConfig[], siteHost: string): TlsConfig[] {
+  const related = relatedHostsForSite(siteHost);
+  if (related.size === 0) return list;
+  return list
+    .map((t) => ({
+      ...t,
+      hosts: (t.hosts ?? []).filter((h) => !related.has(normalizeHost(h))),
+    }))
+    .filter((t) => (t.hosts ?? []).length > 0);
 }
 
 function tlsEntryIdentityKey(entry: TlsConfig): string {
