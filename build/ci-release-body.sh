@@ -157,17 +157,17 @@ UDP buffer settings are applied from \`/etc/sysctl.d/99-pertisk-proxy.conf\`. Re
 
 ### Proxy (standalone)
 \`\`\`bash
-docker pull ${HARBOR_PROXY_IMAGE:-harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/proxy}:v${VERSION}
+docker pull ${HARBOR_PROXY_IMAGE:-ghcr.io/pertisktech/pertisk-proxy/proxy}:v${VERSION}
 \`\`\`
 
 ### Ingress (Kubernetes controller)
 \`\`\`bash
-docker pull ${HARBOR_INGRESS_IMAGE:-harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress}:v${VERSION}
+docker pull ${HARBOR_INGRESS_IMAGE:-ghcr.io/pertisktech/pertisk-proxy/ingress}:v${VERSION}
 \`\`\`
 
 ### Helm (pertisk-ingress)
 \`\`\`bash
-helm repo add pertisk ${HELM_CHART_REPO_URL:-https://chart.cloud.pertisksoft.net}
+helm repo add pertisk ${HELM_CHART_REPO_URL:-https://charts.example.com}
 helm repo update
 helm upgrade --install pertisk-proxy-ingress pertisk/pertisk-ingress \\
   --version ${VERSION} -n pertisk-proxy --create-namespace

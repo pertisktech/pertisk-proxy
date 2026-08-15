@@ -6,9 +6,7 @@ Structured like [pertisk-rproxy](https://github.com/pertisktech/pertisk-rproxy):
 
 ## Admin UI
 
-Web console for sites, TLS, access control, WAF, certificates, DNS, logs, metrics, backup, and settings. The **Sites** list shows domain, protocol (HTTP/HTTPS), upstream, routes, and SSL status:
-
-![Pertisk-Proxy Admin — Sites list](docs/resources/1786259569903.jpg)
+Web console for sites, TLS, access control, WAF, certificates, DNS, logs, metrics, backup, and settings. The **Sites** list shows domain, protocol (HTTP/HTTPS), upstream, routes, and SSL status.
 
 Default management API listen: `[::]:9080` (IPv4 + IPv6 dual-stack).
 

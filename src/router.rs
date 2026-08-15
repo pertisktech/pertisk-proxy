@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn subdomain_wildcard_host_routes() {
         let table = RouteTable::from_routes(HashMap::from([(
-            "*.orion.thaidevops.co".into(),
+            "*.orion.example.com".into(),
             vec![Route {
                 path: "/".into(),
                 path_type: PathMatchType::Prefix,
@@ -519,10 +519,10 @@ mod tests {
                 security: Default::default(),
             }],
         )]));
-        assert!(table.match_route("app.orion.thaidevops.co", "/").is_some());
-        assert!(table.has_host("app.orion.thaidevops.co"));
-        assert!(!table.match_route("orion.thaidevops.co", "/").is_some());
-        assert!(!table.match_route("a.b.orion.thaidevops.co", "/").is_some());
+        assert!(table.match_route("app.orion.example.com", "/").is_some());
+        assert!(table.has_host("app.orion.example.com"));
+        assert!(!table.match_route("orion.example.com", "/").is_some());
+        assert!(!table.match_route("a.b.orion.example.com", "/").is_some());
     }
 
     #[test]

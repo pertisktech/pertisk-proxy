@@ -11,7 +11,7 @@
 #   HELM_USER + HELM_PASSWORD — login via /api/auth/login (username + password)
 #
 # Env:
-#   HELM_CHART_REPO_URL — default https://chart.cloud.pertisksoft.net
+#   HELM_CHART_REPO_URL — chart repo base URL (required unless PACKAGE_ONLY=1)
 #   HELM_CHART_DIR      — default deploy/helm/pertisk-ingress
 #   RELEASE_DIR         — default release (local .tgz output)
 #   PACKAGE_ONLY        — 1 = skip upload (write .tgz to RELEASE_DIR)
@@ -22,13 +22,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 VERSION="${VERSION:-}"
-HELM_CHART_REPO_URL="${HELM_CHART_REPO_URL:-https://chart.cloud.pertisksoft.net}"
+HELM_CHART_REPO_URL="${HELM_CHART_REPO_URL:-}"
 HELM_CHART_DIR="${HELM_CHART_DIR:-deploy/helm/pertisk-ingress}"
 RELEASE_DIR="${RELEASE_DIR:-release}"
 PACKAGE_ONLY="${PACKAGE_ONLY:-0}"
 
 if [ -z "$VERSION" ]; then
   echo "VERSION is required (e.g. 0.1.0)" >&2
+  exit 1
+fi
+
+if [ "$PACKAGE_ONLY" != "1" ] && [ -z "$HELM_CHART_REPO_URL" ]; then
+  echo "Set HELM_CHART_REPO_URL (e.g. https://charts.example.com)" >&2
   exit 1
 fi
 
@@ -109,7 +114,7 @@ HTTP_CODE="$(curl -sS -o "$WORKDIR/upload.json" -w '%{http_code}' \
 if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
   cat "$WORKDIR/upload.json"
   echo ""
-  echo "Published pertisk-ingress ${VERSION} (image: harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress:v${VERSION})"
+  echo "Published pertisk-ingress ${VERSION} (image: ${HARBOR_INGRESS_IMAGE:-ghcr.io/pertisktech/pertisk-proxy/ingress}:v${VERSION})"
   echo "Install: helm repo add pertisk ${HELM_CHART_REPO_URL%/} && helm upgrade --install pertisk-proxy-ingress pertisk/pertisk-ingress --version ${VERSION} -n pertisk-proxy --create-namespace"
   exit 0
 fi

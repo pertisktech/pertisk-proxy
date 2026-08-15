@@ -1034,7 +1034,7 @@ mod alt_svc_tests {
         let mut ctx = RequestCtx::default();
         ctx.is_long_lived_stream = true;
         assert_eq!(
-            alt_svc_header_value(true, 443, "ptkos.apps.thaidevops.co", &ctx).as_deref(),
+            alt_svc_header_value(true, 443, "ptkos.apps.example.com", &ctx).as_deref(),
             Some("clear")
         );
     }

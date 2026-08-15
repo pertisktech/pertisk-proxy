@@ -12,7 +12,7 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     port: 5173,
-    allowedHosts: ['admin.amd.thaidevops.co', 'api.amd.thaidevops.co', '.amd.thaidevops.co'],
+    allowedHosts: true,
     proxy: {
       '/api': { target: apiTarget, changeOrigin: true },
       '/live': { target: apiTarget },

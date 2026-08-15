@@ -166,7 +166,7 @@ mod tests {
             "*.amd.pertisk.com"
         ));
         assert!(!host_matches_cert_name(
-            "admin.amd.thaidevops.co",
+            "admin.amd.example.com",
             "*.amd.pertisk.com"
         ));
         assert!(host_matches_cert_name("example.com", "example.com"));

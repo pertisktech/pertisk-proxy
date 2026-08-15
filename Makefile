@@ -120,8 +120,7 @@ dev-stop:
 
 DEV_PREFIX = build/dev-prefix-log.sh
 
-# Backend + admin UI at https://admin.amd.thaidevops.co/ (DNS-ready, 80/443/tcp + 443/udp).
-# Serves built admin/dist via management API :9080; UI auto-rebuilds on change (refresh browser).
+# Backend + admin UI (management API :9080). Serves built admin/dist; UI rebuilds on change.
 # macOS requires root for 80/443: sudo make dev
 dev: admin-dist dev-stop
 	chmod +x $(DEV_PREFIX)
@@ -258,7 +257,7 @@ apply-ingress-rbac:
 # Kubelet/containerd auto-selects the node arch when pulling a multi-arch tag (no nodeSelector).
 INGRESS_BUILD_PLATFORMS ?= linux/amd64,linux/arm64
 CACHE_BACKEND ?= registry
-HARBOR_INGRESS_IMAGE ?= harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress
+HARBOR_INGRESS_IMAGE ?= ghcr.io/pertisktech/pertisk-proxy/ingress
 INGRESS_DOCKERFILE ?= docker/Dockerfile.ingress
 
 docker-ingress: admin-dist
@@ -320,11 +319,11 @@ uninstall-legacy-ingress-helm:
 
 # --- Deploy (build package + install on remote host) ---
 # Primary: make deploy DEPLOY_HOST=user@host VERSION=0.1.0
-# AlmaLinux ARM64: make deploy-rpm DEPLOY_HOST=almalinux@10.1.1.233 VERSION=0.2.26
+# Example:  make deploy-rpm DEPLOY_HOST=user@proxy.example.com VERSION=0.2.26
 #   (DEPLOY_ARCH=auto detects aarch64 via SSH; override with DEPLOY_ARCH=amd64|arm64)
 # Or:      make deploy-deb DEPLOY_HOST=user@host
 #          make deploy-rpm DEPLOY_HOST=user@host
-#          make deploy-rpm-arm64 DEPLOY_HOST=almalinux@host VERSION=0.2.26
+#          make deploy-rpm-arm64 DEPLOY_HOST=user@host VERSION=0.2.26
 
 deploy:
 	@$(MAKE) deploy-package DEPLOY_HOST="$(DEPLOY_HOST)" REMOTE_HOST="$(REMOTE_HOST)" \

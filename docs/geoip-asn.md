@@ -30,7 +30,7 @@ With `Cluster`, the peer IP is often private (SNAT). The proxy fail-opens GeoIP 
 Redeploy:
 
 ```bash
-export KUBECONFIG=/Users/nat/.kube/omni-proxmox-285h-kubeconfig.yaml
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
 VERSION=0.1.xx ./deploy/285h.sh
 # or only helm (image already pushed):
 helm upgrade --install pertisk-proxy-ingress ./deploy/helm/pertisk-ingress \

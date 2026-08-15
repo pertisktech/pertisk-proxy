@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # Build pertisk-proxy packages (DEB + RPM) for amd64 + arm64.
+#
+# Usage (from repo root):
+#   ./scripts/build.sh
+#   VERSION=1.2.3 ./scripts/build.sh
 set -euo pipefail
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$ROOT_DIR"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "$REPO_ROOT"
 
 export VERSION="${VERSION:-$(git describe --tags --always 2>/dev/null | sed 's/^v//' || echo '0.1.0')}"
 

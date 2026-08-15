@@ -17,15 +17,17 @@ CRD_DIR="${CRD_DIR:-./deploy/helm/pertisk-ingress/crds}"
 CRD_TIMEOUT="${CRD_TIMEOUT:-180s}"
 APPLY_CRDS="${APPLY_CRDS:-1}"
 WAIT_FOR_CRDS="${WAIT_FOR_CRDS:-0}"
-ADMIN_HOST="${ADMIN_HOST:-admin.orion.thaidevops.co}"
-ADMIN_TLS_SECRET="${ADMIN_TLS_SECRET:-admin-orion-tls}"
+ADMIN_HOST="${ADMIN_HOST:-admin.example.com}"
+ADMIN_TLS_SECRET="${ADMIN_TLS_SECRET:-admin-tls}"
 HELM_TIMEOUT="${HELM_TIMEOUT:-20m}"
 # Build both architectures so arm64 clusters (e.g. Hetzner CAX) and amd64 nodes both work.
 DEPLOY_PLATFORMS="${DEPLOY_PLATFORMS:-linux/amd64,linux/arm64}"
 
-AUTH0_DOMAIN="${AUTH0_DOMAIN:-dev-od6cfzs2tugxm53g.us.auth0.com}"
-AUTH0_CLIENT_ID="${AUTH0_CLIENT_ID:-djuW8aR7VZQeS9SbW4ddnRCitgc6TiKO}"
-AUTH0_AUDIENCE="${AUTH0_AUDIENCE:-https://dev-od6cfzs2tugxm53g.us.auth0.com/api/v2/}"
+# Optional Auth0 SSO — set AUTH0_DOMAIN / AUTH0_CLIENT_ID / AUTH0_AUDIENCE to enable.
+AUTH0_DOMAIN="${AUTH0_DOMAIN:-}"
+AUTH0_CLIENT_ID="${AUTH0_CLIENT_ID:-}"
+AUTH0_AUDIENCE="${AUTH0_AUDIENCE:-}"
+AUTH_PASSWORD="${AUTH_PASSWORD:-changeme}"
 
 # Hetzner / pertisk floating-IP controller (service.annotations on LoadBalancer).
 FLOATING_IP_ENABLED="${FLOATING_IP_ENABLED:-true}"
@@ -89,7 +91,7 @@ helm upgrade --install "${RELEASE_NAME}" "${CHART_PATH}" \
   --set image.pullPolicy=Always \
   --set ingressClassName=pertisk-proxy \
   --set auth.username=admin \
-  --set auth.password=admin \
+  --set auth.password="${AUTH_PASSWORD}" \
   --set auth0.domain="${AUTH0_DOMAIN}" \
   --set auth0.clientId="${AUTH0_CLIENT_ID}" \
   --set auth0.audience="${AUTH0_AUDIENCE}" \

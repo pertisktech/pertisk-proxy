@@ -209,7 +209,7 @@ mod tests {
             &mut req,
             &http::Method::GET,
             "/v2/",
-            "harbor.tools.pertisk.com",
+            "registry.example.com",
             Some("203.0.113.1"),
             true,
         );
@@ -228,7 +228,7 @@ mod tests {
         );
         assert_eq!(
             req.headers.get("X-Forwarded-Host").unwrap().to_str().unwrap(),
-            "harbor.tools.pertisk.com"
+            "registry.example.com"
         );
         assert_eq!(
             req.headers.get("Accept-Encoding").unwrap().to_str().unwrap(),
@@ -244,7 +244,7 @@ mod tests {
             &mut req,
             &http::Method::PUT,
             "/v2/x/blobs/uploads/u?digest=sha256:abc",
-            "harbor.tools.pertisk.com",
+            "registry.example.com",
             Some("203.0.113.1"),
             true,
         );

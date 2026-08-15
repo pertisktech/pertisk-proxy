@@ -333,7 +333,7 @@ mod tests {
     fn lookup_sni_does_not_use_unrelated_default() {
         let store = CertStore::new();
         store.insert_paths_for_hosts(
-            &["*.amd.thaidevops.co".into()],
+            &["*.amd.example.com".into()],
             CertPaths {
                 cert: "/amd.pem".into(),
                 key: "/amd.key".into(),
@@ -539,6 +539,6 @@ mod tests {
         assert!(store.expects_host("admin.apps.example.com"));
         assert!(store.expects_host("minio.apps.example.com"));
         assert!(!store.expects_host("minio.apps.socket9.com"));
-        assert!(!store.expects_host("proxy.arm.thaidevops.co"));
+        assert!(!store.expects_host("proxy.arm.example.com"));
     }
 }

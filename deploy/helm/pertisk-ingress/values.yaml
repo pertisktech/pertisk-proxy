@@ -22,12 +22,12 @@ autoscaling:
   #         value: 10
   #         periodSeconds: 60
 
-# -- Controller image (Harbor: docker pull harbor.tools.thaidevops.co/pertisksoft/pertisk-proxy/ingress:$version)
+# -- Controller image (override registry for your environment)
 image:
-  registry: harbor.tools.thaidevops.co
-  repository: pertisksoft/pertisk-proxy/ingress
-  tag: "1.0.55" # defaults to Chart appVersion (e.g. 0.1.0) when empty
-  pullPolicy: Always # IfNotPresent, Always, Never
+  registry: ghcr.io
+  repository: pertisktech/pertisk-proxy/ingress
+  tag: "" # defaults to Chart appVersion when empty
+  pullPolicy: IfNotPresent # IfNotPresent, Always, Never
 
 # -- Image pull secrets for private registries
 imagePullSecrets: []
@@ -238,21 +238,21 @@ auth:
   passwordKey: "PERTISK_PASSWORD"
   apiTokenKey: "PERTISK_API_TOKEN"
   signingSecretKey: "PERTISK_AUTH_SIGNING_SECRET"
-  # -- Secret values (used when createSecret: true)
+  # -- Secret values (used when createSecret: true). Change password before production.
   username: "admin"
-  password: "admin"
+  password: "changeme"
   apiToken: ""
   # -- Optional signing secret for bearer tokens. If empty, password is used.
   signingSecret: ""
 
-# -- Auth0 SSO settings (used by ingress admin login)
+# -- Auth0 SSO settings (used by ingress admin login). Leave empty unless SSO is configured.
 auth0:
   # -- Auth0 tenant domain, e.g. your-tenant.us.auth0.com
-  domain: "dev-od6cfzs2tugxm53g.us.auth0.com"
+  domain: ""
   # -- Auth0 application client id
-  clientId: "djuW8aR7VZQeS9SbW4ddnRCitgc6TiKO"
+  clientId: ""
   # -- Auth0 API audience
-  audience: "https://dev-od6cfzs2tugxm53g.us.auth0.com/api/v2/"
+  audience: ""
   # -- Secret key names for Auth0 settings (stored in the auth Secret when auth.createSecret: true)
   domainKey: "PERTISK_AUTH0_DOMAIN"
   clientIdKey: "PERTISK_AUTH0_CLIENT_ID"
@@ -346,7 +346,7 @@ gatewayClassResource:
   # -- Controller name (GatewayClass.spec.controllerName)
   controllerName: pertisk.tech/ingress-controller
 
-# -- Deploy test: Ingress that maps a host (e.g. admin.homelab.thaidevops.co) to the management UI (port 9080)
+# -- Deploy test: Ingress that maps a host (e.g. admin.example.com) to the management UI (port 9080)
 adminIngress:
   enabled: true
   # -- Hostname for the management UI (viewer-only dashboard)
