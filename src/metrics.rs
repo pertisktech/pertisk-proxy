@@ -366,12 +366,12 @@ fn prometheus_float(v: f64) -> String {
     }
 }
 
-/// Listen address for the Prometheus scrape server (default `0.0.0.0:9090`).
+/// Listen address for the Prometheus scrape server (default `0.0.0.0:9990`).
 pub fn metrics_addr_from_env() -> SocketAddr {
     std::env::var("PERTISK_METRICS_ADDR")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| "0.0.0.0:9090".parse().expect("valid default metrics addr"))
+        .unwrap_or_else(|| "0.0.0.0:9990".parse().expect("valid default metrics addr"))
 }
 
 /// Whether the dedicated Prometheus HTTP server should start.
@@ -511,7 +511,7 @@ mod tests {
         std::env::remove_var("PERTISK_METRICS_ADDR");
 
         let addr = metrics_addr_from_env();
-        assert_eq!(addr.port(), 9090);
+        assert_eq!(addr.port(), 9990);
         assert!(metrics_enabled_from_env());
 
         restore_env_var("PERTISK_METRICS_ENABLED", saved_enabled);

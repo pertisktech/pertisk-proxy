@@ -185,9 +185,9 @@ http3:
 metrics:
   enabled: true
   # -- Metrics listen address inside container
-  addr: "0.0.0.0:9090"
+  addr: "0.0.0.0:9990"
   # -- Service port for metrics
-  port: 9090
+  port: 9990
   # -- ServiceMonitor for Prometheus Operator
   serviceMonitor:
     enabled: false
@@ -296,7 +296,7 @@ service:
   httpsPort: 443
   managementPort: 9080
   # -- Metrics port (HTTP). Exposed only when metrics.enabled is true.
-  metricsPort: 9090
+  metricsPort: 9990
   # -- Set to expose HTTP/3 (UDP); 443 is typical. HTTP/3 only works if your LoadBalancer forwards UDP 443 (e.g. NLB/MetalLB; ALB does not).
   http3Port: 443
   # -- Annotations for the Service (e.g. cloud LB config)

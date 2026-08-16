@@ -15,9 +15,9 @@ COPY ${BINARY_FILE} /usr/local/bin/pertisk-proxy-ingress
 COPY admin/dist ./admin/dist/
 
 ENV PERTISK_MANAGEMENT_ADDR=0.0.0.0:9080
-ENV PERTISK_METRICS_ADDR=0.0.0.0:9090
+ENV PERTISK_METRICS_ADDR=0.0.0.0:9990
 
-EXPOSE 80 443 443/udp 9080 9090
+EXPOSE 80 443 443/udp 9080 9990
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://127.0.0.1:9080/live || exit 1

@@ -60,12 +60,12 @@ function filterIngressPods(pods: K8sPodRow[], info: ManagementInfo): K8sPodRow[]
 }
 
 function prometheusUrls(metricsAddr: string | undefined, hostname: string | null | undefined) {
-  const addr = metricsAddr?.trim() || '0.0.0.0:9090';
+  const addr = metricsAddr?.trim() || '0.0.0.0:9990';
   const fallbackHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
   const displayHost = hostname?.trim() || fallbackHost;
   const lastColon = addr.lastIndexOf(':');
   const bindHost = lastColon > 0 ? addr.slice(0, lastColon) : '0.0.0.0';
-  const port = lastColon > 0 ? addr.slice(lastColon + 1) : '9090';
+  const port = lastColon > 0 ? addr.slice(lastColon + 1) : '9990';
   const host =
     bindHost === '0.0.0.0' || bindHost === '[::]' || bindHost === '::' ? displayHost : bindHost.replace(/^\[|\]$/g, '');
   const base = `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
@@ -463,7 +463,7 @@ export function Dashboard() {
               <InfoRow label="Health" value={promUrls.health} />
             </dl>
             <p className="mt-3 text-xs text-text-secondary">
-              Set <code className="font-mono">PERTISK_METRICS_ADDR</code> to change the listen address (default port 9090).
+              Set <code className="font-mono">PERTISK_METRICS_ADDR</code> to change the listen address (default port 9990).
             </p>
           </div>
           <div className="rounded-lg border border-border bg-surface-elevated p-4">
