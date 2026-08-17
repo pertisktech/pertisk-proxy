@@ -114,7 +114,8 @@ jobs:
           fi
 
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.native_deps.outputs.ok == 'true'
+        with:
+          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
 
       - name: Build proxy + ingress binaries (native)
         if: steps.native_deps.outputs.ok == 'true'
@@ -280,13 +281,13 @@ jobs:
       - name: Build tunnel DEB and RPM packages
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
-          # Prefer host cargo when same-arch native deps work (avoids Debian apt in Docker).
-          FORCE_DOCKER_TUNNEL: ${{ steps.native_deps.outputs.ok == 'true' && '0' || '1' }}
+          # Host native (same-arch) or cargo-zigbuild (cross) — avoid Docker Hub pulls.
+          FORCE_DOCKER_TUNNEL: "0"
           FORCE_DOCKER_FPM: "0"
           PERTISK_CARGO_JOBS: ${{ env.CARGO_BUILD_JOBS }}
         run: |
           set -euo pipefail
-          chmod +x build/package-tunnel.sh
+          chmod +x build/package-tunnel.sh build/ci-ensure-zig.sh
           ./build/package-tunnel.sh ${{ matrix.goarch }} ${{ steps.version.outputs.VERSION }} both
 
       - name: Verify packages before upload

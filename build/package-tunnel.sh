@@ -13,7 +13,7 @@
 #   pertisk-tunnel-client-<ver>-1.x86_64.rpm
 #   (+ .deb)
 #
-# CI: set FORCE_DOCKER_TUNNEL=1 and FORCE_DOCKER_FPM=1 (see release.yml).
+# CI: prefer host cargo / cargo-zigbuild (set FORCE_DOCKER_TUNNEL=1 only if needed).
 
 set -euo pipefail
 
@@ -30,8 +30,8 @@ cd "$REPO_ROOT"
 mkdir -p "$RELEASE_DIR"
 
 case "$ARCH" in
-  amd64) deb_arch=amd64; rpm_arch=x86_64 ;;
-  arm64) deb_arch=arm64; rpm_arch=aarch64 ;;
+  amd64) deb_arch=amd64; rpm_arch=x86_64; RUST_TARGET=x86_64-unknown-linux-gnu ;;
+  arm64) deb_arch=arm64; rpm_arch=aarch64; RUST_TARGET=aarch64-unknown-linux-gnu ;;
   *)
     echo "Error: ARCH must be amd64 or arm64" >&2
     exit 1
@@ -71,12 +71,37 @@ build_native() {
   cp target/release/pertisk-tunnel-client "./pertisk-tunnel-client-linux-${ARCH}"
 }
 
+build_zig() {
+  echo "Cross-compiling tunnel for linux/$ARCH via cargo-zigbuild (${RUST_TARGET})..."
+  chmod +x build/ci-ensure-zig.sh
+  build/ci-ensure-zig.sh
+  case "$(uname -m)" in
+    x86_64|amd64) _za=x86_64 ;;
+    *) _za=aarch64 ;;
+  esac
+  _zd="${HOME}/.local/zig/zig-linux-${_za}-${ZIG_VERSION:-0.13.0}"
+  if [ -x "${_zd}/zig" ]; then
+    export PATH="${_zd}:${PATH}"
+  fi
+  if [ -d "${HOME}/.cargo/bin" ]; then
+    export PATH="${HOME}/.cargo/bin:${PATH}"
+  fi
+
+  rustup target add "$RUST_TARGET"
+  CARGO_BUILD_JOBS="$CARGO_JOBS" cargo zigbuild --release --locked \
+    --target "$RUST_TARGET" \
+    -p pertisk-tunnel-server -p pertisk-tunnel-client
+  cp "target/${RUST_TARGET}/release/pertisk-tunnel-server" "./pertisk-tunnel-server-linux-${ARCH}"
+  cp "target/${RUST_TARGET}/release/pertisk-tunnel-client" "./pertisk-tunnel-client-linux-${ARCH}"
+}
+
 build_docker() {
   echo "Building tunnel binaries for linux/$ARCH via Docker buildx..."
   export DOCKER_BUILDKIT=1
   if ! docker buildx inspect "$BUILDER_NAME" --bootstrap >/dev/null 2>&1; then
     docker buildx rm "$BUILDER_NAME" >/dev/null 2>&1 || true
-    docker buildx create --name "$BUILDER_NAME" --driver docker-container --bootstrap
+    docker buildx create --name "$BUILDER_NAME" --driver docker-container \
+      --driver-opt network=host --bootstrap
   fi
   local cache_dir="${CACHE_DIR}/${ARCH}"
   mkdir -p "$cache_dir"
@@ -86,7 +111,7 @@ build_docker() {
   fi
   local extract_dir
   extract_dir="$(mktemp -d)"
-  docker buildx build --builder "$BUILDER_NAME" --platform "linux/$ARCH" \
+  docker buildx build --builder "$BUILDER_NAME" --platform "linux/$ARCH" --network=host \
     -f docker/Dockerfile.tunnel \
     --target artifacts \
     ${cache_from[@]+"${cache_from[@]}"} \
@@ -115,6 +140,12 @@ if [ "$need_build" -eq 1 ]; then
     build_docker
   elif [ "$HOST_OS" = "Linux" ] && [ "$HOST_ARCH" = "$ARCH" ]; then
     build_native
+  elif [ "$HOST_OS" = "Linux" ] && command -v cargo >/dev/null 2>&1; then
+    # Cross on host (avoids Docker Hub pulls / QEMU).
+    if ! build_zig; then
+      echo "cargo-zigbuild failed; falling back to Docker..." >&2
+      build_docker
+    fi
   else
     build_docker
   fi
