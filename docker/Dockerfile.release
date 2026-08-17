@@ -1,10 +1,10 @@
 # Cross-compile pertisk-proxy binaries for Linux (amd64 or arm64 via buildx).
 # Usage: docker buildx build --platform linux/amd64 -f docker/Dockerfile.release .
 #
-# BUILDPLATFORM / TARGETPLATFORM / TARGETARCH / BUILDARCH are injected by BuildKit.
-# Do not declare them before FROM (empty defaults shadow the built-ins).
+# Uses Debian bookworm (not Alpine) so apt mirrors can succeed when Alpine CDN fails.
+# BUILDPLATFORM / TARGET* are injected by BuildKit — do not declare them before FROM.
 
-FROM --platform=$BUILDPLATFORM rust:1-alpine3.21 AS builder
+FROM --platform=$BUILDPLATFORM rust:1-bookworm AS builder
 
 ARG TARGETARCH
 ARG BUILDARCH
@@ -12,25 +12,26 @@ ARG TARGETPLATFORM
 ARG PACKAGE_TARGET=all
 ARG VERSION=0.1.0
 
-COPY docker/alpine-apk-setup.sh /usr/local/sbin/alpine-apk-setup.sh
-# Pin Alpine 3.21; community enabled via setup. pkgconf provides pkg-config.
+COPY docker/debian-apt-setup.sh /usr/local/sbin/debian-apt-setup.sh
 RUN set -eux; \
-    . /usr/local/sbin/alpine-apk-setup.sh; \
-    apk_add_retry \
-      build-base \
-      pkgconf \
-      openssl-dev \
+    . /usr/local/sbin/debian-apt-setup.sh; \
+    apt_install_retry \
+      build-essential \
+      pkg-config \
+      libssl-dev \
       perl \
       cmake \
       clang \
-      clang-dev \
-      go \
+      golang-go \
       curl \
-      musl-dev; \
+      ca-certificates \
+      xz-utils \
+      git; \
     if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
-      apk_add_retry zig; \
+      install_zig "${BUILDARCH}"; \
       cargo install cargo-zigbuild --locked; \
-    fi
+    fi; \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

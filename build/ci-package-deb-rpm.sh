@@ -58,6 +58,7 @@ echo "=== Building DEB (${deb_arch}) ==="
 run_fpm -t deb -a "$deb_arch" \
   --category net \
   --depends libcap2-bin \
+  --depends libssl3 \
   --deb-systemd-enable \
   --deb-no-default-config-files \
   "${common_args[@]}"
@@ -67,6 +68,7 @@ run_fpm -t rpm -a "$rpm_arch" \
   --category "System Environment/Daemons" \
   --depends libcap \
   --depends shadow-utils \
+  --depends openssl-libs \
   --rpm-os linux \
   "${common_args[@]}"
 

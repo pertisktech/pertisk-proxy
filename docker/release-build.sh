@@ -1,10 +1,11 @@
 #!/bin/sh
 # Build release binaries inside docker/Dockerfile.release (BUILDPLATFORM only).
+# Host image is Debian bookworm → glibc (gnu) targets for DEB/RPM hosts.
 set -eu
 
 case "${TARGETARCH}" in
-  amd64) RUST_TARGET=x86_64-unknown-linux-musl ;;
-  arm64) RUST_TARGET=aarch64-unknown-linux-musl ;;
+  amd64) RUST_TARGET=x86_64-unknown-linux-gnu ;;
+  arm64) RUST_TARGET=aarch64-unknown-linux-gnu ;;
   *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;;
 esac
 
