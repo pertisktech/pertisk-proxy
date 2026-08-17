@@ -437,6 +437,16 @@ export const api = {
     }),
   management: () => request<ManagementInfo>('/management'),
   metrics: () => request<Metrics>('/metrics'),
+  tunnelStatus: () =>
+    request<{
+      online: boolean;
+      tunnels: {
+        name: string;
+        remote_port: number;
+        connected: boolean;
+        client_addr?: string | null;
+      }[];
+    }>('/tunnel/status'),
   logs: (params?: { type?: 'system' | 'proxy' | 'http' | 'all'; host?: string }) => {
     const search = new URLSearchParams();
     if (params?.type && params.type !== 'all') search.set('type', params.type === 'http' ? 'proxy' : params.type);

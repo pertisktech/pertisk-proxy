@@ -1,0 +1,11 @@
+# Example VPS-side tunnel server config.
+# Copy to /etc/pertisk-tunnel/server.toml and set a strong token.
+
+bind = "0.0.0.0:7000"
+token = "change-me-to-a-long-random-secret"
+status_bind = "127.0.0.1:7700"
+
+# Each tunnel opens ONLY on loopback. Point pertisk-proxy Sites at these ports.
+[[tunnels]]
+name = "dev-app"
+remote_port = 18080

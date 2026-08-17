@@ -25,6 +25,7 @@ import {
   ChevronDown,
   Plus,
   FileUp,
+  Cable,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/utils';
@@ -55,7 +56,10 @@ function proxyNavGroups(): NavGroup[] {
     {
       id: 'routing',
       label: 'Routing',
-      items: [{ to: '/sites', label: 'Sites', icon: Globe }],
+      items: [
+        { to: '/sites', label: 'Sites', icon: Globe },
+        { to: '/tunnels', label: 'Tunnels', icon: Cable },
+      ],
     },
     {
       id: 'security',

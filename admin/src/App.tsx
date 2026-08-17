@@ -9,6 +9,7 @@ import { Login } from '@/routes/Login';
 import { Dashboard } from '@/routes/Dashboard';
 import { Certificates } from '@/routes/Certificates';
 import { Sites } from '@/routes/Sites';
+import { Tunnels } from '@/routes/Tunnels';
 import { K8sSites } from '@/routes/K8sSites';
 import { Gateways } from '@/routes/Gateways';
 import { DnsProviders } from '@/routes/DnsProviders';
@@ -101,6 +102,7 @@ export default function App() {
                 <Route element={<Layout onLogout={logout} />}>
                   <Route index element={<Dashboard />} />
                   <Route path="sites" element={<Sites />} />
+                  <Route path="tunnels" element={<Tunnels />} />
                   <Route path="sites/ingress" element={<K8sSites k8sPageKind="ingress" />} />
                   <Route path="sites/gateway" element={<Navigate to="/sites/gateway/gateways" replace />} />
                   <Route path="sites/gateway/gateways" element={<Gateways />} />

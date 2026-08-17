@@ -228,8 +228,10 @@ src/
   security/               # WAF / bot / captcha
 admin/                    # React admin UI (Sites, TLS, WAF, …)
 docs/
-  resources/              # README screenshots
+  tunnel.md               # Reverse tunnel (local → VPS → Sites)
+  geoip-asn.md
   performance-tuning.md
+tunnel/                   # pertisk-tunnel-server + client (QUIC)
 build/
   package.sh              # DEB/RPM/tar packaging
   pertisk-proxy.conf
@@ -240,3 +242,7 @@ deploy/                   # Kubernetes manifests + Helm
 ## License
 
 Apache-2.0
+
+## Reverse tunnel
+
+Expose a local app through this VPS: see [docs/tunnel.md](docs/tunnel.md). Build with `make tunnel`.

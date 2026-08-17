@@ -1,0 +1,11 @@
+# Example local tunnel client config.
+# Point server at your VPS public host; token must match the server.
+
+server = "vps.example.com:7000"
+token = "change-me-to-a-long-random-secret"
+insecure_skip_verify = true
+reconnect_secs = 3
+
+[[tunnels]]
+name = "dev-app"
+local = "127.0.0.1:3000"

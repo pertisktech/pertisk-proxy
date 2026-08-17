@@ -1,0 +1,13 @@
+[Unit]
+Description=pertisk-tunnel-client (expose local services via VPS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/pertisk-tunnel-client --config %h/.config/pertisk-tunnel/client.toml
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

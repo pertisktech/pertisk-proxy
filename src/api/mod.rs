@@ -176,6 +176,7 @@ pub fn router(state: AdminState) -> Router {
     let protected = Router::new()
         .route("/api/management", get(get_management))
         .route("/api/metrics", get(get_metrics))
+        .route("/api/tunnel/status", get(get_tunnel_status))
         .route("/api/logs", get(get_logs))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/reload", post(reload_config))
@@ -1053,6 +1054,65 @@ async fn get_metrics(
         site_h3_requests_total,
         metrics_addr: crate::metrics::metrics_addr_from_env().to_string(),
     }))
+}
+
+/// Proxies tunnel server loopback status (`PERTISK_TUNNEL_STATUS_URL`, default http://127.0.0.1:7700/status).
+async fn get_tunnel_status(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    if !is_authorized(&state, &headers).await {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiError {
+                error: "unauthorized".into(),
+            }),
+        ));
+    }
+
+    let url = std::env::var("PERTISK_TUNNEL_STATUS_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:7700/status".to_string());
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+    match client.get(&url).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            let body = resp.json::<serde_json::Value>().await.map_err(|e| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(ApiError {
+                        error: format!("invalid tunnel status JSON: {e}"),
+                    }),
+                )
+            })?;
+            Ok(Json(body))
+        }
+        Ok(resp) => Err((
+            StatusCode::BAD_GATEWAY,
+            Json(ApiError {
+                error: format!(
+                    "tunnel status at {url} returned HTTP {}",
+                    resp.status().as_u16()
+                ),
+            }),
+        )),
+        Err(e) => Err((
+            StatusCode::BAD_GATEWAY,
+            Json(ApiError {
+                error: format!(
+                    "tunnel status unreachable ({url}): {e}. Is pertisk-tunnel-server running?"
+                ),
+            }),
+        )),
+    }
 }
 
 async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo> {

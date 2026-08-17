@@ -1,0 +1,23 @@
+[package]
+name = "pertisk-tunnel-client"
+version = "0.1.0"
+edition = "2021"
+description = "Local reverse tunnel client for pertisk-proxy"
+license = "Apache-2.0"
+
+[[bin]]
+name = "pertisk-tunnel-client"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+pertisk-tunnel-proto = { path = "../proto" }
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+webpki-roots = "0.26"

@@ -1,4 +1,4 @@
-.PHONY: build build-ingress build-all run run-release run-ingress run-ingress-release \
+.PHONY: build build-ingress build-all build-tunnel tunnel run run-release run-ingress run-ingress-release \
 	test check package package-clean package-amd64 package-arm64 package-deb package-rpm \
 	package-proxy package-ingress package-helm helm-package \
 	release release-amd release-arm release-helm publish-helm \
@@ -59,8 +59,13 @@ build-ingress:
 
 build-all: build build-ingress
 
+# Reverse tunnel binaries (local client ↔ VPS server)
+tunnel build-tunnel:
+	$(CARGO) build --release -p pertisk-tunnel-server -p pertisk-tunnel-client
+
 check:
 	$(CARGO) check --features $(INGRESS_FEATURES)
+	$(CARGO) check -p pertisk-tunnel-proto -p pertisk-tunnel-server -p pertisk-tunnel-client
 
 # Admin UI (React + Vite)
 install-admin:
