@@ -25,15 +25,10 @@ ARG TARGETARCH
 ARG BUILDARCH
 ARG VERSION=0.1.0
 
+COPY docker/alpine-apk-setup.sh /usr/local/sbin/alpine-apk-setup.sh
 RUN set -eux; \
-    if ! grep -qE '^[^#[:space:]].*/community' /etc/apk/repositories; then \
-      sed -i -e 's|^[#[:space:]]*\(.*\/community\)|\1|' /etc/apk/repositories; \
-    fi; \
-    if ! grep -qE '^[^#[:space:]].*/community' /etc/apk/repositories; then \
-      echo "https://dl-cdn.alpinelinux.org/alpine/v3.21/community" >> /etc/apk/repositories; \
-    fi; \
-    apk update; \
-    apk add --no-cache \
+    . /usr/local/sbin/alpine-apk-setup.sh; \
+    apk_add_retry \
       build-base \
       pkgconf \
       openssl-dev \
@@ -46,7 +41,7 @@ RUN set -eux; \
       curl \
       musl-dev; \
     if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
-      apk add --no-cache zig; \
+      apk_add_retry zig; \
       cargo install cargo-zigbuild --locked; \
     fi
 
