@@ -12,13 +12,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Try native deps (or fall back to Docker)
+        id: deps
+        run: |
+          set -euo pipefail
+          if ./build/ci-install-deps.sh; then
+            echo "mode=native" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if command -v docker >/dev/null 2>&1; then
+            echo "::warning::Native deps unavailable; running cargo test in Docker"
+            echo "mode=docker" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::error::Cannot install native deps and Docker is not available" >&2
+          exit 1
+
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.deps.outputs.mode == 'native'
 
-      - name: Install native build dependencies
-        run: ./build/ci-install-deps.sh
-
-      - name: Run library unit tests
+      - name: Run library unit tests (native)
+        if: steps.deps.outputs.mode == 'native'
         run: cargo test --lib --features ingress
+
+      - name: Run library unit tests (Docker)
+        if: steps.deps.outputs.mode == 'docker'
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/app" -w /app \
+            -e CARGO_HOME=/usr/local/cargo \
+            rust:1-bookworm \
+            bash -lc '
+              set -euo pipefail
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                build-essential cmake pkg-config libssl-dev perl clang libclang-dev
+              cargo test --lib --features ingress
+            '
 
   coverage:
     name: Coverage (95% gate)
@@ -26,12 +57,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Try native deps (or fall back to Docker)
+        id: deps
+        run: |
+          set -euo pipefail
+          if ./build/ci-install-deps.sh; then
+            echo "mode=native" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if command -v docker >/dev/null 2>&1; then
+            echo "::warning::Native deps unavailable; running tarpaulin in Docker"
+            echo "mode=docker" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::error::Cannot install native deps and Docker is not available" >&2
+          exit 1
 
-      - name: Install native build dependencies
-        run: ./build/ci-install-deps.sh
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.deps.outputs.mode == 'native'
 
       - name: Install tarpaulin
+        if: steps.deps.outputs.mode == 'native'
         run: |
           set -euo pipefail
           if command -v cargo-tarpaulin >/dev/null; then
@@ -58,5 +104,33 @@ jobs:
           install -m 755 "$TMP/cargo-tarpaulin" "$HOME/.cargo/bin/cargo-tarpaulin"
           cargo tarpaulin --version
 
-      - name: Check line coverage
+      - name: Check line coverage (native)
+        if: steps.deps.outputs.mode == 'native'
         run: cargo tarpaulin --config tarpaulin.toml --lib --features ingress
+
+      - name: Check line coverage (Docker)
+        if: steps.deps.outputs.mode == 'docker'
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/app" -w /app \
+            -e CARGO_HOME=/usr/local/cargo \
+            rust:1-bookworm \
+            bash -lc '
+              set -euo pipefail
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                build-essential cmake pkg-config libssl-dev perl clang libclang-dev curl ca-certificates
+              cargo install cargo-tarpaulin --locked || true
+              if ! command -v cargo-tarpaulin >/dev/null; then
+                TARPAULIN_VERSION=0.35.4
+                case "$(uname -m)" in
+                  x86_64) TARGET=x86_64-unknown-linux-gnu ;;
+                  aarch64|arm64) TARGET=aarch64-unknown-linux-gnu ;;
+                  *) echo "unsupported arch"; exit 1 ;;
+                esac
+                curl -fsSL "https://github.com/xd009642/tarpaulin/releases/download/${TARPAULIN_VERSION}/cargo-tarpaulin-${TARGET}.tar.gz" \
+                  | tar -xz -C /usr/local/bin
+              fi
+              cargo tarpaulin --config tarpaulin.toml --lib --features ingress
+            '
