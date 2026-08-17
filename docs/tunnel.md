@@ -10,11 +10,13 @@ Internet ──▶ pertisk-proxy :80/:443
                  ▲
                  │ QUIC UDP :7000 (token auth)
                  │
-           pertisk-tunnel-client (your laptop)
+           pertisk-tunnel-client (homelab / laptop)
                  │
                  ▼
-           127.0.0.1:3000 (your app)
+           127.0.0.1:3000  or  https://10.1.1.195:8006 (Proxmox, etc.)
 ```
+
+The tunnel is **raw TCP**. HTTPS backends (Proxmox) work when the Site upstream is also `https://127.0.0.1:<remote_port>` so TLS bytes pass through end-to-end.
 
 ## Build / packages
 
@@ -91,27 +93,55 @@ pertisk-tunnel-server --config /etc/pertisk-tunnel/server.toml
 
 4. When a client connects, the server listens on **`127.0.0.1:<remote_port>`** only.
 
-## Local: tunnel client
+## Local / LAN: tunnel client
 
 ```bash
 cp tunnel/examples/client.toml ~/.config/pertisk-tunnel/client.toml
-# set server = "your-vps.example.com:7000", same token, local = your app
+# set server = "your-vps.example.com:7000", same token, local/target = backend
 pertisk-tunnel-client --config ~/.config/pertisk-tunnel/client.toml
 ```
 
 `insecure_skip_verify = true` is required for the server’s ephemeral self-signed QUIC cert (token still required).
 
+`local` (alias `target`) can be any dialable address on the client network:
+
+| Backend | `local` / `target` |
+|---------|-------------------|
+| App on laptop | `127.0.0.1:3000` |
+| Proxmox HTTPS | `https://10.1.1.195:8006` or `10.1.1.195:8006` |
+| Other HTTP on LAN | `http://192.168.1.50:8080` |
+
 ## pertisk-proxy Site
 
 In Admin → **Sites**, add:
 
-| Field | Example |
-|-------|---------|
-| Domain | `dev.example.com` |
-| Upstream | `http://127.0.0.1:18080` |
-| SSL | Generate (HTTP-01 or DNS-01) |
+| Field | HTTP app | HTTPS backend (Proxmox) |
+|-------|----------|-------------------------|
+| Domain | `dev.example.com` | `pve.example.com` |
+| Upstream | `http://127.0.0.1:18080` | `https://127.0.0.1:18080` |
+| SSL | Generate (HTTP-01 or DNS-01) | Generate |
 
-Match `remote_port` in `server.toml` to the Site upstream port.
+Match `remote_port` in `server.toml` to the Site upstream port. For HTTPS backends, the Site **must** use `https://127.0.0.1:…` (pertisk-proxy skips upstream cert verify for self-signed Proxmox certs).
+
+### Example: Proxmox
+
+**VPS `server.toml`**
+
+```toml
+[[tunnels]]
+name = "proxmox"
+remote_port = 18006
+```
+
+**Client `client.toml`**
+
+```toml
+[[tunnels]]
+name = "proxmox"
+local = "https://10.1.1.195:8006"
+```
+
+**Site:** domain `pve.example.com`, upstream `https://127.0.0.1:18006`, enable SSL on the site.
 
 ## Status in Admin UI
 

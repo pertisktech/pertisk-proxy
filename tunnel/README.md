@@ -5,7 +5,7 @@ First-party reverse tunnel for [pertisk-proxy](../README.md).
 | Binary | Role |
 |--------|------|
 | `pertisk-tunnel-server` | Runs on the VPS; QUIC UDP control; opens `127.0.0.1:<port>` |
-| `pertisk-tunnel-client` | Runs locally; dials the VPS with a shared token |
+| `pertisk-tunnel-client` | Runs on laptop/homelab; dials VPS; forwards to localhost **or LAN** (`https://10.x:8006` Proxmox, etc.) |
 
 See [docs/tunnel.md](../docs/tunnel.md) for setup with Sites + ACME.
 

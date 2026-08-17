@@ -50,7 +50,11 @@ fn default_reconnect() -> u64 {
 #[derive(Debug, Clone, Deserialize)]
 struct ClientTunnel {
     name: String,
-    /// Local service to expose, e.g. 127.0.0.1:3000
+    /// Backend to dial on this host/LAN.
+    /// Examples: `127.0.0.1:3000`, `10.1.1.195:8006`, `https://10.1.1.195:8006` (Proxmox).
+    /// Scheme is only for default ports; the tunnel forwards raw TCP (TLS stays end-to-end
+    /// when the Site upstream is also `https://127.0.0.1:<remote_port>`).
+    #[serde(alias = "target")]
     local: String,
 }
 
@@ -132,8 +136,15 @@ async fn run_session(cfg: &Config) -> Result<()> {
             .get(&g.name)
             .cloned()
             .unwrap_or_else(|| "?".into());
+        let dial = match dial_target(&local) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("tunnel {}: invalid target {local}: {e:#}", g.name);
+                local.clone()
+            }
+        };
         info!(
-            "tunnel {} ready: VPS 127.0.0.1:{} → local {local}",
+            "tunnel {} ready: VPS 127.0.0.1:{} → {local} (dial {dial})",
             g.name, g.remote_port
         );
     }
@@ -197,13 +208,66 @@ async fn handle_open_conn(
     let Some(local) = locals.get(&open.tunnel) else {
         bail!("no local mapping for tunnel {}", open.tunnel);
     };
-    let mut tcp = TcpStream::connect(local)
+    let dial = dial_target(local)?;
+    let mut tcp = TcpStream::connect(&dial)
         .await
-        .with_context(|| format!("connect local {local}"))?;
+        .with_context(|| format!("connect backend {local} (dial {dial})"))?;
     let _ = tcp.set_nodelay(true);
-    tracing::debug!("opened local {local} for tunnel {}", open.tunnel);
+    tracing::debug!("opened backend {local} (dial {dial}) for tunnel {}", open.tunnel);
     pipe_tcp_quic(&mut tcp, &mut send, &mut recv).await;
     Ok(())
+}
+
+/// Parse `host:port`, `http(s)://host[:port][/…]` into a TCP dial address.
+fn dial_target(raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        bail!("empty tunnel target");
+    }
+
+    let (scheme, rest) = if let Some(r) = trimmed.strip_prefix("https://") {
+        (Some("https"), r)
+    } else if let Some(r) = trimmed.strip_prefix("http://") {
+        (Some("http"), r)
+    } else if let Some(r) = trimmed.strip_prefix("tcp://") {
+        (None, r)
+    } else {
+        (None, trimmed)
+    };
+
+    let hostport = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(rest)
+        .trim();
+    if hostport.is_empty() {
+        bail!("missing host in tunnel target {raw}");
+    }
+
+    // Already has an explicit port (including [ipv6]:port).
+    if host_has_port(hostport) {
+        return Ok(hostport.to_string());
+    }
+
+    let default_port = match scheme {
+        Some("https") => 443,
+        Some("http") => 80,
+        _ => bail!("tunnel target {raw} needs host:port (or http(s)://host)"),
+    };
+    Ok(format!("{hostport}:{default_port}"))
+}
+
+fn host_has_port(hostport: &str) -> bool {
+    if hostport.starts_with('[') {
+        return hostport
+            .find(']')
+            .and_then(|i| hostport.get(i + 1..))
+            .is_some_and(|s| s.starts_with(':') && s[1..].parse::<u16>().is_ok());
+    }
+    hostport
+        .rsplit_once(':')
+        .map(|(h, p)| !h.is_empty() && !h.contains(':') && p.parse::<u16>().is_ok())
+        == Some(true)
 }
 
 async fn pipe_tcp_quic(
@@ -370,5 +434,28 @@ impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
         rustls::crypto::ring::default_provider()
             .signature_verification_algorithms
             .supported_schemes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dial_proxmox_https_url() {
+        assert_eq!(
+            dial_target("https://10.1.1.195:8006").unwrap(),
+            "10.1.1.195:8006"
+        );
+    }
+
+    #[test]
+    fn dial_bare_host_port() {
+        assert_eq!(dial_target("10.1.1.195:8006").unwrap(), "10.1.1.195:8006");
+    }
+
+    #[test]
+    fn dial_https_default_port() {
+        assert_eq!(dial_target("https://10.1.1.195").unwrap(), "10.1.1.195:443");
     }
 }

@@ -1,4 +1,4 @@
-# Example local tunnel client config.
+# Example tunnel client config.
 # Point server at your VPS public host; token must match the server.
 
 server = "vps.example.com:7000"
@@ -7,10 +7,14 @@ insecure_skip_verify = true
 reconnect_secs = 3
 
 # One [[tunnels]] block per tunnel (repeat the whole block — do not put two name= in one block).
+# `local` / `target` may be localhost OR any LAN TCP/HTTPS backend.
+
 [[tunnels]]
 name = "dev-app"
 local = "127.0.0.1:3000"
 
+# Proxmox (or any HTTPS service on the LAN) — raw TCP; Site upstream must be https://
 # [[tunnels]]
-# name = "pertisk-15"
-# local = "127.0.0.1:8080"
+# name = "proxmox"
+# local = "https://10.1.1.195:8006"
+# # same as: local = "10.1.1.195:8006"
