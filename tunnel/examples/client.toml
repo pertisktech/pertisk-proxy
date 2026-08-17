@@ -6,6 +6,11 @@ token = "change-me-to-a-long-random-secret"
 insecure_skip_verify = true
 reconnect_secs = 3
 
+# One [[tunnels]] block per tunnel (repeat the whole block — do not put two name= in one block).
 [[tunnels]]
 name = "dev-app"
 local = "127.0.0.1:3000"
+
+# [[tunnels]]
+# name = "pertisk-15"
+# local = "127.0.0.1:8080"

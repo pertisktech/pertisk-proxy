@@ -1,0 +1,42 @@
+# Build pertisk-tunnel-server / pertisk-tunnel-client for Linux (native in target arch).
+# Usage:
+#   docker buildx build --platform linux/amd64 -f docker/Dockerfile.tunnel --target artifacts -o type=local,dest=./out .
+
+ARG TARGETPLATFORM=linux/amd64
+
+FROM --platform=$TARGETPLATFORM rust:1-bookworm AS builder
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      build-essential \
+      pkg-config \
+      cmake \
+      clang \
+      ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Standalone workspace (avoid compiling the main pertisk-proxy crate).
+COPY tunnel/proto ./proto
+COPY tunnel/server ./server
+COPY tunnel/client ./client
+RUN printf '%s\n' \
+  '[workspace]' \
+  'resolver = "2"' \
+  'members = ["proto", "server", "client"]' \
+  > Cargo.toml \
+  && sed -i 's|path = "../proto"|path = "../proto"|' server/Cargo.toml client/Cargo.toml
+
+ARG CARGO_BUILD_JOBS
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --release -p pertisk-tunnel-server -p pertisk-tunnel-client \
+    && mkdir -p /app/out \
+    && cp target/release/pertisk-tunnel-server target/release/pertisk-tunnel-client /app/out/
+
+FROM scratch AS artifacts
+COPY --from=builder /app/out/ /

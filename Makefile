@@ -1,9 +1,10 @@
 .PHONY: build build-ingress build-all build-tunnel tunnel run run-release run-ingress run-ingress-release \
 	test check package package-clean package-amd64 package-arm64 package-deb package-rpm \
-	package-proxy package-ingress package-helm helm-package \
+	package-proxy package-ingress package-tunnel package-tunnel-amd64 package-tunnel-arm64 package-helm helm-package \
 	release release-amd release-arm release-helm publish-helm \
 	deploy deploy-package deploy-package-ingress deploy-remote \
-	deploy-deb deploy-deb-ingress deploy-deb-arm deploy-rpm deploy-rpm-ingress deploy-rpm-arm deploy-rpm-arm64 apply-ingress-rbac \
+	deploy-deb deploy-deb-ingress deploy-deb-arm deploy-rpm deploy-rpm-ingress deploy-rpm-arm deploy-rpm-arm64 \
+	deploy-rpm-tunnel deploy-rpm-tunnel-server deploy-rpm-tunnel-client apply-ingress-rbac \
 	deploy-ingress-helm deploy-ingress deploy-cloud deploy-285h uninstall-legacy-ingress-helm \
 	docker-ingress docker-ingress-push docker-ingress-multi \
 	install-admin admin-dist fix-perms dev dev-vite dev-serve dev-admin dev-stop
@@ -62,6 +63,36 @@ build-all: build build-ingress
 # Reverse tunnel binaries (local client ↔ VPS server)
 tunnel build-tunnel:
 	$(CARGO) build --release -p pertisk-tunnel-server -p pertisk-tunnel-client
+
+# Tunnel DEB/RPM (both server + client by default)
+#   make package-tunnel VERSION=0.1.80
+#   make package-tunnel-amd64 VERSION=0.1.80
+#   make deploy-rpm-tunnel DEPLOY_HOST=user@vps VERSION=0.1.80
+#   make deploy-rpm-tunnel-server DEPLOY_HOST=user@vps
+#   make deploy-rpm-tunnel-client DEPLOY_HOST=user@laptop
+package-tunnel: package-tunnel-amd64
+
+package-tunnel-amd64:
+	chmod +x build/package-tunnel.sh build/deploy-rpm-tunnel.sh
+	./build/package-tunnel.sh amd64 $(VERSION) both
+
+package-tunnel-arm64:
+	chmod +x build/package-tunnel.sh build/deploy-rpm-tunnel.sh
+	./build/package-tunnel.sh arm64 $(VERSION) both
+
+deploy-rpm-tunnel:
+	chmod +x build/deploy-rpm-tunnel.sh
+	DEPLOY_HOST="$(DEPLOY_HOST)" REMOTE_HOST="$(REMOTE_HOST)" REMOTE_USER="$(REMOTE_USER)" \
+		VERSION="$(VERSION)" PACKAGE_BUILD="$(PACKAGE_BUILD)" PACKAGE_CLEAN="$(PACKAGE_CLEAN)" \
+		DEPLOY_ARCH="$(DEPLOY_ARCH)" DEPLOY_SSH_OPTS="$(DEPLOY_SSH_OPTS)" \
+		TUNNEL_PKG="$(or $(TUNNEL_PKG),both)" \
+		./build/deploy-rpm-tunnel.sh
+
+deploy-rpm-tunnel-server:
+	$(MAKE) deploy-rpm-tunnel TUNNEL_PKG=server DEPLOY_HOST="$(DEPLOY_HOST)" VERSION="$(VERSION)"
+
+deploy-rpm-tunnel-client:
+	$(MAKE) deploy-rpm-tunnel TUNNEL_PKG=client DEPLOY_HOST="$(DEPLOY_HOST)" VERSION="$(VERSION)"
 
 check:
 	$(CARGO) check --features $(INGRESS_FEATURES)
@@ -181,7 +212,9 @@ test-coverage:
 
 package-clean:
 	rm -f pertisk-proxy-linux-amd64 pertisk-proxy-linux-arm64 \
-		pertisk-proxy-ingress-linux-amd64 pertisk-proxy-ingress-linux-arm64
+		pertisk-proxy-ingress-linux-amd64 pertisk-proxy-ingress-linux-arm64 \
+		pertisk-tunnel-server-linux-amd64 pertisk-tunnel-server-linux-arm64 \
+		pertisk-tunnel-client-linux-amd64 pertisk-tunnel-client-linux-arm64
 	@echo "Removed Linux binaries; next package build will rebuild via Docker."
 
 package-amd64: admin-dist

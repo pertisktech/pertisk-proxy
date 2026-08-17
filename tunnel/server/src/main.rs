@@ -1,7 +1,7 @@
 //! pertisk-tunnel-server — accept QUIC clients and expose TCP on 127.0.0.1.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::SocketAddr,
     path::PathBuf,
     sync::Arc,
@@ -14,8 +14,9 @@ use clap::Parser;
 use pertisk_tunnel_proto as proto;
 use quinn::{Endpoint, Incoming, ServerConfig};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use serde::{Deserialize, Serialize};
-use tokio::net::TcpListener;
+use serde::Deserialize;
+use socket2::{Domain, Protocol, Socket, Type};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
@@ -29,12 +30,9 @@ struct Args {
 
 #[derive(Debug, Clone, Deserialize)]
 struct Config {
-    /// QUIC listen address (UDP), e.g. 0.0.0.0:7000
     #[serde(default = "default_bind")]
     bind: String,
-    /// Shared secret; clients must present this token.
     token: String,
-    /// Optional HTTP status JSON on loopback (default 127.0.0.1:7700). Empty disables.
     #[serde(default = "default_status")]
     status_bind: String,
     tunnels: Vec<TunnelDef>,
@@ -51,23 +49,22 @@ fn default_status() -> String {
 #[derive(Debug, Clone, Deserialize)]
 struct TunnelDef {
     name: String,
-    /// Loopback TCP port for pertisk-proxy Site upstreams.
     remote_port: u16,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct LiveTunnel {
-    name: String,
-    remote_port: u16,
-    connected: bool,
-    client_addr: Option<String>,
+struct ClientSession {
+    conn: Arc<quinn::Connection>,
+    tunnels: HashSet<String>,
+    addr: String,
 }
 
 #[derive(Clone)]
 struct AppState {
     token: String,
+    /// name → remote_port
     tunnels: HashMap<String, u16>,
-    live: Arc<RwLock<HashMap<String, LiveTunnel>>>,
+    /// Active client (replaced on reconnect).
+    session: Arc<RwLock<Option<ClientSession>>>,
 }
 
 #[tokio::main]
@@ -94,7 +91,7 @@ async fn main() -> Result<()> {
     }
 
     let mut map = HashMap::new();
-    let mut live = HashMap::new();
+    let mut seen_ports = HashSet::new();
     for t in &cfg.tunnels {
         if t.name.trim().is_empty() {
             bail!("tunnel name must not be empty");
@@ -102,25 +99,31 @@ async fn main() -> Result<()> {
         if t.remote_port == 0 {
             bail!("tunnel {} remote_port must be non-zero", t.name);
         }
+        if !seen_ports.insert(t.remote_port) {
+            bail!("duplicate remote_port {} (used by more than one tunnel)", t.remote_port);
+        }
         if map.insert(t.name.clone(), t.remote_port).is_some() {
             bail!("duplicate tunnel name {}", t.name);
         }
-        live.insert(
-            t.name.clone(),
-            LiveTunnel {
-                name: t.name.clone(),
-                remote_port: t.remote_port,
-                connected: false,
-                client_addr: None,
-            },
-        );
     }
 
     let state = AppState {
         token: cfg.token.clone(),
-        tunnels: map,
-        live: Arc::new(RwLock::new(live)),
+        tunnels: map.clone(),
+        session: Arc::new(RwLock::new(None)),
     };
+
+    // Bind loopback ports once at startup (survives client reconnects).
+    for (name, port) in &map {
+        let listener = bind_loopback(*port)
+            .with_context(|| format!("bind 127.0.0.1:{port} for tunnel `{name}`"))?;
+        info!("tunnel `{name}` listening on 127.0.0.1:{port} (waiting for client)");
+        let st = state.clone();
+        let name = name.clone();
+        tokio::spawn(async move {
+            accept_loop(name, listener, st).await;
+        });
+    }
 
     if !cfg.status_bind.trim().is_empty() {
         let status_addr: SocketAddr = cfg
@@ -160,6 +163,67 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+fn bind_loopback(port: u16) -> Result<TcpListener> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let domain = Domain::IPV4;
+    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_reuse_address(true)?;
+    #[cfg(unix)]
+    {
+        let _ = socket.set_reuse_port(true);
+    }
+    socket.set_nonblocking(true)?;
+    socket.bind(&addr.into())?;
+    socket.listen(1024)?;
+    let std_listener: std::net::TcpListener = socket.into();
+    Ok(TcpListener::from_std(std_listener)?)
+}
+
+async fn accept_loop(name: String, listener: TcpListener, state: AppState) {
+    loop {
+        let (tcp, peer) = match listener.accept().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("accept on tunnel `{name}`: {e}");
+                continue;
+            }
+        };
+        let _ = tcp.set_nodelay(true);
+        let st = state.clone();
+        let name = name.clone();
+        tokio::spawn(async move {
+            if let Err(e) = forward_accepted(name, tcp, peer, st).await {
+                tracing::debug!("forward ended: {e:#}");
+            }
+        });
+    }
+}
+
+async fn forward_accepted(
+    name: String,
+    mut tcp: TcpStream,
+    peer: SocketAddr,
+    state: AppState,
+) -> Result<()> {
+    let (conn, _) = {
+        let g = state.session.read().await;
+        let Some(sess) = g.as_ref() else {
+            // No client connected — close immediately.
+            return Ok(());
+        };
+        if !sess.tunnels.contains(&name) {
+            return Ok(());
+        }
+        (sess.conn.clone(), sess.addr.clone())
+    };
+
+    let (mut send, mut recv) = conn.open_bi().await.context("open data stream")?;
+    proto::write_frame(&mut send, &proto::OpenConn { tunnel: name.clone() }).await?;
+    tracing::debug!("relaying {peer} via tunnel `{name}`");
+    pipe_tcp_quic(&mut tcp, &mut send, &mut recv).await;
+    Ok(())
+}
+
 async fn serve_status(addr: SocketAddr, state: AppState) -> Result<()> {
     let app = Router::new()
         .route("/status", get(status_handler))
@@ -171,18 +235,28 @@ async fn serve_status(addr: SocketAddr, state: AppState) -> Result<()> {
 }
 
 async fn status_handler(State(state): State<AppState>) -> Json<proto::TunnelStatus> {
-    let live = state.live.read().await;
-    let tunnels: Vec<_> = live
-        .values()
-        .map(|t| proto::TunnelStatusEntry {
-            name: t.name.clone(),
-            remote_port: t.remote_port,
-            connected: t.connected,
-            client_addr: t.client_addr.clone(),
+    let sess = state.session.read().await;
+    let connected = sess.is_some();
+    let client_addr = sess.as_ref().map(|s| s.addr.clone());
+    let active = sess.as_ref().map(|s| s.tunnels.clone()).unwrap_or_default();
+    let tunnels: Vec<_> = state
+        .tunnels
+        .iter()
+        .map(|(name, port)| proto::TunnelStatusEntry {
+            name: name.clone(),
+            remote_port: *port,
+            connected: connected && active.contains(name),
+            client_addr: if active.contains(name) {
+                client_addr.clone()
+            } else {
+                None
+            },
         })
         .collect();
-    let online = tunnels.iter().any(|t| t.connected);
-    Json(proto::TunnelStatus { online, tunnels })
+    Json(proto::TunnelStatus {
+        online: connected,
+        tunnels,
+    })
 }
 
 fn make_endpoint(bind: SocketAddr) -> Result<Endpoint> {
@@ -198,16 +272,25 @@ fn make_endpoint(bind: SocketAddr) -> Result<Endpoint> {
     tls.alpn_protocols = vec![proto::ALPN.to_vec()];
     tls.max_early_data_size = 0;
 
-    let mut transport = quinn::TransportConfig::default();
-    transport.max_idle_timeout(Some(Duration::from_secs(60).try_into().unwrap()));
-    transport.keep_alive_interval(Some(Duration::from_secs(15)));
-
     let mut server = ServerConfig::with_crypto(Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(tls).context("quic server crypto")?,
     ));
-    server.transport_config(Arc::new(transport));
+    server.transport_config(Arc::new(tuned_transport()));
 
     Endpoint::server(server, bind).context("bind quinn endpoint")
+}
+
+fn tuned_transport() -> quinn::TransportConfig {
+    use quinn::VarInt;
+    let mut transport = quinn::TransportConfig::default();
+    transport.max_idle_timeout(Some(Duration::from_secs(120).try_into().unwrap()));
+    transport.keep_alive_interval(Some(Duration::from_secs(10)));
+    transport.receive_window(VarInt::from_u32(8 * 1024 * 1024));
+    transport.stream_receive_window(VarInt::from_u32(2 * 1024 * 1024));
+    transport.send_window(8 * 1024 * 1024);
+    transport.max_concurrent_bidi_streams(VarInt::from_u32(1024));
+    transport.initial_rtt(Duration::from_millis(80));
+    transport
 }
 
 async fn handle_connection(incoming: Incoming, state: AppState) -> Result<()> {
@@ -223,42 +306,54 @@ async fn handle_connection(incoming: Incoming, state: AppState) -> Result<()> {
     };
 
     if !constant_time_eq(token.as_bytes(), state.token.as_bytes()) {
-        let _ = proto::write_frame(
-            &mut send,
-            &proto::ServerControl::HelloErr {
-                message: "invalid token".into(),
-            },
-        )
-        .await;
+        reject_hello(&mut send, &conn, "invalid token").await;
         bail!("auth failed from {remote}");
     }
 
     let mut granted = Vec::new();
+    let mut names = HashSet::new();
     for name in &wanted {
         let Some(&port) = state.tunnels.get(name) else {
-            let _ = proto::write_frame(
+            let known: Vec<_> = state.tunnels.keys().cloned().collect();
+            reject_hello(
                 &mut send,
-                &proto::ServerControl::HelloErr {
-                    message: format!("unknown tunnel {name}"),
-                },
+                &conn,
+                &format!(
+                    "unknown tunnel `{name}` (server has: {})",
+                    if known.is_empty() {
+                        "(none)".into()
+                    } else {
+                        known.join(", ")
+                    }
+                ),
             )
             .await;
             bail!("client requested unknown tunnel {name}");
         };
+        names.insert(name.clone());
         granted.push(proto::TunnelGranted {
             name: name.clone(),
             remote_port: port,
         });
     }
     if granted.is_empty() {
-        let _ = proto::write_frame(
-            &mut send,
-            &proto::ServerControl::HelloErr {
-                message: "no tunnels requested".into(),
-            },
-        )
-        .await;
+        reject_hello(&mut send, &conn, "no tunnels requested").await;
         bail!("no tunnels");
+    }
+
+    // Replace any previous client (reconnect-safe; ports stay bound).
+    {
+        let mut slot = state.session.write().await;
+        if let Some(old) = slot.take() {
+            info!("replacing previous client {}", old.addr);
+            old.conn
+                .close(0u32.into(), b"replaced by new client");
+        }
+        *slot = Some(ClientSession {
+            conn: Arc::new(conn.clone()),
+            tunnels: names.clone(),
+            addr: remote.to_string(),
+        });
     }
 
     proto::write_frame(
@@ -269,60 +364,16 @@ async fn handle_connection(incoming: Incoming, state: AppState) -> Result<()> {
     )
     .await?;
 
-    // Mark live
-    {
-        let mut live = state.live.write().await;
-        for g in &granted {
-            if let Some(e) = live.get_mut(&g.name) {
-                e.connected = true;
-                e.client_addr = Some(remote.to_string());
-            }
-        }
-    }
-
-    let names: Vec<String> = granted.iter().map(|g| g.name.clone()).collect();
     info!(
         "authorized {remote} tunnels={}",
-        names.join(",")
+        granted
+            .iter()
+            .map(|g| format!("{}→127.0.0.1:{}", g.name, g.remote_port))
+            .collect::<Vec<_>>()
+            .join(", ")
     );
 
-    let mut listeners = Vec::new();
-    for g in granted {
-        let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], g.remote_port)))
-            .await
-            .with_context(|| format!("bind 127.0.0.1:{}", g.remote_port))?;
-        info!(
-            "tunnel {} listening on 127.0.0.1:{} → client {remote}",
-            g.name, g.remote_port
-        );
-        listeners.push((g.name, listener));
-    }
-
-    let conn = Arc::new(conn);
-    let mut accept_tasks = Vec::new();
-    for (name, listener) in listeners {
-        let conn = conn.clone();
-        accept_tasks.push(tokio::spawn(async move {
-            loop {
-                let (tcp, peer) = match listener.accept().await {
-                    Ok(v) => v,
-                    Err(e) => {
-                        warn!("accept on tunnel {name}: {e}");
-                        break;
-                    }
-                };
-                let conn = conn.clone();
-                let name = name.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = relay_public_to_client(conn, name, tcp, peer).await {
-                        warn!("relay error: {e:#}");
-                    }
-                });
-            }
-        }));
-    }
-
-    // Keep control stream alive (ping/pong) until connection closes.
+    // Keepalive / control until disconnect.
     let control = tokio::spawn(async move {
         loop {
             match proto::read_frame::<_, proto::ClientControl>(&mut recv).await {
@@ -348,44 +399,29 @@ async fn handle_connection(incoming: Incoming, state: AppState) -> Result<()> {
         _ = control => {}
     }
 
-    for t in accept_tasks {
-        t.abort();
-    }
-
+    // Clear session only if we are still the active client.
     {
-        let mut live = state.live.write().await;
-        for name in names {
-            if let Some(e) = live.get_mut(&name) {
-                e.connected = false;
-                e.client_addr = None;
-            }
+        let mut slot = state.session.write().await;
+        if slot
+            .as_ref()
+            .map(|s| s.addr == remote.to_string())
+            .unwrap_or(false)
+        {
+            *slot = None;
         }
     }
     info!("client {remote} disconnected");
     Ok(())
 }
 
-async fn relay_public_to_client(
-    conn: Arc<quinn::Connection>,
-    tunnel: String,
-    mut tcp: tokio::net::TcpStream,
-    peer: SocketAddr,
-) -> Result<()> {
-    let (mut send, mut recv) = conn.open_bi().await.context("open data stream")?;
-    proto::write_frame(&mut send, &proto::OpenConn { tunnel: tunnel.clone() }).await?;
-    tracing::debug!("relaying {peer} via tunnel {tunnel}");
-    pipe_tcp_quic(&mut tcp, &mut send, &mut recv).await;
-    Ok(())
-}
-
 async fn pipe_tcp_quic(
-    tcp: &mut tokio::net::TcpStream,
+    tcp: &mut TcpStream,
     send: &mut quinn::SendStream,
     recv: &mut quinn::RecvStream,
 ) {
     let (mut tcp_r, mut tcp_w) = tcp.split();
     let c2s = async {
-        let mut buf = vec![0u8; 16 * 1024];
+        let mut buf = vec![0u8; 64 * 1024];
         loop {
             match tokio::io::AsyncReadExt::read(&mut tcp_r, &mut buf).await {
                 Ok(0) => break,
@@ -396,14 +432,17 @@ async fn pipe_tcp_quic(
                     {
                         break;
                     }
+                    if tokio::io::AsyncWriteExt::flush(send).await.is_err() {
+                        break;
+                    }
                 }
                 Err(_) => break,
             }
         }
-        let _ = tokio::io::AsyncWriteExt::shutdown(send).await;
+        let _ = send.finish();
     };
     let s2c = async {
-        let mut buf = vec![0u8; 16 * 1024];
+        let mut buf = vec![0u8; 64 * 1024];
         loop {
             match tokio::io::AsyncReadExt::read(recv, &mut buf).await {
                 Ok(0) => break,
@@ -414,16 +453,16 @@ async fn pipe_tcp_quic(
                     {
                         break;
                     }
+                    if tokio::io::AsyncWriteExt::flush(&mut tcp_w).await.is_err() {
+                        break;
+                    }
                 }
                 Err(_) => break,
             }
         }
         let _ = tokio::io::AsyncWriteExt::shutdown(&mut tcp_w).await;
     };
-    tokio::select! {
-        _ = c2s => {}
-        _ = s2c => {}
-    }
+    let _ = tokio::join!(c2s, s2c);
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -435,4 +474,18 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         diff |= x ^ y;
     }
     diff == 0
+}
+
+async fn reject_hello(send: &mut quinn::SendStream, conn: &quinn::Connection, message: &str) {
+    warn!("rejecting client: {message}");
+    let _ = proto::write_frame(
+        send,
+        &proto::ServerControl::HelloErr {
+            message: message.to_string(),
+        },
+    )
+    .await;
+    let _ = send.finish();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    conn.close(0u32.into(), message.as_bytes());
 }

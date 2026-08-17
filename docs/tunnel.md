@@ -16,17 +16,27 @@ Internet ──▶ pertisk-proxy :80/:443
            127.0.0.1:3000 (your app)
 ```
 
-## Build
-
-From the repo root:
+## Build / packages
 
 ```bash
-cargo build -p pertisk-tunnel-server -p pertisk-tunnel-client --release
-# binaries: target/release/pertisk-tunnel-server
-#           target/release/pertisk-tunnel-client
+make tunnel                    # release binaries
+make package-tunnel VERSION=0.1.80   # RPM+DEB for server and client (amd64)
+make package-tunnel-arm64 VERSION=0.1.80
+
+# Deploy to VPS / laptop
+make deploy-rpm-tunnel DEPLOY_HOST=user@vps VERSION=0.1.80
+make deploy-rpm-tunnel-server DEPLOY_HOST=user@vps
+make deploy-rpm-tunnel-client DEPLOY_HOST=user@laptop
 ```
 
-Or: `make tunnel`
+Packages install:
+
+| Package | Binary | Config | Unit |
+|---------|--------|--------|------|
+| `pertisk-tunnel-server` | `/usr/bin/pertisk-tunnel-server` | `/etc/pertisk-tunnel/server.toml` | `pertisk-tunnel-server.service` |
+| `pertisk-tunnel-client` | `/usr/bin/pertisk-tunnel-client` | `/etc/pertisk-tunnel/client.toml` | `pertisk-tunnel-client.service` |
+
+After install: edit the token in the toml, then `sudo systemctl enable --now pertisk-tunnel-server` (VPS) or `…-client` (laptop).
 
 ## VPS: tunnel server
 
@@ -36,6 +46,38 @@ Or: `make tunnel`
 sudo mkdir -p /etc/pertisk-tunnel
 sudo cp tunnel/examples/server.toml /etc/pertisk-tunnel/server.toml
 # edit token + [[tunnels]] remote_port
+```
+
+**Tunnel names must match on both sides.** If the client has `admin-15` and `pertisk-15`, the VPS `server.toml` needs the same names:
+
+```toml
+token = "same-secret-as-client"
+
+[[tunnels]]
+name = "admin-15"
+remote_port = 19080
+
+[[tunnels]]
+name = "pertisk-15"
+remote_port = 18801
+```
+
+Then restart: `sudo systemctl restart pertisk-tunnel-server`
+
+If the client logs `closed by peer` during hello, check server logs:
+
+```bash
+journalctl -u pertisk-tunnel-server -n 50 --no-pager
+```
+
+Typical causes: **token mismatch**, or **unknown tunnel name** (not listed on the server).
+
+Loopback ports are bound **once at server start**. If you see `Address already in use` on `127.0.0.1:<port>`, something else owns that port:
+
+```bash
+ss -lntp | grep 18080
+# change remote_port in server.toml, or stop the other process
+sudo systemctl restart pertisk-tunnel-server
 ```
 
 2. Firewall: allow **UDP 7000** (control). Do **not** expose `status_bind` (default `127.0.0.1:7700`). Keep management API on localhost if possible.

@@ -3870,6 +3870,7 @@ dependencies = [
  "rustls 0.23.40",
  "serde",
  "serde_json",
+ "socket2 0.5.10",
  "tokio",
  "toml",
  "tracing",

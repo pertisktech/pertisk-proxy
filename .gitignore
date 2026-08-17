@@ -32,3 +32,10 @@ deploy-arm.local.sh
 scripts/*.local.sh
 scripts/deploy.local.sh
 scripts/deploy-arm.local.sh
+pertisk-tunnel-client-linux-amd64
+pertisk-tunnel-server-linux-amd64
+pertisk-tunnel-client-linux-arm64
+pertisk-tunnel-server-linux-arm64
+postinstall-tunnel.sh
+preinstall-tunnel.sh
+preremove-tunnel.sh

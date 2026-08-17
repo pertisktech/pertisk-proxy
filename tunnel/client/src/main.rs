@@ -106,7 +106,15 @@ async fn run_session(cfg: &Config) -> Result<()> {
     )
     .await?;
 
-    let reply: proto::ServerControl = proto::read_frame(&mut recv).await.context("hello reply")?;
+    let reply: proto::ServerControl = match proto::read_frame(&mut recv).await {
+        Ok(r) => r,
+        Err(e) => {
+            bail!(
+                "hello reply failed ({e}). Check VPS: matching token, and server.toml [[tunnels]] names \
+                 must include every client tunnel name. See: journalctl -u pertisk-tunnel-server -n 50"
+            );
+        }
+    };
     let granted = match reply {
         proto::ServerControl::HelloOk { tunnels } => tunnels,
         proto::ServerControl::HelloErr { message } => bail!("server rejected: {message}"),
@@ -192,6 +200,7 @@ async fn handle_open_conn(
     let mut tcp = TcpStream::connect(local)
         .await
         .with_context(|| format!("connect local {local}"))?;
+    let _ = tcp.set_nodelay(true);
     tracing::debug!("opened local {local} for tunnel {}", open.tunnel);
     pipe_tcp_quic(&mut tcp, &mut send, &mut recv).await;
     Ok(())
@@ -204,7 +213,7 @@ async fn pipe_tcp_quic(
 ) {
     let (mut tcp_r, mut tcp_w) = tcp.split();
     let c2s = async {
-        let mut buf = vec![0u8; 16 * 1024];
+        let mut buf = vec![0u8; 64 * 1024];
         loop {
             match tokio::io::AsyncReadExt::read(&mut tcp_r, &mut buf).await {
                 Ok(0) => break,
@@ -215,14 +224,17 @@ async fn pipe_tcp_quic(
                     {
                         break;
                     }
+                    if tokio::io::AsyncWriteExt::flush(send).await.is_err() {
+                        break;
+                    }
                 }
                 Err(_) => break,
             }
         }
-        let _ = tokio::io::AsyncWriteExt::shutdown(send).await;
+        let _ = send.finish();
     };
     let s2c = async {
-        let mut buf = vec![0u8; 16 * 1024];
+        let mut buf = vec![0u8; 64 * 1024];
         loop {
             match tokio::io::AsyncReadExt::read(recv, &mut buf).await {
                 Ok(0) => break,
@@ -233,16 +245,16 @@ async fn pipe_tcp_quic(
                     {
                         break;
                     }
+                    if tokio::io::AsyncWriteExt::flush(&mut tcp_w).await.is_err() {
+                        break;
+                    }
                 }
                 Err(_) => break,
             }
         }
         let _ = tokio::io::AsyncWriteExt::shutdown(&mut tcp_w).await;
     };
-    tokio::select! {
-        _ = c2s => {}
-        _ = s2c => {}
-    }
+    let _ = tokio::join!(c2s, s2c);
 }
 
 fn resolve_server(server: &str) -> Result<SocketAddr> {
@@ -301,14 +313,24 @@ fn make_client_endpoint(insecure: bool) -> Result<Endpoint> {
     let mut client_cfg = quinn::ClientConfig::new(Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(crypto).context("quic client crypto")?,
     ));
-    let mut transport = quinn::TransportConfig::default();
-    transport.max_idle_timeout(Some(Duration::from_secs(60).try_into().unwrap()));
-    transport.keep_alive_interval(Some(Duration::from_secs(15)));
-    client_cfg.transport_config(Arc::new(transport));
+    client_cfg.transport_config(Arc::new(tuned_transport()));
 
     let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 0)))?;
     endpoint.set_default_client_config(client_cfg);
     Ok(endpoint)
+}
+
+fn tuned_transport() -> quinn::TransportConfig {
+    use quinn::VarInt;
+    let mut transport = quinn::TransportConfig::default();
+    transport.max_idle_timeout(Some(Duration::from_secs(120).try_into().unwrap()));
+    transport.keep_alive_interval(Some(Duration::from_secs(10)));
+    transport.receive_window(VarInt::from_u32(8 * 1024 * 1024));
+    transport.stream_receive_window(VarInt::from_u32(2 * 1024 * 1024));
+    transport.send_window(8 * 1024 * 1024);
+    transport.max_concurrent_bidi_streams(VarInt::from_u32(1024));
+    transport.initial_rtt(Duration::from_millis(80));
+    transport
 }
 
 #[derive(Debug)]

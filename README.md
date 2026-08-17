@@ -245,4 +245,12 @@ Apache-2.0
 
 ## Reverse tunnel
 
-Expose a local app through this VPS: see [docs/tunnel.md](docs/tunnel.md). Build with `make tunnel`.
+Expose a local app through this VPS: see [docs/tunnel.md](docs/tunnel.md).
+
+```bash
+make tunnel                          # build binaries
+make package-tunnel VERSION=0.1.80   # RPM+DEB for server and client
+make deploy-rpm-tunnel DEPLOY_HOST=user@vps VERSION=0.1.80
+make deploy-rpm-tunnel-server DEPLOY_HOST=user@vps
+make deploy-rpm-tunnel-client DEPLOY_HOST=user@laptop
+```

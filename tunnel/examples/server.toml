@@ -5,7 +5,12 @@ bind = "0.0.0.0:7000"
 token = "change-me-to-a-long-random-secret"
 status_bind = "127.0.0.1:7700"
 
-# Each tunnel opens ONLY on loopback. Point pertisk-proxy Sites at these ports.
+# One [[tunnels]] block per tunnel (repeat the whole block — do not put two name= in one block).
+# Each opens ONLY on loopback. Point pertisk-proxy Sites at these ports.
 [[tunnels]]
 name = "dev-app"
 remote_port = 18080
+
+# [[tunnels]]
+# name = "pertisk-15"
+# remote_port = 18081
