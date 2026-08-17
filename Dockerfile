@@ -34,11 +34,18 @@ RUN apk add --no-cache \
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock build.rs ./
+# Workspace members must exist for cargo fetch/build (image does not compile them here).
+COPY tunnel/proto/Cargo.toml tunnel/proto/
+COPY tunnel/server/Cargo.toml tunnel/server/
+COPY tunnel/client/Cargo.toml tunnel/client/
+RUN mkdir -p tunnel/proto/src tunnel/server/src tunnel/client/src \
+    && touch tunnel/proto/src/lib.rs tunnel/server/src/main.rs tunnel/client/src/main.rs
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-ingress-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-ingress-git-${TARGETPLATFORM} \
     cargo fetch --locked
 
 COPY src ./src
+COPY tunnel ./tunnel
 COPY --from=admin /admin/dist ./admin/dist
 ENV RUST_MIN_STACK=16777216
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-ingress-registry-${TARGETPLATFORM} \
