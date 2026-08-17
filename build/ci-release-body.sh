@@ -13,16 +13,32 @@ rpm_x86_64=""
 rpm_aarch64=""
 tar_amd64=""
 tar_arm64=""
+tunnel_srv_deb_amd64=""
+tunnel_srv_deb_arm64=""
+tunnel_cli_deb_amd64=""
+tunnel_cli_deb_arm64=""
+tunnel_srv_rpm_x86_64=""
+tunnel_srv_rpm_aarch64=""
+tunnel_cli_rpm_x86_64=""
+tunnel_cli_rpm_aarch64=""
 
 while IFS= read -r -d '' f; do
   name=$(basename "$f")
   case "$name" in
-    *_amd64.deb) deb_amd64="$name" ;;
-    *_arm64.deb) deb_arm64="$name" ;;
-    *.x86_64.rpm) rpm_x86_64="$name" ;;
-    *.aarch64.rpm) rpm_aarch64="$name" ;;
-    *-linux-amd64.tar.gz) tar_amd64="$name" ;;
-    *-linux-arm64.tar.gz) tar_arm64="$name" ;;
+    pertisk-proxy_*_amd64.deb) deb_amd64="$name" ;;
+    pertisk-proxy_*_arm64.deb) deb_arm64="$name" ;;
+    pertisk-proxy-*.x86_64.rpm) rpm_x86_64="$name" ;;
+    pertisk-proxy-*.aarch64.rpm) rpm_aarch64="$name" ;;
+    pertisk-tunnel-server_*_amd64.deb) tunnel_srv_deb_amd64="$name" ;;
+    pertisk-tunnel-server_*_arm64.deb) tunnel_srv_deb_arm64="$name" ;;
+    pertisk-tunnel-client_*_amd64.deb) tunnel_cli_deb_amd64="$name" ;;
+    pertisk-tunnel-client_*_arm64.deb) tunnel_cli_deb_arm64="$name" ;;
+    pertisk-tunnel-server-*.x86_64.rpm) tunnel_srv_rpm_x86_64="$name" ;;
+    pertisk-tunnel-server-*.aarch64.rpm) tunnel_srv_rpm_aarch64="$name" ;;
+    pertisk-tunnel-client-*.x86_64.rpm) tunnel_cli_rpm_x86_64="$name" ;;
+    pertisk-tunnel-client-*.aarch64.rpm) tunnel_cli_rpm_aarch64="$name" ;;
+    pertisk-proxy-*-linux-amd64.tar.gz) tar_amd64="$name" ;;
+    pertisk-proxy-*-linux-arm64.tar.gz) tar_arm64="$name" ;;
   esac
 done < <(find "$PACKAGES_DIR" \( -name '*.deb' -o -name '*.rpm' -o -name '*.tar.gz' \) -type f -print0 | sort -z)
 
@@ -56,7 +72,7 @@ done
 
 cat <<'EOF'
 
-## Installation
+## Installation (proxy)
 
 EOF
 
@@ -129,7 +145,7 @@ EOF
 fi
 
 cat <<EOF
-## Post Installation
+## Post Installation (proxy)
 \`\`\`bash
 # Verify capabilities (port binding)
 getcap /usr/bin/pertisk-proxy
@@ -150,6 +166,73 @@ sudo systemctl disable --now pertisk-proxy || true
 sudo systemctl enable --now pertisk-proxy-root
 \`\`\`
 
+## Installation (tunnel)
+
+Reverse tunnel packages: \`pertisk-tunnel-server\` (VPS) and \`pertisk-tunnel-client\` (homelab).
+See [docs/tunnel.md](https://github.com/${GITHUB_REPOSITORY}/blob/v${VERSION}/docs/tunnel.md).
+
+EOF
+
+if [ -n "$tunnel_srv_rpm_x86_64" ] || [ -n "$tunnel_cli_rpm_x86_64" ]; then
+  cat <<EOF
+### Tunnel RPM (x86_64)
+\`\`\`bash
+# On the public VPS (server):
+wget ${BASE}/${tunnel_srv_rpm_x86_64}
+sudo rpm -i ${tunnel_srv_rpm_x86_64}
+# Edit /etc/pertisk-tunnel/server.toml then:
+sudo systemctl enable --now pertisk-tunnel-server
+
+# On the private host (client):
+wget ${BASE}/${tunnel_cli_rpm_x86_64}
+sudo rpm -i ${tunnel_cli_rpm_x86_64}
+# Edit /etc/pertisk-tunnel/client.toml then:
+sudo systemctl enable --now pertisk-tunnel-client
+\`\`\`
+
+EOF
+fi
+
+if [ -n "$tunnel_srv_rpm_aarch64" ] || [ -n "$tunnel_cli_rpm_aarch64" ]; then
+  cat <<EOF
+### Tunnel RPM (aarch64)
+\`\`\`bash
+wget ${BASE}/${tunnel_srv_rpm_aarch64}
+sudo rpm -i ${tunnel_srv_rpm_aarch64}
+wget ${BASE}/${tunnel_cli_rpm_aarch64}
+sudo rpm -i ${tunnel_cli_rpm_aarch64}
+\`\`\`
+
+EOF
+fi
+
+if [ -n "$tunnel_srv_deb_amd64" ] || [ -n "$tunnel_cli_deb_amd64" ]; then
+  cat <<EOF
+### Tunnel DEB (amd64)
+\`\`\`bash
+wget ${BASE}/${tunnel_srv_deb_amd64}
+sudo dpkg -i ${tunnel_srv_deb_amd64}
+wget ${BASE}/${tunnel_cli_deb_amd64}
+sudo dpkg -i ${tunnel_cli_deb_amd64}
+\`\`\`
+
+EOF
+fi
+
+if [ -n "$tunnel_srv_deb_arm64" ] || [ -n "$tunnel_cli_deb_arm64" ]; then
+  cat <<EOF
+### Tunnel DEB (arm64)
+\`\`\`bash
+wget ${BASE}/${tunnel_srv_deb_arm64}
+sudo dpkg -i ${tunnel_srv_deb_arm64}
+wget ${BASE}/${tunnel_cli_deb_arm64}
+sudo dpkg -i ${tunnel_cli_deb_arm64}
+\`\`\`
+
+EOF
+fi
+
+cat <<EOF
 ## HTTP/3 (QUIC)
 UDP buffer settings are applied from \`/etc/sysctl.d/99-pertisk-proxy.conf\`. Reload with \`sudo sysctl -p /etc/sysctl.d/99-pertisk-proxy.conf\` if needed.
 

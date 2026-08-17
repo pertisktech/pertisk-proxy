@@ -243,14 +243,17 @@ package-rpm: package
 release:
 	$(MAKE) package-clean
 	$(MAKE) package VERSION=$(VERSION)
+	$(MAKE) package-tunnel VERSION=$(VERSION)
 
 release-amd:
 	$(MAKE) package-clean
 	$(MAKE) package-amd64 VERSION=$(VERSION)
+	$(MAKE) package-tunnel-amd64 VERSION=$(VERSION)
 
 release-arm:
 	$(MAKE) package-clean
 	$(MAKE) package-arm64 VERSION=$(VERSION)
+	$(MAKE) package-tunnel-arm64 VERSION=$(VERSION)
 
 release-proxy:
 	$(MAKE) package-clean

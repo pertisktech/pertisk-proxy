@@ -1,5 +1,6 @@
 # Release on push tag v* — build binaries (amd64 + arm64) and create GitHub Release.
-# Packages: DEB, RPM, tarball per arch; Docker images; Helm chart.
+# Packages: proxy DEB/RPM/tarball, tunnel-server + tunnel-client DEB/RPM per arch;
+# Docker images; Helm chart.
 
 name: Release Packages
 
@@ -268,13 +269,26 @@ jobs:
           FORCE_DOCKER_FPM: "1"
         run: chmod +x build/ci-package-deb-rpm.sh && ./build/ci-package-deb-rpm.sh
 
+      - name: Build tunnel DEB and RPM packages
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          FORCE_DOCKER_TUNNEL: "1"
+          FORCE_DOCKER_FPM: "1"
+        run: |
+          set -euo pipefail
+          chmod +x build/package-tunnel.sh
+          ./build/package-tunnel.sh ${{ matrix.goarch }} ${{ steps.version.outputs.VERSION }} both
+
       - name: Verify packages before upload
         run: |
           set -euo pipefail
           echo "=== release/ contents (linux/${{ matrix.goarch }}) ==="
           ls -la release/
-          test "$(find release -maxdepth 1 -name '*.deb' | wc -l)" -ge 1
-          test "$(find release -maxdepth 1 -name '*.rpm' | wc -l)" -ge 1
+          # proxy + tunnel-server + tunnel-client
+          test "$(find release -maxdepth 1 -name '*.deb' | wc -l)" -ge 3
+          test "$(find release -maxdepth 1 -name '*.rpm' | wc -l)" -ge 3
+          test "$(find release -maxdepth 1 -name 'pertisk-tunnel-*.deb' | wc -l)" -ge 2
+          test "$(find release -maxdepth 1 -name 'pertisk-tunnel-*.rpm' | wc -l)" -ge 2
 
       - name: Create tarball
         run: |
@@ -533,9 +547,20 @@ jobs:
           find packages -type f | sort
           deb_count=$(find packages -name '*.deb' | wc -l | tr -d ' ')
           rpm_count=$(find packages -name '*.rpm' | wc -l | tr -d ' ')
-          echo "deb=${deb_count} rpm=${rpm_count}"
-          if [ "$rpm_count" -lt 2 ]; then
-            echo "::error::Expected at least 2 RPM files (amd64 + arm64), found ${rpm_count}"
+          tunnel_rpm=$(find packages -name 'pertisk-tunnel-*.rpm' | wc -l | tr -d ' ')
+          tunnel_deb=$(find packages -name 'pertisk-tunnel-*.deb' | wc -l | tr -d ' ')
+          echo "deb=${deb_count} rpm=${rpm_count} tunnel_deb=${tunnel_deb} tunnel_rpm=${tunnel_rpm}"
+          # 2 arches × (proxy + tunnel-server + tunnel-client)
+          if [ "$rpm_count" -lt 6 ]; then
+            echo "::error::Expected at least 6 RPM files (proxy + tunnel × amd64/arm64), found ${rpm_count}"
+            exit 1
+          fi
+          if [ "$deb_count" -lt 6 ]; then
+            echo "::error::Expected at least 6 DEB files (proxy + tunnel × amd64/arm64), found ${deb_count}"
+            exit 1
+          fi
+          if [ "$tunnel_rpm" -lt 4 ] || [ "$tunnel_deb" -lt 4 ]; then
+            echo "::error::Expected at least 4 tunnel DEB and 4 tunnel RPM (server+client × 2 arch)"
             exit 1
           fi
 

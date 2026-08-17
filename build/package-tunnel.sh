@@ -12,6 +12,8 @@
 #   pertisk-tunnel-server-<ver>-1.x86_64.rpm
 #   pertisk-tunnel-client-<ver>-1.x86_64.rpm
 #   (+ .deb)
+#
+# CI: set FORCE_DOCKER_TUNNEL=1 and FORCE_DOCKER_FPM=1 (see release.yml).
 
 set -euo pipefail
 
@@ -109,7 +111,9 @@ for bin in "${PACKAGE_BINARIES[@]}"; do
 done
 
 if [ "$need_build" -eq 1 ]; then
-  if [ "$HOST_OS" = "Linux" ] && [ "$HOST_ARCH" = "$ARCH" ]; then
+  if [ "${FORCE_DOCKER_TUNNEL:-0}" = "1" ]; then
+    build_docker
+  elif [ "$HOST_OS" = "Linux" ] && [ "$HOST_ARCH" = "$ARCH" ]; then
     build_native
   else
     build_docker
@@ -248,7 +252,10 @@ run_fpm() {
     .
 }
 
-if [ "$(uname -s)" = "Darwin" ] || ! command -v fpm >/dev/null 2>&1 || { [ "$(uname -s)" = "Linux" ] && ! command -v rpmbuild >/dev/null 2>&1; }; then
+if [ "${FORCE_DOCKER_FPM:-0}" = "1" ] \
+  || [ "$(uname -s)" = "Darwin" ] \
+  || ! command -v fpm >/dev/null 2>&1 \
+  || { [ "$(uname -s)" = "Linux" ] && ! command -v rpmbuild >/dev/null 2>&1; }; then
   echo "Building tunnel DEB/RPM in Linux container..."
   docker build -q -f docker/Dockerfile.package -t pertisk-proxy-package .
   # Write helper used inside container
