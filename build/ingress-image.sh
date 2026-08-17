@@ -18,7 +18,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 VERSION="${VERSION:-${1:-0.1.0}}"
-IMAGE="${HARBOR_INGRESS_IMAGE:-ghcr.io/pertisktech/pertisk-proxy/ingress}"
+IMAGE="${HARBOR_INGRESS_IMAGE:-harbor.tools.pertisk.com/pertisk-proxy/ingress}"
 DOCKERFILE="${INGRESS_DOCKERFILE:-docker/Dockerfile.ingress}"
 DEFAULT_PLATFORMS="${DEFAULT_PLATFORMS:-linux/amd64,linux/arm64}"
 PLATFORMS="${PLATFORMS:-}"

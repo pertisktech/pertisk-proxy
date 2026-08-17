@@ -1,10 +1,16 @@
-# Runtime image from a prebuilt Linux binary (see make package / docker-build-*).
-# docker build -f docker/Dockerfile.binary --build-arg BINARY_FILE=pertisk-proxy-linux-amd64 -t pertisk-proxy:amd64 .
+# Runtime image from a prebuilt Linux glibc binary (release CI / make package).
+# Avoid Alpine — CDN/apk often fails on restricted runners; binaries are gnu/glibc.
+# docker build --network=host -f docker/Dockerfile.binary \
+#   --build-arg BINARY_FILE=pertisk-proxy-linux-amd64 -t pertisk-proxy:amd64 .
 
-FROM alpine:3.21
+FROM debian:bookworm-slim
 
-RUN apk add --no-cache ca-certificates openssl curl \
-    && mkdir -p /var/lib/pertisk-proxy/certs /etc/pertisk-proxy
+COPY docker/debian-apt-setup.sh /usr/local/sbin/debian-apt-setup.sh
+RUN set -eux; \
+    . /usr/local/sbin/debian-apt-setup.sh; \
+    apt_install_retry ca-certificates openssl libssl3 curl; \
+    mkdir -p /var/lib/pertisk-proxy/certs /etc/pertisk-proxy; \
+    rm -rf /var/lib/apt/lists/*
 
 ARG BINARY_FILE=pertisk-proxy-linux-amd64
 ARG BINARY_NAME=pertisk-proxy

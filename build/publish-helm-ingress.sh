@@ -33,7 +33,7 @@ if [ -z "$VERSION" ]; then
 fi
 
 if [ "$PACKAGE_ONLY" != "1" ] && [ -z "$HELM_CHART_REPO_URL" ]; then
-  echo "Set HELM_CHART_REPO_URL (e.g. https://charts.example.com)" >&2
+  echo "Set HELM_CHART_REPO_URL (e.g. https://chart.tools.pertisk.com)" >&2
   exit 1
 fi
 
@@ -114,7 +114,7 @@ HTTP_CODE="$(curl -sS -o "$WORKDIR/upload.json" -w '%{http_code}' \
 if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
   cat "$WORKDIR/upload.json"
   echo ""
-  echo "Published pertisk-ingress ${VERSION} (image: ${HARBOR_INGRESS_IMAGE:-ghcr.io/pertisktech/pertisk-proxy/ingress}:v${VERSION})"
+  echo "Published pertisk-ingress ${VERSION} (image: ${HARBOR_INGRESS_IMAGE:-harbor.tools.pertisk.com/pertisk-proxy/ingress}:v${VERSION})"
   echo "Install: helm repo add pertisk ${HELM_CHART_REPO_URL%/} && helm upgrade --install pertisk-proxy-ingress pertisk/pertisk-ingress --version ${VERSION} -n pertisk-proxy --create-namespace"
   exit 0
 fi

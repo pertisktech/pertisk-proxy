@@ -14,11 +14,12 @@ permissions:
 
 env:
   BINARY_NAME: pertisk-proxy
-  # Override in repo Variables if you push to a private registry.
-  HARBOR_BUILD_IMAGE: ${{ vars.HARBOR_BUILD_IMAGE || 'ghcr.io/pertisktech/pertisk-proxy-build' }}
-  HARBOR_PROXY_IMAGE: ${{ vars.HARBOR_PROXY_IMAGE || 'ghcr.io/pertisktech/pertisk-proxy/proxy' }}
-  HARBOR_INGRESS_IMAGE: ${{ vars.HARBOR_INGRESS_IMAGE || 'ghcr.io/pertisktech/pertisk-proxy/ingress' }}
-  HELM_CHART_REPO_URL: ${{ vars.HELM_CHART_REPO_URL || 'https://chart.example.com' }}
+  # Override in repo Variables if paths differ in Harbor.
+  CONTAINER_REGISTRY: ${{ vars.CONTAINER_REGISTRY || 'harbor.tools.pertisk.com' }}
+  HARBOR_BUILD_IMAGE: ${{ vars.HARBOR_BUILD_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/build' }}
+  HARBOR_PROXY_IMAGE: ${{ vars.HARBOR_PROXY_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/proxy' }}
+  HARBOR_INGRESS_IMAGE: ${{ vars.HARBOR_INGRESS_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/ingress' }}
+  HELM_CHART_REPO_URL: ${{ vars.HELM_CHART_REPO_URL || 'https://chart.tools.pertisk.com' }}
   # Self-hosted runner ~16C/32GB: cargo/cmake parallelism (native path reads these).
   CARGO_BUILD_JOBS: "14"
   CMAKE_BUILD_PARALLEL_LEVEL: "14"
@@ -371,7 +372,7 @@ jobs:
         run: |
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
           AUTH=$(echo -n "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" | base64)
-          REGISTRY="${{ vars.CONTAINER_REGISTRY || 'ghcr.io' }}"
+          REGISTRY="${{ env.CONTAINER_REGISTRY }}"
           mkdir -p "$DOCKER_CONFIG"
           echo "{\"auths\":{\"$REGISTRY\":{\"auth\":\"$AUTH\"}},\"credsStore\":\"\",\"credHelpers\":{}}" > "$DOCKER_CONFIG/config.json"
 
@@ -384,14 +385,14 @@ jobs:
           PROXY="${{ env.HARBOR_PROXY_IMAGE }}"
           INGRESS="${{ env.HARBOR_INGRESS_IMAGE }}"
 
-          docker build -f docker/Dockerfile.binary \
+          docker build --network=host -f docker/Dockerfile.binary \
             --build-arg BINARY_FILE=${{ env.BINARY_NAME }}-linux-${ARCH} \
             -t "${PROXY}:v${VERSION}-${ARCH}" \
             -t "${PROXY}:${ARCH}" \
             . &
           PROXY_PID=$!
 
-          docker build -f docker/Dockerfile.ingress.binary \
+          docker build --network=host -f docker/Dockerfile.ingress.binary \
             --build-arg BINARY_FILE=pertisk-proxy-ingress-linux-${ARCH} \
             -t "${INGRESS}:v${VERSION}-${ARCH}" \
             -t "${INGRESS}:${ARCH}" \
@@ -426,7 +427,7 @@ jobs:
         run: |
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
           AUTH=$(echo -n "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" | base64)
-          REGISTRY="${{ vars.CONTAINER_REGISTRY || 'ghcr.io' }}"
+          REGISTRY="${{ env.CONTAINER_REGISTRY }}"
           mkdir -p "$DOCKER_CONFIG"
           echo "{\"auths\":{\"$REGISTRY\":{\"auth\":\"$AUTH\"}},\"credsStore\":\"\",\"credHelpers\":{}}" > "$DOCKER_CONFIG/config.json"
 

@@ -267,7 +267,7 @@ release-ingress:
 # make package-helm VERSION=0.1.74   — helm package → release/pertisk-ingress-*.tgz
 # make release-helm VERSION=0.1.74   — package + upload to chart repo
 # Auth for release-helm: HELM_CHART_TOKEN=...  or  HELM_USER=... HELM_PASSWORD=...
-HELM_CHART_REPO_URL ?= https://chart.cloud.pertisksoft.net
+HELM_CHART_REPO_URL ?= https://chart.tools.pertisk.com
 HELM_CHART_DIR ?= deploy/helm/pertisk-ingress
 HELM_CHART_TOKEN ?=
 HELM_USER ?=
@@ -298,7 +298,7 @@ apply-ingress-rbac:
 # Kubelet/containerd auto-selects the node arch when pulling a multi-arch tag (no nodeSelector).
 INGRESS_BUILD_PLATFORMS ?= linux/amd64,linux/arm64
 CACHE_BACKEND ?= registry
-HARBOR_INGRESS_IMAGE ?= ghcr.io/pertisktech/pertisk-proxy/ingress
+HARBOR_INGRESS_IMAGE ?= harbor.tools.pertisk.com/pertisk-proxy/ingress
 INGRESS_DOCKERFILE ?= docker/Dockerfile.ingress
 
 docker-ingress: admin-dist

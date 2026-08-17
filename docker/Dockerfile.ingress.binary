@@ -1,12 +1,16 @@
-# Runtime-only ingress image using a prebuilt pertisk-proxy-ingress binary from CI artifacts.
-# Build example:
-# docker build -f docker/Dockerfile.ingress.binary \
+# Runtime-only ingress image using a prebuilt glibc binary from CI artifacts.
+# Avoid Alpine apk CDN issues; matches gnu binaries from release builds.
+# docker build --network=host -f docker/Dockerfile.ingress.binary \
 #   --build-arg BINARY_FILE=pertisk-proxy-ingress-linux-amd64 \
 #   -t pertisk-proxy-ingress:amd64 .
 
-FROM alpine:3.21
+FROM debian:bookworm-slim
 
-RUN apk add --no-cache ca-certificates openssl curl
+COPY docker/debian-apt-setup.sh /usr/local/sbin/debian-apt-setup.sh
+RUN set -eux; \
+    . /usr/local/sbin/debian-apt-setup.sh; \
+    apt_install_retry ca-certificates openssl libssl3 curl; \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/share/pertisk-proxy
 
