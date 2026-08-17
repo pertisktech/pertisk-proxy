@@ -456,7 +456,7 @@ fi
 BUILT_DEB_RPM=false
 if [ "$(uname -s)" = "Darwin" ]; then
   echo "Building DEB and RPM in Linux container..."
-  docker build -q -f docker/Dockerfile.package -t pertisk-proxy-package .
+  docker build --network=host -q -f docker/Dockerfile.package -t pertisk-proxy-package .
   docker run --rm \
     -v "$(pwd):/work" -w /work \
     -e PACKAGE_BINARIES="${PACKAGE_BINARIES[*]}" \

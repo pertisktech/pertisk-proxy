@@ -257,7 +257,7 @@ if [ "${FORCE_DOCKER_FPM:-0}" = "1" ] \
   || ! command -v fpm >/dev/null 2>&1 \
   || { [ "$(uname -s)" = "Linux" ] && ! command -v rpmbuild >/dev/null 2>&1; }; then
   echo "Building tunnel DEB/RPM in Linux container..."
-  docker build -q -f docker/Dockerfile.package -t pertisk-proxy-package .
+  docker build --network=host -q -f docker/Dockerfile.package -t pertisk-proxy-package .
   # Write helper used inside container
   cat > build/deb-rpm-tunnel.sh << 'INNER'
 #!/usr/bin/env bash
@@ -303,7 +303,7 @@ for BINARY_NAME in "${BINS[@]}"; do
 done
 INNER
   chmod +x build/deb-rpm-tunnel.sh
-  docker run --rm \
+  docker run --rm --network=host \
     -v "$(pwd):/work" -w /work \
     -e PACKAGE_BINARIES="${PACKAGE_BINARIES[*]}" \
     -e VERSION="$VERSION" \

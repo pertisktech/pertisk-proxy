@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build DEB/RPM with fpm. In CI always uses Docker (host fpm often lacks rpmbuild).
+# Build DEB/RPM with fpm. Prefers host fpm+rpmbuild; else Docker (AlmaLinux image).
 set -euo pipefail
 
 : "${BINARY_NAME:?BINARY_NAME required}"
@@ -15,11 +15,19 @@ REPO_URL="${REPO_URL:-https://github.com/pertisktech/pertisk-proxy}"
 
 mkdir -p "$OUTPUT_DIR"
 
+host_fpm_ok() {
+  command -v fpm >/dev/null 2>&1 && command -v rpmbuild >/dev/null 2>&1
+}
+
+ensure_package_image() {
+  echo "Building packaging image ${PACKAGE_IMAGE} (AlmaLinux + fpm)..."
+  docker build --network=host --progress=plain \
+    -f docker/Dockerfile.package -t "$PACKAGE_IMAGE" .
+}
+
 run_fpm() {
-  # CI runners may have fpm but not rpmbuild; RPM would fail or be skipped downstream.
-  if [ "${CI:-}" = "true" ] || [ "${FORCE_DOCKER_FPM:-0}" = "1" ]; then
-    :
-  elif command -v fpm >/dev/null 2>&1 && command -v rpmbuild >/dev/null 2>&1; then
+  if [ "${FORCE_DOCKER_FPM:-0}" != "1" ] && host_fpm_ok; then
+    echo "fpm: using host ($(command -v fpm))"
     fpm "$@"
     return
   fi
@@ -29,8 +37,12 @@ run_fpm() {
     exit 1
   fi
 
-  docker build --progress=plain -f docker/Dockerfile.package -t "$PACKAGE_IMAGE" .
-  docker run --rm -u "$(id -u):$(id -g)" -v "$(pwd):/work" -w /work "$PACKAGE_IMAGE" fpm "$@"
+  ensure_package_image
+  echo "fpm: using docker image ${PACKAGE_IMAGE}"
+  docker run --rm --network=host \
+    -u "$(id -u):$(id -g)" \
+    -v "$(pwd):/work" -w /work \
+    "$PACKAGE_IMAGE" fpm "$@"
 }
 
 common_args=(

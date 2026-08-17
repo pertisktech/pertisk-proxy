@@ -265,6 +265,11 @@ jobs:
 
           chmod +x preinstall.sh postinstall.sh preremove.sh
 
+      - name: Install host fpm (optional)
+        run: |
+          chmod +x build/ci-install-fpm.sh
+          ./build/ci-install-fpm.sh || true
+
       - name: Build DEB and RPM packages
         env:
           BINARY_NAME: ${{ env.BINARY_NAME }}
@@ -272,7 +277,8 @@ jobs:
           deb_arch: ${{ matrix.deb_arch }}
           rpm_arch: ${{ matrix.rpm_arch }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          FORCE_DOCKER_FPM: "1"
+          # Prefer host fpm; else AlmaLinux Docker image (not Debian apt).
+          FORCE_DOCKER_FPM: "0"
         run: chmod +x build/ci-package-deb-rpm.sh && ./build/ci-package-deb-rpm.sh
 
       - name: Build tunnel DEB and RPM packages
@@ -280,7 +286,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.VERSION }}
           # Prefer host cargo when same-arch native deps work (avoids Debian apt in Docker).
           FORCE_DOCKER_TUNNEL: ${{ steps.native_deps.outputs.ok == 'true' && '0' || '1' }}
-          FORCE_DOCKER_FPM: "1"
+          FORCE_DOCKER_FPM: "0"
           PERTISK_CARGO_JOBS: ${{ env.CARGO_BUILD_JOBS }}
         run: |
           set -euo pipefail

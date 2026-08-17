@@ -1,18 +1,28 @@
-# Linux environment for building .deb and .rpm with fpm (GNU tar, dpkg/rpmbuild).
-# Debian bookworm: fpm invokes GNU tar (--owner=0); Alpine busybox tar is incompatible.
-FROM debian:bookworm-slim
+# fpm environment for .deb / .rpm (GNU tar + rpmbuild).
+# AlmaLinux: matches self-hosted runners; avoids broken Debian apt indexes in Docker.
+FROM almalinux:9
 
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+RUN set -eux; \
+    dnf -y install epel-release; \
+    dnf -y install \
       ca-certificates \
       curl \
       ruby \
-      ruby-dev \
-      build-essential \
-      rpm \
+      ruby-devel \
+      gcc \
+      gcc-c++ \
+      make \
+      rpm-build \
       cpio \
       zip \
-    && gem install --no-document fpm \
-    && rm -rf /var/lib/apt/lists/*
+      tar \
+      gzip \
+      which \
+      binutils \
+      xz; \
+    dnf -y install dpkg || true; \
+    gem install --no-document fpm; \
+    dnf clean all; \
+    fpm --version
 
 WORKDIR /work
