@@ -130,14 +130,12 @@ jobs:
           set -euo pipefail
           chmod +x build/ci-docker-release.sh
           PLATFORM="linux/${{ matrix.goarch }}"
-          IMG="${{ env.HARBOR_BUILD_IMAGE }}:proxy-${{ matrix.goarch }}"
-          ./build/ci-docker-release.sh "$PLATFORM" "$IMG" \
+          OUT=".docker-out-proxy-${{ matrix.goarch }}"
+          ./build/ci-docker-release.sh "$PLATFORM" "$OUT" \
             --build-arg PACKAGE_TARGET=proxy \
             --build-arg VERSION=${{ steps.version.outputs.VERSION }} \
             --build-arg CARGO_BUILD_JOBS=${{ env.CARGO_BUILD_JOBS }}
-          docker create --name extract "$IMG"
-          docker cp extract:/app/out/pertisk-proxy ./${{ env.BINARY_NAME }}-linux-${{ matrix.goarch }}
-          docker rm extract
+          cp "$OUT/pertisk-proxy" ./${{ env.BINARY_NAME }}-linux-${{ matrix.goarch }}
           chmod +x ./${{ env.BINARY_NAME }}-linux-${{ matrix.goarch }}
           echo "Built proxy binary for linux/${{ matrix.goarch }}"
 
@@ -147,14 +145,12 @@ jobs:
           set -euo pipefail
           chmod +x build/ci-docker-release.sh
           PLATFORM="linux/${{ matrix.goarch }}"
-          IMG="${{ env.HARBOR_BUILD_IMAGE }}:ingress-${{ matrix.goarch }}"
-          ./build/ci-docker-release.sh "$PLATFORM" "$IMG" \
+          OUT=".docker-out-ingress-${{ matrix.goarch }}"
+          ./build/ci-docker-release.sh "$PLATFORM" "$OUT" \
             --build-arg PACKAGE_TARGET=ingress \
             --build-arg VERSION=${{ steps.version.outputs.VERSION }} \
             --build-arg CARGO_BUILD_JOBS=${{ env.CARGO_BUILD_JOBS }}
-          docker create --name extract-ingress "$IMG"
-          docker cp extract-ingress:/app/out/pertisk-proxy-ingress ./pertisk-proxy-ingress-linux-${{ matrix.goarch }}
-          docker rm extract-ingress
+          cp "$OUT/pertisk-proxy-ingress" ./pertisk-proxy-ingress-linux-${{ matrix.goarch }}
           chmod +x ./pertisk-proxy-ingress-linux-${{ matrix.goarch }}
           echo "Built ingress binary for linux/${{ matrix.goarch }}"
 
