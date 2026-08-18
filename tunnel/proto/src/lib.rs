@@ -68,6 +68,11 @@ pub struct OpenConn {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TunnelStatus {
     pub online: bool,
+    /// Bytes since tunnel-server process start (QUIC payload, both directions).
+    #[serde(default)]
+    pub bytes_to_client: u64,
+    #[serde(default)]
+    pub bytes_from_client: u64,
     pub tunnels: Vec<TunnelStatusEntry>,
 }
 
@@ -77,6 +82,12 @@ pub struct TunnelStatusEntry {
     pub remote_port: u16,
     pub connected: bool,
     pub client_addr: Option<String>,
+    #[serde(default)]
+    pub bytes_to_client: u64,
+    #[serde(default)]
+    pub bytes_from_client: u64,
+    #[serde(default)]
+    pub streams: u64,
 }
 
 pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, value: &impl Serialize) -> Result<(), ProtoError> {

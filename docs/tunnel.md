@@ -156,7 +156,32 @@ PERTISK_TUNNEL_STATUS_URL=http://127.0.0.1:7700/status
 
 Then open Admin → **Tunnels**.
 
-## Security
+## Bandwidth (VPS fair use)
+
+Tunnel keepalives are tiny (a ping every 20s). They cannot explain ~1 TB/day.
+
+**Tunneled site traffic is counted twice on the VPS:**
+
+1. Internet → pertisk-proxy `:443` (WAN in)
+2. tunnel QUIC UDP `:7000` → homelab (WAN out)
+
+So ~500 GB through a public Site that uses a tunnel ≈ ~1 TB “total traffic” on many VPS plans.
+
+Typical heavy sources: Proxmox UI (ISO upload, backup, noVNC/SPICE), large file Sites, bots hitting an exposed panel.
+
+Check live counters (since `pertisk-tunnel-server` start):
+
+```bash
+curl -s http://127.0.0.1:7700/status | jq
+# or Admin → Tunnels (Traffic column)
+```
+
+```bash
+# UDP 7000 vs HTTPS right now
+ss -uap | grep 7000 || true
+iftop -nP -f 'port 7000 or port 443'
+```
+
 
 - Strong tunnel **token** (not admin password)
 - Public service ports bind **loopback only** on the VPS

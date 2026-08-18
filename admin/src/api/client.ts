@@ -440,11 +440,16 @@ export const api = {
   tunnelStatus: () =>
     request<{
       online: boolean;
+      bytes_to_client?: number;
+      bytes_from_client?: number;
       tunnels: {
         name: string;
         remote_port: number;
         connected: boolean;
         client_addr?: string | null;
+        bytes_to_client?: number;
+        bytes_from_client?: number;
+        streams?: number;
       }[];
     }>('/tunnel/status'),
   logs: (params?: { type?: 'system' | 'proxy' | 'http' | 'all'; host?: string }) => {

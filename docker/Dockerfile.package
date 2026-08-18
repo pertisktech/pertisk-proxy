@@ -1,28 +1,22 @@
 # fpm environment for .deb / .rpm (GNU tar + rpmbuild).
-# AlmaLinux: matches self-hosted runners; avoids broken Debian apt indexes in Docker.
-FROM almalinux:9
+# Debian bookworm: fpm + dpkg-dev + rpmbuild. Use apt mirror helper for flaky CDNs.
+FROM debian:bookworm-slim
 
+COPY docker/debian-apt-setup.sh /usr/local/sbin/debian-apt-setup.sh
 RUN set -eux; \
-    dnf -y install epel-release; \
-    dnf -y install \
+    . /usr/local/sbin/debian-apt-setup.sh; \
+    apt_install_retry \
       ca-certificates \
       curl \
       ruby \
-      ruby-devel \
-      gcc \
-      gcc-c++ \
-      make \
-      rpm-build \
+      ruby-dev \
+      build-essential \
+      rpm \
       cpio \
       zip \
-      tar \
-      gzip \
-      which \
-      binutils \
-      xz; \
-    dnf -y install dpkg || true; \
+      xz-utils; \
     gem install --no-document fpm; \
-    dnf clean all; \
+    rm -rf /var/lib/apt/lists/*; \
     fpm --version
 
 WORKDIR /work

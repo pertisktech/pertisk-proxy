@@ -4,7 +4,10 @@ use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -58,11 +61,18 @@ struct ClientSession {
     addr: String,
 }
 
+struct TunnelCounters {
+    bytes_to_client: AtomicU64,
+    bytes_from_client: AtomicU64,
+    streams: AtomicU64,
+}
+
 #[derive(Clone)]
 struct AppState {
     token: String,
     /// name → remote_port
     tunnels: HashMap<String, u16>,
+    counters: Arc<HashMap<String, Arc<TunnelCounters>>>,
     /// Active client (replaced on reconnect).
     session: Arc<RwLock<Option<ClientSession>>>,
 }
@@ -107,9 +117,24 @@ async fn main() -> Result<()> {
         }
     }
 
+    let counters: HashMap<String, Arc<TunnelCounters>> = map
+        .keys()
+        .map(|name| {
+            (
+                name.clone(),
+                Arc::new(TunnelCounters {
+                    bytes_to_client: AtomicU64::new(0),
+                    bytes_from_client: AtomicU64::new(0),
+                    streams: AtomicU64::new(0),
+                }),
+            )
+        })
+        .collect();
+
     let state = AppState {
         token: cfg.token.clone(),
         tunnels: map.clone(),
+        counters: Arc::new(counters),
         session: Arc::new(RwLock::new(None)),
     };
 
@@ -220,7 +245,19 @@ async fn forward_accepted(
     let (mut send, mut recv) = conn.open_bi().await.context("open data stream")?;
     proto::write_frame(&mut send, &proto::OpenConn { tunnel: name.clone() }).await?;
     tracing::debug!("relaying {peer} via tunnel `{name}`");
-    pipe_tcp_quic(&mut tcp, &mut send, &mut recv).await;
+    let (to_client, from_client) = pipe_tcp_quic(&mut tcp, &mut send, &mut recv).await;
+    if let Some(c) = state.counters.get(&name) {
+        c.bytes_to_client.fetch_add(to_client, Ordering::Relaxed);
+        c.bytes_from_client.fetch_add(from_client, Ordering::Relaxed);
+        c.streams.fetch_add(1, Ordering::Relaxed);
+    }
+    if to_client + from_client > 50 * 1024 * 1024 {
+        info!(
+            "tunnel `{name}` stream {peer} transferred {} (to client) + {} (from client)",
+            human_bytes(to_client),
+            human_bytes(from_client)
+        );
+    }
     Ok(())
 }
 
@@ -239,22 +276,44 @@ async fn status_handler(State(state): State<AppState>) -> Json<proto::TunnelStat
     let connected = sess.is_some();
     let client_addr = sess.as_ref().map(|s| s.addr.clone());
     let active = sess.as_ref().map(|s| s.tunnels.clone()).unwrap_or_default();
+    let mut bytes_to_client = 0u64;
+    let mut bytes_from_client = 0u64;
     let tunnels: Vec<_> = state
         .tunnels
         .iter()
-        .map(|(name, port)| proto::TunnelStatusEntry {
-            name: name.clone(),
-            remote_port: *port,
-            connected: connected && active.contains(name),
-            client_addr: if active.contains(name) {
-                client_addr.clone()
-            } else {
-                None
-            },
+        .map(|(name, port)| {
+            let (btc, bfc, streams) = state
+                .counters
+                .get(name)
+                .map(|c| {
+                    (
+                        c.bytes_to_client.load(Ordering::Relaxed),
+                        c.bytes_from_client.load(Ordering::Relaxed),
+                        c.streams.load(Ordering::Relaxed),
+                    )
+                })
+                .unwrap_or((0, 0, 0));
+            bytes_to_client += btc;
+            bytes_from_client += bfc;
+            proto::TunnelStatusEntry {
+                name: name.clone(),
+                remote_port: *port,
+                connected: connected && active.contains(name),
+                client_addr: if active.contains(name) {
+                    client_addr.clone()
+                } else {
+                    None
+                },
+                bytes_to_client: btc,
+                bytes_from_client: bfc,
+                streams,
+            }
         })
         .collect();
     Json(proto::TunnelStatus {
         online: connected,
+        bytes_to_client,
+        bytes_from_client,
         tunnels,
     })
 }
@@ -414,12 +473,15 @@ async fn handle_connection(incoming: Incoming, state: AppState) -> Result<()> {
     Ok(())
 }
 
+/// Returns (bytes TCP→QUIC / to client, bytes QUIC→TCP / from client).
 async fn pipe_tcp_quic(
     tcp: &mut TcpStream,
     send: &mut quinn::SendStream,
     recv: &mut quinn::RecvStream,
-) {
+) -> (u64, u64) {
     let (mut tcp_r, mut tcp_w) = tcp.split();
+    let to_client = AtomicU64::new(0);
+    let from_client = AtomicU64::new(0);
     let c2s = async {
         let mut buf = vec![0u8; 64 * 1024];
         loop {
@@ -432,6 +494,7 @@ async fn pipe_tcp_quic(
                     {
                         break;
                     }
+                    to_client.fetch_add(n as u64, Ordering::Relaxed);
                     if tokio::io::AsyncWriteExt::flush(send).await.is_err() {
                         break;
                     }
@@ -453,6 +516,7 @@ async fn pipe_tcp_quic(
                     {
                         break;
                     }
+                    from_client.fetch_add(n as u64, Ordering::Relaxed);
                     if tokio::io::AsyncWriteExt::flush(&mut tcp_w).await.is_err() {
                         break;
                     }
@@ -463,6 +527,26 @@ async fn pipe_tcp_quic(
         let _ = tokio::io::AsyncWriteExt::shutdown(&mut tcp_w).await;
     };
     let _ = tokio::join!(c2s, s2c);
+    (
+        to_client.load(Ordering::Relaxed),
+        from_client.load(Ordering::Relaxed),
+    )
+}
+
+fn human_bytes(n: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    let f = n as f64;
+    if f >= GIB {
+        format!("{:.2} GiB", f / GIB)
+    } else if f >= MIB {
+        format!("{:.1} MiB", f / MIB)
+    } else if f >= KIB {
+        format!("{:.0} KiB", f / KIB)
+    } else {
+        format!("{n} B")
+    }
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {

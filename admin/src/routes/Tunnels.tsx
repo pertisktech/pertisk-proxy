@@ -9,12 +9,25 @@ type TunnelEntry = {
   remote_port: number;
   connected: boolean;
   client_addr?: string | null;
+  bytes_to_client?: number;
+  bytes_from_client?: number;
+  streams?: number;
 };
 
 type TunnelStatus = {
   online: boolean;
+  bytes_to_client?: number;
+  bytes_from_client?: number;
   tunnels: TunnelEntry[];
 };
+
+function formatBytes(n: number | undefined) {
+  const v = n ?? 0;
+  if (v < 1024) return `${v} B`;
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KiB`;
+  if (v < 1024 * 1024 * 1024) return `${(v / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${(v / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+}
 
 export function Tunnels() {
   const [status, setStatus] = useState<TunnelStatus | null>(null);
@@ -80,6 +93,10 @@ export function Tunnels() {
               <span className={status.online ? 'text-green-g1' : 'text-muted'}>
                 {status.online ? 'Online' : 'Offline'}
               </span>
+              <span className="ml-3 text-text-secondary">
+                QUIC since process start: {formatBytes(status.bytes_to_client)} to client /{' '}
+                {formatBytes(status.bytes_from_client)} from client
+              </span>
             </p>
             <div className="overflow-x-auto rounded-md border border-border">
               <table className="w-full text-left text-sm">
@@ -88,6 +105,7 @@ export function Tunnels() {
                     <th className="px-3 py-2 font-medium">Name</th>
                     <th className="px-3 py-2 font-medium">Upstream</th>
                     <th className="px-3 py-2 font-medium">Client</th>
+                    <th className="px-3 py-2 font-medium">Traffic</th>
                     <th className="px-3 py-2 font-medium">State</th>
                   </tr>
                 </thead>
@@ -101,6 +119,10 @@ export function Tunnels() {
                       <td className="px-3 py-2 font-mono text-xs text-text-secondary">
                         {t.client_addr || '—'}
                       </td>
+                      <td className="px-3 py-2 font-mono text-xs text-text-secondary">
+                        ↓{formatBytes(t.bytes_to_client)} ↑{formatBytes(t.bytes_from_client)}
+                        {t.streams ? ` · ${t.streams} streams` : ''}
+                      </td>
                       <td className={cn('px-3 py-2', t.connected ? 'text-green-g1' : 'text-muted')}>
                         {t.connected ? 'Connected' : 'Waiting'}
                       </td>
@@ -108,7 +130,7 @@ export function Tunnels() {
                   ))}
                   {(status.tunnels ?? []).length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="px-3 py-4 text-text-secondary">
+                      <td colSpan={5} className="px-3 py-4 text-text-secondary">
                         No tunnels configured on the tunnel server.
                       </td>
                     </tr>
