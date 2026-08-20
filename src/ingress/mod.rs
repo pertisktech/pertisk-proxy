@@ -132,17 +132,27 @@ pub fn run() -> anyhow::Result<()> {
         .unwrap_or_else(|_| std::env::temp_dir().join("pertisk-proxy-certs"));
     std::fs::create_dir_all(&certs_dir).ok();
 
-    let db = match crate::db::Database::open(api::resolve_db_path()) {
-        Ok(database) => {
-            info!(path = %database.path().display(), "opened SQLite for Access Control / WAF policies");
-            Some(Arc::new(database))
-        }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "SQLite unavailable; Access Control / WAF named policies disabled"
-            );
-            None
+    // Ingress mode: routes/TLS come from Kubernetes. SQLite is optional (only if
+    // PERTISK_DB_PATH is set explicitly for Access Control / WAF named policies).
+    let db = if std::env::var_os("PERTISK_DB_PATH").is_none() {
+        info!("ingress mode: SQLite disabled (set PERTISK_DB_PATH to enable named policies)");
+        None
+    } else {
+        match crate::db::Database::open(api::resolve_db_path()) {
+            Ok(database) => {
+                info!(
+                    path = %database.path().display(),
+                    "opened SQLite for Access Control / WAF policies"
+                );
+                Some(Arc::new(database))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "PERTISK_DB_PATH set but SQLite unavailable; named policies disabled"
+                );
+                None
+            }
         }
     };
     if let Some(ref database) = db {
