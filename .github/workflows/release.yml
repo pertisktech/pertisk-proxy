@@ -1,13 +1,13 @@
-# Release on push tag v* — build binaries (amd64 + arm64) and create GitHub Release.
-# Packages: proxy DEB/RPM/tarball, tunnel-server + tunnel-client DEB/RPM per arch;
-# Docker images; Helm chart.
+# Release on push tag — build binaries (amd64 + arm64) and create GitHub Release.
+# Packages: proxy DEB/RPM/tarball, tunnel-server + tunnel-client DEB/RPM per arch.
+# Docker: multi-arch buildx --push (Dockerfile + Dockerfile.proxy). Helm chart.
 
 name: Release Packages
 
 on:
   push:
     tags:
-      - 'v*'
+      - "*.*.*"
 
 permissions:
   contents: write
@@ -324,13 +324,8 @@ jobs:
           retention-days: 1
 
   docker-build:
-    name: Docker images (${{ matrix.goarch }})
-    needs: build
+    name: Docker multi-arch images
     runs-on: [self-hosted, linux]
-    strategy:
-      fail-fast: false
-      matrix:
-        goarch: [amd64, arm64]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -339,134 +334,71 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
-      - name: Download release artifacts
-        uses: actions/download-artifact@v4
+      - name: Configure Docker
+        run: |
+          DOCKER_TEMP_DIR="$RUNNER_TEMP/.docker"
+          mkdir -p "$DOCKER_TEMP_DIR"
+          echo '{"auths":{},"credsStore":"","credHelpers":{}}' > "$DOCKER_TEMP_DIR/config.json"
+          echo "DOCKER_CONFIG=$DOCKER_TEMP_DIR" >> $GITHUB_ENV
+
+      - name: Login to container registry
+        run: |
+          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
+          AUTH=$(echo -n "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" | base64)
+          REGISTRY="${{ env.CONTAINER_REGISTRY }}"
+          mkdir -p "$DOCKER_CONFIG"
+          echo "{\"auths\":{\"$REGISTRY\":{\"auth\":\"$AUTH\"}},\"credsStore\":\"\",\"credHelpers\":{}}" > "$DOCKER_CONFIG/config.json"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
         with:
-          name: release-linux-${{ matrix.goarch }}
-          path: .
+          driver: docker-container
+          driver-opts: network=host
 
-      - name: Verify Docker build inputs
-        run: |
-          set -euo pipefail
-          ARCH="${{ matrix.goarch }}"
-          BIN="${{ env.BINARY_NAME }}-linux-${ARCH}"
-          INGRESS_BIN="pertisk-proxy-ingress-linux-${ARCH}"
-          for f in "$BIN" "$INGRESS_BIN" admin/dist; do
-            if [ ! -e "$f" ]; then
-              echo "::error::Missing Docker build input: $f"
-              ls -la
-              ls -la admin 2>/dev/null || true
-              exit 1
-            fi
-          done
-          echo "Docker inputs OK: $BIN, $INGRESS_BIN, admin/dist"
-
-      - name: Configure Docker
-        run: |
-          DOCKER_TEMP_DIR="$RUNNER_TEMP/.docker"
-          mkdir -p "$DOCKER_TEMP_DIR"
-          echo '{"auths":{},"credsStore":"","credHelpers":{}}' > "$DOCKER_TEMP_DIR/config.json"
-          echo "DOCKER_CONFIG=$DOCKER_TEMP_DIR" >> $GITHUB_ENV
-
-      - name: Login to container registry
-        run: |
-          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
-          AUTH=$(echo -n "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" | base64)
-          REGISTRY="${{ env.CONTAINER_REGISTRY }}"
-          mkdir -p "$DOCKER_CONFIG"
-          echo "{\"auths\":{\"$REGISTRY\":{\"auth\":\"$AUTH\"}},\"credsStore\":\"\",\"credHelpers\":{}}" > "$DOCKER_CONFIG/config.json"
-
-      - name: Build and push Docker images (${{ matrix.goarch }})
-        run: |
-          set -euo pipefail
-          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          ARCH="${{ matrix.goarch }}"
-          PROXY="${{ env.HARBOR_PROXY_IMAGE }}"
-          INGRESS="${{ env.HARBOR_INGRESS_IMAGE }}"
-
-          docker build --network=host -f docker/Dockerfile.binary \
-            --build-arg BINARY_FILE=${{ env.BINARY_NAME }}-linux-${ARCH} \
-            -t "${PROXY}:v${VERSION}-${ARCH}" \
-            -t "${PROXY}:${ARCH}" \
-            . &
-          PROXY_PID=$!
-
-          docker build --network=host -f docker/Dockerfile.ingress.binary \
-            --build-arg BINARY_FILE=pertisk-proxy-ingress-linux-${ARCH} \
-            -t "${INGRESS}:v${VERSION}-${ARCH}" \
-            -t "${INGRESS}:${ARCH}" \
-            . &
-          INGRESS_PID=$!
-
-          wait "$PROXY_PID" "$INGRESS_PID"
-
-          docker push "${PROXY}:v${VERSION}-${ARCH}" &
-          docker push "${PROXY}:${ARCH}" &
-          docker push "${INGRESS}:v${VERSION}-${ARCH}" &
-          docker push "${INGRESS}:${ARCH}" &
-          wait
-
-  docker-manifest:
-    name: Docker multi-arch manifests
-    needs: docker-build
-    runs-on: [self-hosted, linux]
-    steps:
-      - name: Get version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
-      - name: Configure Docker
-        run: |
-          DOCKER_TEMP_DIR="$RUNNER_TEMP/.docker"
-          mkdir -p "$DOCKER_TEMP_DIR"
-          echo '{"auths":{},"credsStore":"","credHelpers":{}}' > "$DOCKER_TEMP_DIR/config.json"
-          echo "DOCKER_CONFIG=$DOCKER_TEMP_DIR" >> $GITHUB_ENV
-
-      - name: Login to container registry
-        run: |
-          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
-          AUTH=$(echo -n "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" | base64)
-          REGISTRY="${{ env.CONTAINER_REGISTRY }}"
-          mkdir -p "$DOCKER_CONFIG"
-          echo "{\"auths\":{\"$REGISTRY\":{\"auth\":\"$AUTH\"}},\"credsStore\":\"\",\"credHelpers\":{}}" > "$DOCKER_CONFIG/config.json"
-
-      - name: Create multi-arch proxy manifest
-        run: |
-          set -euo pipefail
-          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          PROXY="${{ env.HARBOR_PROXY_IMAGE }}"
-          docker buildx imagetools create \
-            -t "${PROXY}:v${VERSION}" \
-            -t "${PROXY}:latest" \
-            "${PROXY}:v${VERSION}-amd64" \
-            "${PROXY}:v${VERSION}-arm64"
-
-      - name: Create multi-arch ingress manifest
+      - name: Build and push ingress (linux/amd64,linux/arm64)
         run: |
           set -euo pipefail
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
           VERSION="${{ steps.version.outputs.VERSION }}"
           INGRESS="${{ env.HARBOR_INGRESS_IMAGE }}"
-          docker buildx imagetools create \
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --provenance=false \
+            --network=host \
+            -f Dockerfile \
             -t "${INGRESS}:v${VERSION}" \
             -t "${INGRESS}:latest" \
-            "${INGRESS}:v${VERSION}-amd64" \
-            "${INGRESS}:v${VERSION}-arm64"
+            --push \
+            .
+
+      - name: Build and push proxy (linux/amd64,linux/arm64)
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          PROXY="${{ env.HARBOR_PROXY_IMAGE }}"
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --provenance=false \
+            --network=host \
+            -f Dockerfile.proxy \
+            -t "${PROXY}:v${VERSION}" \
+            -t "${PROXY}:latest" \
+            --push \
+            .
 
       - name: Summary
         run: |
           echo "## Docker Images Built and Pushed" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** v${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Images are assembled from prebuilt binaries (no in-image Rust compile)." >> $GITHUB_STEP_SUMMARY
+          echo "Multi-arch via \`docker buildx build --platform linux/amd64,linux/arm64 --provenance=false --push\`." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Proxy (standalone)" >> $GITHUB_STEP_SUMMARY
+          echo "### Proxy (standalone) — \`Dockerfile.proxy\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:v${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Ingress (Kubernetes controller)" >> $GITHUB_STEP_SUMMARY
+          echo "### Ingress (Kubernetes controller) — \`Dockerfile\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:v${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -474,7 +406,7 @@ jobs:
 
   helm-publish:
     name: Publish Helm chart
-    needs: docker-manifest
+    needs: docker-build
     runs-on: [self-hosted, linux]
     steps:
       - name: Checkout code
@@ -517,6 +449,7 @@ jobs:
           HELM_CHART_TOKEN: ${{ secrets.HELM_CHART_TOKEN }}
           HELM_USER: ${{ secrets.HELM_USER }}
           HELM_PASSWORD: ${{ secrets.HELM_PASSWORD }}
+          HARBOR_INGRESS_IMAGE: ${{ env.HARBOR_INGRESS_IMAGE }}
         run: chmod +x build/publish-helm-ingress.sh && ./build/publish-helm-ingress.sh
 
       - name: Summary
