@@ -2,24 +2,20 @@
 # Base must already live on Harbor (no docker.io / ECR pulls on locked-down runners):
 #   ./build/ci-push-runtime-base.sh
 #
-# docker build -f docker/Dockerfile.binary \
-#   --build-arg BINARY_FILE=pertisk-proxy-linux-amd64 \
-#   --build-arg DEBIAN_IMAGE=harbor.tools.pertisk.com/pertisk-proxy/runtime:bookworm \
-#   -t …/proxy:amd64 .
+# COPY-only (no target-arch RUN) so amd64 runners can publish arm64 without QEMU.
+
+# syntax=docker/dockerfile:1.7
 
 ARG DEBIAN_IMAGE=harbor.tools.pertisk.com/pertisk-proxy/runtime:bookworm
 
-# COPY-only — no apt/apk on the runner.
 FROM ${DEBIAN_IMAGE}
 
-USER root
 ARG BINARY_FILE=pertisk-proxy-linux-amd64
 ARG BINARY_NAME=pertisk-proxy
 
-COPY ${BINARY_FILE} /usr/bin/${BINARY_NAME}
+COPY --chmod=755 ${BINARY_FILE} /usr/bin/${BINARY_NAME}
 COPY admin/dist /usr/share/pertisk-proxy/admin/dist
 COPY build/pertisk-proxy.conf /etc/pertisk-proxy/pertisk-proxy.conf
-RUN chmod 755 /usr/bin/${BINARY_NAME}
 
 ENV PERTISK_DB_PATH=/var/lib/pertisk-proxy/proxy.sqlite
 ENV PERTISK_MANAGEMENT_ADDR=0.0.0.0:9080
@@ -33,6 +29,4 @@ EXPOSE 80 443 443/udp 9080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -fk https://127.0.0.1/healthz || curl -f http://127.0.0.1/healthz || exit 1
 
-# Proxy often needs root for :80/:443; keep root unless overridden at runtime.
-USER root
 ENTRYPOINT ["/usr/bin/pertisk-proxy"]

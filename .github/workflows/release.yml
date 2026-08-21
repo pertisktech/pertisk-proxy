@@ -21,6 +21,7 @@ env:
   HARBOR_INGRESS_IMAGE: ${{ vars.HARBOR_INGRESS_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/ingress' }}
   # Pre-pushed COPY-only runtime base (./build/ci-push-runtime-base.sh). Override via repo Variable.
   HARBOR_RUNTIME_IMAGE: ${{ vars.HARBOR_RUNTIME_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/runtime:bookworm' }}
+  HARBOR_BUILDER_IMAGE: ${{ vars.HARBOR_BUILDER_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/builder:alpine-rust' }}
   HELM_CHART_REPO_URL: ${{ vars.HELM_CHART_REPO_URL || 'https://chart.tools.pertisk.com' }}
   # Self-hosted runner ~16C/32GB: cargo/cmake parallelism (native path reads these).
   CARGO_BUILD_JOBS: "14"
@@ -141,7 +142,8 @@ jobs:
           ./build/ci-docker-release.sh "$PLATFORM" "$OUT" \
             --build-arg PACKAGE_TARGET=proxy \
             --build-arg VERSION=${{ steps.version.outputs.VERSION }} \
-            --build-arg CARGO_BUILD_JOBS=${{ env.CARGO_BUILD_JOBS }}
+            --build-arg CARGO_BUILD_JOBS=${{ env.CARGO_BUILD_JOBS }} \
+            --build-arg RUST_IMAGE=${{ vars.HARBOR_RUST_BOOKWORM_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/rust:1-bookworm' }}
           cp "$OUT/pertisk-proxy" ./${{ env.BINARY_NAME }}-linux-${{ matrix.goarch }}
           chmod +x ./${{ env.BINARY_NAME }}-linux-${{ matrix.goarch }}
           echo "Built proxy binary for linux/${{ matrix.goarch }}"
@@ -156,7 +158,8 @@ jobs:
           ./build/ci-docker-release.sh "$PLATFORM" "$OUT" \
             --build-arg PACKAGE_TARGET=ingress \
             --build-arg VERSION=${{ steps.version.outputs.VERSION }} \
-            --build-arg CARGO_BUILD_JOBS=${{ env.CARGO_BUILD_JOBS }}
+            --build-arg CARGO_BUILD_JOBS=${{ env.CARGO_BUILD_JOBS }} \
+            --build-arg RUST_IMAGE=${{ vars.HARBOR_RUST_BOOKWORM_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/rust:1-bookworm' }}
           cp "$OUT/pertisk-proxy-ingress" ./pertisk-proxy-ingress-linux-${{ matrix.goarch }}
           chmod +x ./pertisk-proxy-ingress-linux-${{ matrix.goarch }}
           echo "Built ingress binary for linux/${{ matrix.goarch }}"
@@ -343,16 +346,11 @@ jobs:
           VERSION="${VERSION#v}"
           echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Download amd64 artifacts
+      - name: Download release binaries
         uses: actions/download-artifact@v4
         with:
-          name: release-linux-amd64
-          path: .
-
-      - name: Download arm64 artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: release-linux-arm64
+          pattern: release-linux-*
+          merge-multiple: true
           path: .
 
       - name: Configure Docker
@@ -373,7 +371,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          # Container driver needed for cross-arch COPY builds; bases come only from Harbor.
+          # Container driver for multi-arch manifests; images are COPY-only from Harbor.
           driver: docker-container
           driver-opts: network=host
 
@@ -382,7 +380,13 @@ jobs:
           set -euo pipefail
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
           chmod +x build/ci-docker-images-from-bins.sh
+          echo "Workspace binaries:"
           ls -la pertisk-proxy-linux-* pertisk-proxy-ingress-linux-* admin/dist/index.html
+          # Fail fast with a clear hint if Harbor runtime base is missing.
+          if ! docker buildx imagetools inspect "${{ env.HARBOR_RUNTIME_IMAGE }}" >/dev/null 2>&1; then
+            echo "::error::Missing ${{ env.HARBOR_RUNTIME_IMAGE }}. From a networked machine run: ./build/ci-push-runtime-base.sh"
+            exit 1
+          fi
           VERSION="${{ steps.version.outputs.VERSION }}" \
             HARBOR_PROXY_IMAGE="${{ env.HARBOR_PROXY_IMAGE }}" \
             HARBOR_INGRESS_IMAGE="${{ env.HARBOR_INGRESS_IMAGE }}" \

@@ -16,5 +16,5 @@ RUN set -eux; \
     mkdir -p /var/lib/pertisk-proxy/certs /etc/pertisk-proxy /usr/share/pertisk-proxy; \
     rm -rf /var/lib/apt/lists/*
 
-# Non-root default for ingress; proxy image may still run as this UID.
-USER 65532:65532
+# Stay root so downstream COPY-only Dockerfiles can write /usr/bin and /usr/local/bin.
+# Ingress/proxy images set USER themselves.

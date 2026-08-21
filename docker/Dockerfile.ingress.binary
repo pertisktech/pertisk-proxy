@@ -2,23 +2,19 @@
 # Base must already live on Harbor (no docker.io / ECR pulls on locked-down runners):
 #   ./build/ci-push-runtime-base.sh
 #
-# docker build --platform linux/amd64 -f docker/Dockerfile.ingress.binary \
-#   --build-arg BINARY_FILE=pertisk-proxy-ingress-linux-amd64 \
-#   --build-arg DEBIAN_IMAGE=harbor.tools.pertisk.com/pertisk-proxy/runtime:bookworm \
-#   -t …/ingress:0.1.84-amd64 .
+# COPY-only (no target-arch RUN) so amd64 runners can publish arm64 without QEMU.
+
+# syntax=docker/dockerfile:1.7
 
 ARG DEBIAN_IMAGE=harbor.tools.pertisk.com/pertisk-proxy/runtime:bookworm
 
-# COPY-only — no apt/apk (runner often cannot reach package mirrors either).
 FROM ${DEBIAN_IMAGE}
 
 WORKDIR /usr/share/pertisk-proxy
 
-USER root
 ARG BINARY_FILE=pertisk-proxy-ingress-linux-amd64
-COPY ${BINARY_FILE} /usr/local/bin/pertisk-proxy-ingress
+COPY --chmod=755 ${BINARY_FILE} /usr/local/bin/pertisk-proxy-ingress
 COPY admin/dist ./admin/dist/
-RUN chmod 755 /usr/local/bin/pertisk-proxy-ingress
 
 ENV PERTISK_MANAGEMENT_ADDR=0.0.0.0:9080
 ENV PERTISK_METRICS_ADDR=0.0.0.0:9990

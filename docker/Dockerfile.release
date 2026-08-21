@@ -5,7 +5,7 @@
 # BUILDPLATFORM / TARGET* are injected by BuildKit — do not declare them before FROM.
 # Default base is Public ECR mirror (avoids docker.io timeouts on self-hosted runners).
 
-ARG RUST_IMAGE=public.ecr.aws/docker/library/rust:1-bookworm
+ARG RUST_IMAGE=harbor.tools.pertisk.com/pertisk-proxy/rust:1-bookworm
 
 FROM --platform=$BUILDPLATFORM ${RUST_IMAGE} AS builder
 
