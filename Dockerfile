@@ -1,42 +1,53 @@
 # syntax=docker/dockerfile:1.7
 
-# Prefer docker/Dockerfile.ingress for scratch runtime; this root Dockerfile matches
-# local: docker buildx build -f Dockerfile --platform linux/amd64,linux/arm64 --push
+# Local (networked):
+#   make admin-dist
+#   docker buildx build --platform linux/amd64,linux/arm64 --provenance=false \
+#     -f Dockerfile -t …/ingress:VERSION --push .
 #
-# Admin UI must be prebuilt: make admin-dist (no node: pull).
-# Defaults use Public ECR (works on networked laptops). CI release does NOT use this
-# file — it assembles glibc images via build/ci-docker-images-from-bins.sh.
-# Optional Harbor override: --build-arg RUST_IMAGE=harbor…/rust:1-alpine3.21
+# CI (Harbor-only; no docker.io / apk CDN):
+#   --build-arg RUST_IMAGE=harbor…/builder:alpine-rust
+#   --build-arg ALPINE_IMAGE=harbor…/runtime:alpine
+#   --build-arg SKIP_BUILD_DEPS=1
+#   --build-arg SKIP_RUNTIME_APK=1
 
 ARG RUST_IMAGE=public.ecr.aws/docker/library/rust:1-alpine3.21
 ARG ALPINE_IMAGE=public.ecr.aws/docker/library/alpine:3.21
+ARG SKIP_BUILD_DEPS=0
+ARG SKIP_RUNTIME_APK=0
 
 FROM --platform=$BUILDPLATFORM ${RUST_IMAGE} AS builder
 ARG TARGETPLATFORM
 ARG TARGETARCH
 ARG BUILDARCH
+ARG SKIP_BUILD_DEPS=0
 COPY docker/alpine-apk-setup.sh /usr/local/sbin/alpine-apk-setup.sh
 RUN set -eux; \
-    . /usr/local/sbin/alpine-apk-setup.sh; \
-    apk_add_retry \
-      build-base \
-      pkgconf \
-      openssl-dev \
-      perl \
-      cmake \
-      clang \
-      clang-dev \
-      go \
-      nasm \
-      musl-dev; \
-    if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
-      apk_add_retry zig; \
-      cargo install cargo-zigbuild --locked; \
+    if [ "${SKIP_BUILD_DEPS}" = "1" ]; then \
+      echo "SKIP_BUILD_DEPS=1 (using prebaked builder image)"; \
+      command -v cargo >/dev/null; \
+      command -v zig >/dev/null || true; \
+    else \
+      . /usr/local/sbin/alpine-apk-setup.sh; \
+      apk_add_retry \
+        build-base \
+        pkgconf \
+        openssl-dev \
+        perl \
+        cmake \
+        clang \
+        clang-dev \
+        go \
+        nasm \
+        musl-dev; \
+      if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
+        apk_add_retry zig; \
+        cargo install cargo-zigbuild --locked; \
+      fi; \
     fi
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock build.rs ./
-# Workspace members must exist for cargo fetch/build (image does not compile them here).
 COPY tunnel/proto/Cargo.toml tunnel/proto/
 COPY tunnel/server/Cargo.toml tunnel/server/
 COPY tunnel/client/Cargo.toml tunnel/client/
@@ -70,10 +81,16 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
     && install -D "/app/target/${RUST_TARGET}/release/pertisk-proxy-ingress" /usr/local/bin/pertisk-proxy-ingress
 
 FROM ${ALPINE_IMAGE}
+ARG SKIP_RUNTIME_APK=0
 COPY docker/alpine-apk-setup.sh /usr/local/sbin/alpine-apk-setup.sh
 RUN set -eux; \
-    . /usr/local/sbin/alpine-apk-setup.sh; \
-    apk_add_retry ca-certificates openssl
+    if [ "${SKIP_RUNTIME_APK}" = "1" ]; then \
+      echo "SKIP_RUNTIME_APK=1 (using prebaked alpine runtime)"; \
+      test -f /etc/ssl/certs/ca-certificates.crt; \
+    else \
+      . /usr/local/sbin/alpine-apk-setup.sh; \
+      apk_add_retry ca-certificates openssl; \
+    fi
 COPY --from=builder /usr/local/bin/pertisk-proxy-ingress /usr/local/bin/pertisk-proxy-ingress
 COPY admin/dist /usr/share/pertisk-proxy/admin/dist
 USER 65532:65532

@@ -1,6 +1,6 @@
 # Release on push tag — build binaries (amd64 + arm64) and create GitHub Release.
 # Packages: proxy DEB/RPM/tarball, tunnel-server + tunnel-client DEB/RPM per arch.
-# Docker: assemble from package binaries + Harbor runtime base (no docker.io/ECR pulls). Helm.
+# Docker: same as local Dockerfile multi-arch push (musl/alpine) via Harbor bases. Helm.
 
 name: Release Packages
 
@@ -21,7 +21,9 @@ env:
   HARBOR_INGRESS_IMAGE: ${{ vars.HARBOR_INGRESS_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/ingress' }}
   # Pre-pushed COPY-only runtime base (./build/ci-push-runtime-base.sh). Override via repo Variable.
   HARBOR_RUNTIME_IMAGE: ${{ vars.HARBOR_RUNTIME_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/runtime:bookworm' }}
+  # Musl Dockerfile CI bases (./build/ci-push-builder-image.sh + ./build/ci-push-alpine-runtime.sh).
   HARBOR_BUILDER_IMAGE: ${{ vars.HARBOR_BUILDER_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/builder:alpine-rust' }}
+  HARBOR_ALPINE_RUNTIME: ${{ vars.HARBOR_ALPINE_RUNTIME || 'harbor.tools.pertisk.com/pertisk-proxy/runtime:alpine' }}
   HELM_CHART_REPO_URL: ${{ vars.HELM_CHART_REPO_URL || 'https://chart.tools.pertisk.com' }}
   # Self-hosted runner ~16C/32GB: cargo/cmake parallelism (native path reads these).
   CARGO_BUILD_JOBS: "14"
@@ -333,7 +335,6 @@ jobs:
 
   docker-build:
     name: Docker multi-arch images
-    needs: build
     runs-on: [self-hosted, linux]
     steps:
       - name: Checkout code
@@ -345,13 +346,6 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/}"
           VERSION="${VERSION#v}"
           echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
-
-      - name: Download release binaries
-        uses: actions/download-artifact@v4
-        with:
-          pattern: release-linux-*
-          merge-multiple: true
-          path: .
 
       - name: Configure Docker
         run: |
@@ -371,47 +365,98 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          # Container driver for multi-arch manifests; images are COPY-only from Harbor.
           driver: docker-container
           driver-opts: network=host
 
-      - name: Assemble and push images from binaries
+      - name: Setup Node (admin UI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Build admin UI
+        run: |
+          cd admin && pnpm install --frozen-lockfile && pnpm run build
+        env:
+          CI: true
+
+      - name: Verify Harbor builder + alpine runtime
         run: |
           set -euo pipefail
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
-          chmod +x build/ci-docker-images-from-bins.sh
-          echo "Workspace binaries:"
-          ls -la pertisk-proxy-linux-* pertisk-proxy-ingress-linux-* admin/dist/index.html
-          # Fail fast with a clear hint if Harbor runtime base is missing.
-          if ! docker buildx imagetools inspect "${{ env.HARBOR_RUNTIME_IMAGE }}" >/dev/null 2>&1; then
-            echo "::error::Missing ${{ env.HARBOR_RUNTIME_IMAGE }}. From a networked machine run: ./build/ci-push-runtime-base.sh"
-            exit 1
-          fi
-          VERSION="${{ steps.version.outputs.VERSION }}" \
-            HARBOR_PROXY_IMAGE="${{ env.HARBOR_PROXY_IMAGE }}" \
-            HARBOR_INGRESS_IMAGE="${{ env.HARBOR_INGRESS_IMAGE }}" \
-            DEBIAN_IMAGE="${{ env.HARBOR_RUNTIME_IMAGE }}" \
-            PLATFORMS=linux/amd64,linux/arm64 \
-            PROVENANCE=false \
-            ./build/ci-docker-images-from-bins.sh
+          for img in "${{ env.HARBOR_BUILDER_IMAGE }}" "${{ env.HARBOR_ALPINE_RUNTIME }}"; do
+            if ! docker buildx imagetools inspect "$img" >/dev/null 2>&1; then
+              echo "::error::Missing $img — from a networked machine run:"
+              echo "  ./build/ci-push-builder-image.sh"
+              echo "  ./build/ci-push-alpine-runtime.sh"
+              exit 1
+            fi
+            echo "OK $img"
+          done
+
+      - name: Build and push ingress (same as local Dockerfile)
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          INGRESS="${{ env.HARBOR_INGRESS_IMAGE }}"
+          # Matches: docker buildx build -f Dockerfile --platform linux/amd64,linux/arm64 --push
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --provenance=false \
+            --network=host \
+            -f Dockerfile \
+            --build-arg "RUST_IMAGE=${{ env.HARBOR_BUILDER_IMAGE }}" \
+            --build-arg "ALPINE_IMAGE=${{ env.HARBOR_ALPINE_RUNTIME }}" \
+            --build-arg SKIP_BUILD_DEPS=1 \
+            --build-arg SKIP_RUNTIME_APK=1 \
+            -t "${INGRESS}:${VERSION}" \
+            -t "${INGRESS}:v${VERSION}" \
+            -t "${INGRESS}:latest" \
+            --push \
+            .
+
+      - name: Build and push proxy (Dockerfile.proxy)
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          PROXY="${{ env.HARBOR_PROXY_IMAGE }}"
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --provenance=false \
+            --network=host \
+            -f Dockerfile.proxy \
+            --build-arg "RUST_IMAGE=${{ env.HARBOR_BUILDER_IMAGE }}" \
+            --build-arg "ALPINE_IMAGE=${{ env.HARBOR_ALPINE_RUNTIME }}" \
+            --build-arg SKIP_BUILD_DEPS=1 \
+            --build-arg SKIP_RUNTIME_APK=1 \
+            -t "${PROXY}:${VERSION}" \
+            -t "${PROXY}:v${VERSION}" \
+            -t "${PROXY}:latest" \
+            --push \
+            .
 
       - name: Summary
         run: |
           echo "## Docker Images Built and Pushed" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** v${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Assembled from package-job glibc binaries + Harbor runtime base (\`${{ env.HARBOR_RUNTIME_IMAGE }}\`)." >> $GITHUB_STEP_SUMMARY
-          echo "No docker.io / public.ecr.aws pulls on the runner." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Proxy" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:v${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "Same path as local \`Dockerfile\` multi-arch musl/alpine build (Harbor builder + runtime:alpine)." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Ingress" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:v${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Proxy" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:v${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Platforms:** linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
 

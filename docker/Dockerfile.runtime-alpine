@@ -1,0 +1,11 @@
+# Alpine runtime with ca-certificates + openssl preinstalled.
+# Push once: ./build/ci-push-alpine-runtime.sh
+# Used as ALPINE_IMAGE in CI so the final Dockerfile stage needs no apk CDN.
+
+ARG ALPINE_SRC=harbor.tools.pertisk.com/pertisk-proxy/alpine:3.21
+FROM ${ALPINE_SRC}
+
+COPY docker/alpine-apk-setup.sh /usr/local/sbin/alpine-apk-setup.sh
+RUN set -eux; \
+    . /usr/local/sbin/alpine-apk-setup.sh; \
+    apk_add_retry ca-certificates openssl
