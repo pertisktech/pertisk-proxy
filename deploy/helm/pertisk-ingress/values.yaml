@@ -225,6 +225,21 @@ geoip:
     countryUrl: https://cdn.jsdelivr.net/npm/geolite2-country/GeoLite2-Country.mmdb.gz
     asnUrl: https://iptoasn.com/data/ip2asn-combined.tsv.gz
 
+# -- Optional SQLite for Access Control lists + named WAF policies (ingress routes still come from K8s).
+# emptyDir is per-pod (not shared across replicas). Use ClientIP sessionAffinity when editing policies,
+# or pin replicaCount=1 while managing ACLs. Set enabled: false if you do not need named policies.
+sqlite:
+  enabled: false
+  # -- Path inside the container (must be writable by runAsUser)
+  path: /var/lib/pertisk-proxy/proxy.sqlite
+  # -- Mount directory for the DB file
+  mountPath: /var/lib/pertisk-proxy
+  # -- Volume type: emptyDir (default) or pvc
+  persistence:
+    type: emptyDir
+    # -- PVC name when type=pvc (must exist; ReadWriteMany if multi-replica)
+    existingClaim: ""
+
 # -- Admin auth for ingress management UI (env-based, no DB)
 auth:
   # -- Auth mode for admin login: local | sso | both
@@ -238,9 +253,10 @@ auth:
   passwordKey: "PERTISK_PASSWORD"
   apiTokenKey: "PERTISK_API_TOKEN"
   signingSecretKey: "PERTISK_AUTH_SIGNING_SECRET"
-  # -- Secret values (used when createSecret: true). Change password before production.
+  # -- Secret values (used when createSecret: true). Change before production.
+  # Login: username admin (or auth.username), password from this field.
   username: "admin"
-  password: "changeme"
+  password: "admin"
   apiToken: ""
   # -- Optional signing secret for bearer tokens. If empty, password is used.
   signingSecret: ""

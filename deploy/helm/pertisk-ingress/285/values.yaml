@@ -65,3 +65,7 @@ geoip:
   enabled: true
   download:
     enabled: true
+
+# Named Access Control / WAF policies (SQLite). emptyDir = per-pod; ClientIP affinity helps.
+sqlite:
+  enabled: true

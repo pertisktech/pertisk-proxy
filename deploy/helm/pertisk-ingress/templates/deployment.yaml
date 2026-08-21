@@ -16,6 +16,13 @@ spec:
     metadata:
       labels:
         {{- include "pertisk-ingress.selectorLabels" . | nindent 8 }}
+      annotations:
+        {{- if and .Values.auth.enabled .Values.auth.createSecret }}
+        checksum/auth-secret: {{ include (print $.Template.BasePath "/auth-secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -248,6 +255,10 @@ spec:
             - name: PERTISK_AUTH0_AUDIENCE
               value: {{ .Values.auth0.audience | quote }}
             {{- end }}
+            {{- if .Values.sqlite.enabled }}
+            - name: PERTISK_DB_PATH
+              value: {{ .Values.sqlite.path | quote }}
+            {{- end }}
             {{- if .Values.metrics.enabled }}
             - name: PERTISK_METRICS_ADDR
               value: {{ .Values.metrics.addr | quote }}
@@ -289,11 +300,17 @@ spec:
               value: {{ .Values.geoip.asnDb | quote }}
             {{- end }}
             {{- end }}
-          {{- if .Values.geoip.enabled }}
+          {{- if or .Values.geoip.enabled .Values.sqlite.enabled }}
           volumeMounts:
+            {{- if .Values.geoip.enabled }}
             - name: geoip
               mountPath: {{ .Values.geoip.mountPath | quote }}
               readOnly: true
+            {{- end }}
+            {{- if .Values.sqlite.enabled }}
+            - name: sqlite-data
+              mountPath: {{ .Values.sqlite.mountPath | quote }}
+            {{- end }}
           {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
@@ -301,8 +318,9 @@ spec:
             {{- toYaml .Values.readinessProbe | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-      {{- if .Values.geoip.enabled }}
+      {{- if or .Values.geoip.enabled .Values.sqlite.enabled }}
       volumes:
+        {{- if .Values.geoip.enabled }}
         - name: geoip
           {{- if .Values.geoip.existingClaim }}
           persistentVolumeClaim:
@@ -316,6 +334,20 @@ spec:
           {{- else }}
           {{- fail "geoip.enabled requires geoip.download.enabled (Talos), geoip.existingClaim, or geoip.hostPath" }}
           {{- end }}
+        {{- end }}
+        {{- if .Values.sqlite.enabled }}
+        - name: sqlite-data
+          {{- $persist := default dict .Values.sqlite.persistence }}
+          {{- if eq (default "emptyDir" $persist.type) "pvc" }}
+          {{- if not $persist.existingClaim }}
+          {{- fail "sqlite.persistence.type=pvc requires sqlite.persistence.existingClaim" }}
+          {{- end }}
+          persistentVolumeClaim:
+            claimName: {{ $persist.existingClaim | quote }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
