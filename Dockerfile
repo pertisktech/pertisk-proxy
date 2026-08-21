@@ -64,12 +64,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
     && rustup target add "${RUST_TARGET}" \
     && if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
          cargo zigbuild --release --locked --target "${RUST_TARGET}" \
-           --no-default-features --features ingress,acme,h3-quinn,prometheus \
-           --bin pertisk-proxy-ingress; \
+           --bin pertisk-proxy-ingress --features ingress; \
        else \
          cargo build --release --locked --target "${RUST_TARGET}" \
-           --no-default-features --features ingress,acme,h3-quinn,prometheus \
-           --bin pertisk-proxy-ingress; \
+           --bin pertisk-proxy-ingress --features ingress; \
        fi \
     && install -D "/app/target/${RUST_TARGET}/release/pertisk-proxy-ingress" /usr/local/bin/pertisk-proxy-ingress
 

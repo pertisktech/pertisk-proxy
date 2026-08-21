@@ -235,14 +235,17 @@ if [ -n "$PLATFORMS" ]; then
     verify_ingress_manifest "${VERSION}-${arch}" "always" "$platform"
   done
 
+  # Publish bare VERSION (deploy/Helm) and vVERSION (release notes / chart appVersion).
   if [ "${#platform_tags[@]}" -eq 1 ]; then
     docker buildx imagetools create \
       -t "${IMAGE}:${VERSION}" \
+      -t "${IMAGE}:v${VERSION}" \
       -t "${IMAGE}:latest" \
       "${platform_tags[0]}"
   else
     docker buildx imagetools create \
       -t "${IMAGE}:${VERSION}" \
+      -t "${IMAGE}:v${VERSION}" \
       -t "${IMAGE}:latest" \
       "${platform_tags[@]}"
   fi

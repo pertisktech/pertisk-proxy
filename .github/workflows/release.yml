@@ -1,6 +1,6 @@
 # Release on push tag — build binaries (amd64 + arm64) and create GitHub Release.
 # Packages: proxy DEB/RPM/tarball, tunnel-server + tunnel-client DEB/RPM per arch.
-# Docker: multi-arch buildx --push (Dockerfile + Dockerfile.proxy). Helm chart.
+# Docker: ingress via build/ingress-image.sh (Dockerfile.ingress); proxy via Dockerfile.proxy. Helm.
 
 name: Release Packages
 
@@ -365,17 +365,16 @@ jobs:
         run: |
           set -euo pipefail
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          INGRESS="${{ env.HARBOR_INGRESS_IMAGE }}"
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --provenance=false \
-            --network=host \
-            -f Dockerfile \
-            -t "${INGRESS}:v${VERSION}" \
-            -t "${INGRESS}:latest" \
-            --push \
-            .
+          # Same path as make docker-ingress-multi (docker/Dockerfile.ingress + verify).
+          # Root Dockerfile is NOT the deploy image (different features / alpine runtime).
+          chmod +x build/ingress-image.sh
+          VERSION="${{ steps.version.outputs.VERSION }}" \
+            HARBOR_INGRESS_IMAGE="${{ env.HARBOR_INGRESS_IMAGE }}" \
+            PLATFORMS=linux/amd64,linux/arm64 \
+            CACHE_BACKEND=registry \
+            PUSH=1 \
+            PROVENANCE=false \
+            ./build/ingress-image.sh
 
       - name: Build and push proxy (linux/amd64,linux/arm64)
         run: |
@@ -388,6 +387,7 @@ jobs:
             --provenance=false \
             --network=host \
             -f Dockerfile.proxy \
+            -t "${PROXY}:${VERSION}" \
             -t "${PROXY}:v${VERSION}" \
             -t "${PROXY}:latest" \
             --push \
@@ -398,13 +398,15 @@ jobs:
           echo "## Docker Images Built and Pushed" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** v${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Multi-arch via \`docker buildx build --platform linux/amd64,linux/arm64 --provenance=false --push\`." >> $GITHUB_STEP_SUMMARY
+          echo "Ingress: \`build/ingress-image.sh\` (\`docker/Dockerfile.ingress\`). Proxy: root \`Dockerfile.proxy\`." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Proxy (standalone) — \`Dockerfile.proxy\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:v${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Ingress (Kubernetes controller) — \`Dockerfile\`" >> $GITHUB_STEP_SUMMARY
+          echo "### Ingress (Kubernetes controller) — \`docker/Dockerfile.ingress\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:v${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
