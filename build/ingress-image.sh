@@ -39,9 +39,8 @@ CACHE_BACKEND="$(printf '%s' "$CACHE_BACKEND_RAW" | tr '[:upper:]' '[:lower:]' |
 SKIP_ADMIN_BUILD="${SKIP_ADMIN_BUILD:-0}"
 PROVENANCE="${PROVENANCE:-false}"
 SBOM="${SBOM:-false}"
-# Avoid docker.io on flaky runners (DNS timeout). Prefer Harbor-mirrored bases.
-# Refresh: ./build/ci-mirror-base-images.sh
-RUST_IMAGE="${RUST_IMAGE:-harbor.tools.pertisk.com/pertisk-proxy/rust:1-alpine3.21}"
+# Avoid docker.io on flaky runners when Harbor mirrors exist; default Public ECR for local.
+RUST_IMAGE="${RUST_IMAGE:-public.ecr.aws/docker/library/rust:1-alpine3.21}"
 
 if [ -z "$CACHE_BACKEND" ]; then
   CACHE_BACKEND="auto"

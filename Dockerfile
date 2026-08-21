@@ -4,12 +4,11 @@
 # local: docker buildx build -f Dockerfile --platform linux/amd64,linux/arm64 --push
 #
 # Admin UI must be prebuilt: make admin-dist (no node: pull).
-# Builder default: Harbor rust mirror. Final alpine still needs network or a Harbor
-# alpine mirror (./build/ci-mirror-base-images.sh). Release CI does NOT use this
+# Defaults use Public ECR (works on networked laptops). CI release does NOT use this
 # file — it assembles glibc images via build/ci-docker-images-from-bins.sh.
+# Optional Harbor override: --build-arg RUST_IMAGE=harbor…/rust:1-alpine3.21
 
-ARG RUST_IMAGE=harbor.tools.pertisk.com/pertisk-proxy/rust:1-alpine3.21
-# Local/dev fallback when Harbor alpine mirror is missing (ECR rate limits).
+ARG RUST_IMAGE=public.ecr.aws/docker/library/rust:1-alpine3.21
 ARG ALPINE_IMAGE=public.ecr.aws/docker/library/alpine:3.21
 
 FROM --platform=$BUILDPLATFORM ${RUST_IMAGE} AS builder
