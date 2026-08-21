@@ -1,6 +1,6 @@
 # Release on push tag — build binaries (amd64 + arm64) and create GitHub Release.
 # Packages: proxy DEB/RPM/tarball, tunnel-server + tunnel-client DEB/RPM per arch.
-# Docker: ingress via build/ingress-image.sh (Dockerfile.ingress); proxy via Dockerfile.proxy. Helm.
+# Docker: assemble from package binaries + Harbor runtime base (no docker.io/ECR pulls). Helm.
 
 name: Release Packages
 
@@ -19,6 +19,8 @@ env:
   HARBOR_BUILD_IMAGE: ${{ vars.HARBOR_BUILD_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/build' }}
   HARBOR_PROXY_IMAGE: ${{ vars.HARBOR_PROXY_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/proxy' }}
   HARBOR_INGRESS_IMAGE: ${{ vars.HARBOR_INGRESS_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/ingress' }}
+  # Pre-pushed COPY-only runtime base (./build/ci-push-runtime-base.sh). Override via repo Variable.
+  HARBOR_RUNTIME_IMAGE: ${{ vars.HARBOR_RUNTIME_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/runtime:bookworm' }}
   HELM_CHART_REPO_URL: ${{ vars.HELM_CHART_REPO_URL || 'https://chart.tools.pertisk.com' }}
   # Self-hosted runner ~16C/32GB: cargo/cmake parallelism (native path reads these).
   CARGO_BUILD_JOBS: "14"
@@ -328,6 +330,7 @@ jobs:
 
   docker-build:
     name: Docker multi-arch images
+    needs: build
     runs-on: [self-hosted, linux]
     steps:
       - name: Checkout code
@@ -339,6 +342,18 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/}"
           VERSION="${VERSION#v}"
           echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Download amd64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-linux-amd64
+          path: .
+
+      - name: Download arm64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-linux-arm64
+          path: .
 
       - name: Configure Docker
         run: |
@@ -358,75 +373,38 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
+          # Container driver needed for cross-arch COPY builds; bases come only from Harbor.
           driver: docker-container
           driver-opts: network=host
 
-      - name: Setup Node (admin UI for ingress image)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Build admin UI
-        run: |
-          cd admin && pnpm install --frozen-lockfile && pnpm run build
-        env:
-          CI: true
-
-      - name: Build and push ingress (linux/amd64,linux/arm64)
+      - name: Assemble and push images from binaries
         run: |
           set -euo pipefail
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
-          # Host-built admin/dist; rust base from Public ECR (not docker.io).
-          chmod +x build/ingress-image.sh
+          chmod +x build/ci-docker-images-from-bins.sh
+          ls -la pertisk-proxy-linux-* pertisk-proxy-ingress-linux-* admin/dist/index.html
           VERSION="${{ steps.version.outputs.VERSION }}" \
+            HARBOR_PROXY_IMAGE="${{ env.HARBOR_PROXY_IMAGE }}" \
             HARBOR_INGRESS_IMAGE="${{ env.HARBOR_INGRESS_IMAGE }}" \
-            RUST_IMAGE="${RUST_IMAGE:-public.ecr.aws/docker/library/rust:1-alpine3.21}" \
+            DEBIAN_IMAGE="${{ env.HARBOR_RUNTIME_IMAGE }}" \
             PLATFORMS=linux/amd64,linux/arm64 \
-            CACHE_BACKEND=registry \
-            PUSH=1 \
-            SKIP_ADMIN_BUILD=1 \
             PROVENANCE=false \
-            ./build/ingress-image.sh
-
-      - name: Build and push proxy (linux/amd64,linux/arm64)
-        run: |
-          set -euo pipefail
-          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          PROXY="${{ env.HARBOR_PROXY_IMAGE }}"
-          RUST_IMAGE="${RUST_IMAGE:-public.ecr.aws/docker/library/rust:1-alpine3.21}"
-          ALPINE_IMAGE="${ALPINE_IMAGE:-public.ecr.aws/docker/library/alpine:3.21}"
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --provenance=false \
-            --network=host \
-            -f Dockerfile.proxy \
-            --build-arg "RUST_IMAGE=${RUST_IMAGE}" \
-            --build-arg "ALPINE_IMAGE=${ALPINE_IMAGE}" \
-            -t "${PROXY}:${VERSION}" \
-            -t "${PROXY}:v${VERSION}" \
-            -t "${PROXY}:latest" \
-            --push \
-            .
+            ./build/ci-docker-images-from-bins.sh
 
       - name: Summary
         run: |
           echo "## Docker Images Built and Pushed" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** v${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Ingress: \`build/ingress-image.sh\` (\`docker/Dockerfile.ingress\`). Proxy: root \`Dockerfile.proxy\`." >> $GITHUB_STEP_SUMMARY
+          echo "Assembled from package-job glibc binaries + Harbor runtime base (\`${{ env.HARBOR_RUNTIME_IMAGE }}\`)." >> $GITHUB_STEP_SUMMARY
+          echo "No docker.io / public.ecr.aws pulls on the runner." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Proxy (standalone) — \`Dockerfile.proxy\`" >> $GITHUB_STEP_SUMMARY
+          echo "### Proxy" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:v${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_PROXY_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Ingress (Kubernetes controller) — \`docker/Dockerfile.ingress\`" >> $GITHUB_STEP_SUMMARY
+          echo "### Ingress" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:v${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY

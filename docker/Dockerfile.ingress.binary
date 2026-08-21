@@ -1,24 +1,24 @@
 # Runtime-only ingress image using a prebuilt glibc binary from CI artifacts.
-# Avoid Alpine apk CDN issues; matches gnu binaries from release builds.
-# docker build --network=host -f docker/Dockerfile.ingress.binary \
+# Base must already live on Harbor (no docker.io / ECR pulls on locked-down runners):
+#   ./build/ci-push-runtime-base.sh
+#
+# docker build --platform linux/amd64 -f docker/Dockerfile.ingress.binary \
 #   --build-arg BINARY_FILE=pertisk-proxy-ingress-linux-amd64 \
-#   -t pertisk-proxy-ingress:amd64 .
+#   --build-arg DEBIAN_IMAGE=harbor.tools.pertisk.com/pertisk-proxy/runtime:bookworm \
+#   -t …/ingress:0.1.84-amd64 .
 
-ARG DEBIAN_IMAGE=public.ecr.aws/docker/library/debian:bookworm-slim
+ARG DEBIAN_IMAGE=harbor.tools.pertisk.com/pertisk-proxy/runtime:bookworm
 
+# COPY-only — no apt/apk (runner often cannot reach package mirrors either).
 FROM ${DEBIAN_IMAGE}
-
-COPY docker/debian-apt-setup.sh /usr/local/sbin/debian-apt-setup.sh
-RUN set -eux; \
-    . /usr/local/sbin/debian-apt-setup.sh; \
-    apt_install_retry ca-certificates openssl libssl3 curl; \
-    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/share/pertisk-proxy
 
+USER root
 ARG BINARY_FILE=pertisk-proxy-ingress-linux-amd64
 COPY ${BINARY_FILE} /usr/local/bin/pertisk-proxy-ingress
 COPY admin/dist ./admin/dist/
+RUN chmod 755 /usr/local/bin/pertisk-proxy-ingress
 
 ENV PERTISK_MANAGEMENT_ADDR=0.0.0.0:9080
 ENV PERTISK_METRICS_ADDR=0.0.0.0:9990

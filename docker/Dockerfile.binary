@@ -1,25 +1,25 @@
 # Runtime image from a prebuilt Linux glibc binary (release CI / make package).
-# Avoid Alpine — CDN/apk often fails on restricted runners; binaries are gnu/glibc.
-# docker build --network=host -f docker/Dockerfile.binary \
-#   --build-arg BINARY_FILE=pertisk-proxy-linux-amd64 -t pertisk-proxy:amd64 .
+# Base must already live on Harbor (no docker.io / ECR pulls on locked-down runners):
+#   ./build/ci-push-runtime-base.sh
+#
+# docker build -f docker/Dockerfile.binary \
+#   --build-arg BINARY_FILE=pertisk-proxy-linux-amd64 \
+#   --build-arg DEBIAN_IMAGE=harbor.tools.pertisk.com/pertisk-proxy/runtime:bookworm \
+#   -t …/proxy:amd64 .
 
-ARG DEBIAN_IMAGE=public.ecr.aws/docker/library/debian:bookworm-slim
+ARG DEBIAN_IMAGE=harbor.tools.pertisk.com/pertisk-proxy/runtime:bookworm
 
+# COPY-only — no apt/apk on the runner.
 FROM ${DEBIAN_IMAGE}
 
-COPY docker/debian-apt-setup.sh /usr/local/sbin/debian-apt-setup.sh
-RUN set -eux; \
-    . /usr/local/sbin/debian-apt-setup.sh; \
-    apt_install_retry ca-certificates openssl libssl3 curl; \
-    mkdir -p /var/lib/pertisk-proxy/certs /etc/pertisk-proxy; \
-    rm -rf /var/lib/apt/lists/*
-
+USER root
 ARG BINARY_FILE=pertisk-proxy-linux-amd64
 ARG BINARY_NAME=pertisk-proxy
 
 COPY ${BINARY_FILE} /usr/bin/${BINARY_NAME}
 COPY admin/dist /usr/share/pertisk-proxy/admin/dist
 COPY build/pertisk-proxy.conf /etc/pertisk-proxy/pertisk-proxy.conf
+RUN chmod 755 /usr/bin/${BINARY_NAME}
 
 ENV PERTISK_DB_PATH=/var/lib/pertisk-proxy/proxy.sqlite
 ENV PERTISK_MANAGEMENT_ADDR=0.0.0.0:9080
@@ -33,4 +33,6 @@ EXPOSE 80 443 443/udp 9080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -fk https://127.0.0.1/healthz || curl -f http://127.0.0.1/healthz || exit 1
 
+# Proxy often needs root for :80/:443; keep root unless overridden at runtime.
+USER root
 ENTRYPOINT ["/usr/bin/pertisk-proxy"]

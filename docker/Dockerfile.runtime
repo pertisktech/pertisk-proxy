@@ -1,0 +1,20 @@
+# Prebaked Debian runtime for release images (openssl, ca-certs, curl).
+# Built once and pushed to Harbor so CI runners never pull docker.io / public.ecr.aws.
+#
+#   ./build/ci-push-runtime-base.sh
+#
+# Override pull source if needed:
+#   DEBIAN_SRC=debian:bookworm-slim ./build/ci-push-runtime-base.sh
+
+ARG DEBIAN_SRC=public.ecr.aws/docker/library/debian:bookworm-slim
+FROM ${DEBIAN_SRC}
+
+COPY docker/debian-apt-setup.sh /usr/local/sbin/debian-apt-setup.sh
+RUN set -eux; \
+    . /usr/local/sbin/debian-apt-setup.sh; \
+    apt_install_retry ca-certificates openssl libssl3 curl; \
+    mkdir -p /var/lib/pertisk-proxy/certs /etc/pertisk-proxy /usr/share/pertisk-proxy; \
+    rm -rf /var/lib/apt/lists/*
+
+# Non-root default for ingress; proxy image may still run as this UID.
+USER 65532:65532
