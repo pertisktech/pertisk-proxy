@@ -15,12 +15,14 @@ ARG RUST_IMAGE=public.ecr.aws/docker/library/rust:1-alpine3.21
 ARG ALPINE_IMAGE=public.ecr.aws/docker/library/alpine:3.21
 ARG SKIP_BUILD_DEPS=0
 ARG SKIP_RUNTIME_APK=0
+ARG VERSION=0.1.0
 
 FROM --platform=$BUILDPLATFORM ${RUST_IMAGE} AS builder
 ARG TARGETPLATFORM
 ARG TARGETARCH
 ARG BUILDARCH
 ARG SKIP_BUILD_DEPS=0
+ARG VERSION=0.1.0
 COPY docker/alpine-apk-setup.sh /usr/local/sbin/alpine-apk-setup.sh
 RUN set -eux; \
     if [ "${SKIP_BUILD_DEPS}" = "1" ]; then \
@@ -61,6 +63,7 @@ COPY src ./src
 COPY tunnel ./tunnel
 COPY admin/dist ./admin/dist
 ENV RUST_MIN_STACK=16777216
+ENV pertisk_proxy_VERSION=${VERSION}
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-ingress-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-ingress-git-${TARGETPLATFORM} \
     --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-ingress-target-${TARGETPLATFORM} \

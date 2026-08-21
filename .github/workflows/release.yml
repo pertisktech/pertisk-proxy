@@ -412,6 +412,7 @@ jobs:
             -f Dockerfile \
             --build-arg "RUST_IMAGE=${{ env.HARBOR_BUILDER_IMAGE }}" \
             --build-arg "ALPINE_IMAGE=${{ env.HARBOR_ALPINE_RUNTIME }}" \
+            --build-arg "VERSION=${VERSION}" \
             --build-arg SKIP_BUILD_DEPS=1 \
             --build-arg SKIP_RUNTIME_APK=1 \
             -t "${INGRESS}:${VERSION}" \
@@ -433,6 +434,7 @@ jobs:
             -f Dockerfile.proxy \
             --build-arg "RUST_IMAGE=${{ env.HARBOR_BUILDER_IMAGE }}" \
             --build-arg "ALPINE_IMAGE=${{ env.HARBOR_ALPINE_RUNTIME }}" \
+            --build-arg "VERSION=${VERSION}" \
             --build-arg SKIP_BUILD_DEPS=1 \
             --build-arg SKIP_RUNTIME_APK=1 \
             -t "${PROXY}:${VERSION}" \
