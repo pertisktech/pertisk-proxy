@@ -27,6 +27,7 @@ COMMON=(
   --build-arg BUILDARCH="$NATIVE_ARCH"
   --build-arg TARGETPLATFORM="$PLATFORM"
   --build-arg TARGETARCH="$TARGET_ARCH"
+  --build-arg "RUST_IMAGE=${RUST_IMAGE:-public.ecr.aws/docker/library/rust:1-bookworm}"
   -o "type=local,dest=${OUT_DIR}"
   .
 )

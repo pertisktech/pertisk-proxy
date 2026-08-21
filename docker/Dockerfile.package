@@ -1,6 +1,7 @@
 # fpm environment for .deb / .rpm (GNU tar + rpmbuild).
 # Debian bookworm: fpm + dpkg-dev + rpmbuild. Use apt mirror helper for flaky CDNs.
-FROM debian:bookworm-slim
+ARG DEBIAN_IMAGE=public.ecr.aws/docker/library/debian:bookworm-slim
+FROM ${DEBIAN_IMAGE}
 
 COPY docker/debian-apt-setup.sh /usr/local/sbin/debian-apt-setup.sh
 RUN set -eux; \

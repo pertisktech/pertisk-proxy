@@ -3,7 +3,9 @@
 # docker build --network=host -f docker/Dockerfile.binary \
 #   --build-arg BINARY_FILE=pertisk-proxy-linux-amd64 -t pertisk-proxy:amd64 .
 
-FROM debian:bookworm-slim
+ARG DEBIAN_IMAGE=public.ecr.aws/docker/library/debian:bookworm-slim
+
+FROM ${DEBIAN_IMAGE}
 
 COPY docker/debian-apt-setup.sh /usr/local/sbin/debian-apt-setup.sh
 RUN set -eux; \

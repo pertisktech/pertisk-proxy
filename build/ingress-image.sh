@@ -39,6 +39,8 @@ CACHE_BACKEND="$(printf '%s' "$CACHE_BACKEND_RAW" | tr '[:upper:]' '[:lower:]' |
 SKIP_ADMIN_BUILD="${SKIP_ADMIN_BUILD:-0}"
 PROVENANCE="${PROVENANCE:-false}"
 SBOM="${SBOM:-false}"
+# Avoid docker.io on flaky runners (DNS timeout to registry-1.docker.io).
+RUST_IMAGE="${RUST_IMAGE:-public.ecr.aws/docker/library/rust:1-alpine3.21}"
 
 if [ -z "$CACHE_BACKEND" ]; then
   CACHE_BACKEND="auto"
@@ -48,14 +50,14 @@ if [ "$SKIP_ADMIN_BUILD" = "1" ]; then
   echo "Skipping admin build (SKIP_ADMIN_BUILD=1)."
 else
   needs_admin_build=0
-  if [ ! -d "admin/dist" ]; then
+  if [ ! -d "admin/dist" ] || [ ! -f "admin/dist/index.html" ]; then
     needs_admin_build=1
   elif [ -n "$(find admin/src admin/public admin/index.html admin/package.json admin/pnpm-lock.yaml -type f -newer admin/dist 2>/dev/null | head -n 1)" ]; then
     needs_admin_build=1
   fi
 
   if [ "$needs_admin_build" -eq 1 ]; then
-    echo "Building admin UI..."
+    echo "Building admin UI (host; Docker image COPYs admin/dist — no node: base pull)..."
     if [ ! -d "admin/node_modules" ]; then
       (cd admin && pnpm install)
     fi
@@ -65,7 +67,12 @@ else
   fi
 fi
 
-echo "Building ingress image: ${IMAGE}:${VERSION}"
+if [ ! -f "admin/dist/index.html" ]; then
+  echo "Error: admin/dist/index.html missing. Run: make admin-dist" >&2
+  exit 1
+fi
+
+echo "Building ingress image: ${IMAGE}:${VERSION} (RUST_IMAGE=${RUST_IMAGE})"
 export DOCKER_BUILDKIT=1
 
 if ! docker buildx inspect "$BUILDER_NAME" >/dev/null 2>&1; then
@@ -176,6 +183,7 @@ build_ingress_platform() {
   if [ "${#per_platform_cache_args[@]}" -gt 0 ]; then
     docker buildx build --builder "$BUILDER_NAME" --platform "$platform" -f "$DOCKERFILE" \
       "${per_platform_cache_args[@]}" \
+      --build-arg "RUST_IMAGE=${RUST_IMAGE}" \
       --build-arg "TARGETPLATFORM=${platform}" \
       --build-arg "TARGETARCH=${arch}" \
       --build-arg "VERSION=${VERSION}" \
@@ -187,6 +195,7 @@ build_ingress_platform() {
       .
   else
     docker buildx build --builder "$BUILDER_NAME" --platform "$platform" -f "$DOCKERFILE" \
+      --build-arg "RUST_IMAGE=${RUST_IMAGE}" \
       --build-arg "TARGETPLATFORM=${platform}" \
       --build-arg "TARGETARCH=${arch}" \
       --build-arg "VERSION=${VERSION}" \
@@ -268,6 +277,7 @@ else
   esac
   docker buildx build --builder "$BUILDER_NAME" --load -f "$DOCKERFILE" \
     "${cache_args[@]}" \
+    --build-arg "RUST_IMAGE=${RUST_IMAGE}" \
     --build-arg "TARGETPLATFORM=linux/${NATIVE_ARCH}" \
     --build-arg "TARGETARCH=${NATIVE_ARCH}" \
     --build-arg "VERSION=${VERSION}" \

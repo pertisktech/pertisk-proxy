@@ -1,20 +1,15 @@
 # syntax=docker/dockerfile:1.7
 
-# All RUN steps execute on BUILDPLATFORM (native speed, no QEMU emulation).
-# Cross-compilation to the target arch uses cargo-zigbuild (arm64<->amd64).
-# BUILDPLATFORM/TARGETPLATFORM/TARGETARCH/BUILDARCH are auto-provided by buildx;
-# do NOT redeclare them globally (shadows the built-in values with empty strings).
+# Prefer docker/Dockerfile.ingress for release/deploy (scratch + verified multi-arch).
+# This root Dockerfile is a simpler single-file path; bases default to Public ECR
+# mirrors to avoid docker.io DNS timeouts on self-hosted runners.
+#
+# Admin UI must be prebuilt: make admin-dist (no node: pull in this Dockerfile).
 
-FROM --platform=$BUILDPLATFORM node:22-alpine AS admin
-WORKDIR /admin
-COPY admin/package.json admin/pnpm-lock.yaml ./
-RUN corepack enable
-RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile
-COPY admin/ ./
-RUN pnpm build
+ARG RUST_IMAGE=public.ecr.aws/docker/library/rust:1-alpine3.21
+ARG ALPINE_IMAGE=public.ecr.aws/docker/library/alpine:3.21
 
-FROM --platform=$BUILDPLATFORM rust:1-alpine3.21 AS builder
+FROM --platform=$BUILDPLATFORM ${RUST_IMAGE} AS builder
 ARG TARGETPLATFORM
 ARG TARGETARCH
 ARG BUILDARCH
@@ -51,12 +46,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
 
 COPY src ./src
 COPY tunnel ./tunnel
-COPY --from=admin /admin/dist ./admin/dist
+COPY admin/dist ./admin/dist
 ENV RUST_MIN_STACK=16777216
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertisk-ingress-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-ingress-git-${TARGETPLATFORM} \
     --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-ingress-target-${TARGETPLATFORM} \
-    case "${TARGETARCH}" in \
+    test -f admin/dist/index.html \
+    && case "${TARGETARCH}" in \
       amd64) RUST_TARGET=x86_64-unknown-linux-musl ;; \
       arm64) RUST_TARGET=aarch64-unknown-linux-musl ;; \
       *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
@@ -71,10 +67,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
        fi \
     && install -D "/app/target/${RUST_TARGET}/release/pertisk-proxy-ingress" /usr/local/bin/pertisk-proxy-ingress
 
-FROM alpine:3.21
-RUN apk add --no-cache ca-certificates openssl
+FROM ${ALPINE_IMAGE}
+COPY docker/alpine-apk-setup.sh /usr/local/sbin/alpine-apk-setup.sh
+RUN set -eux; \
+    . /usr/local/sbin/alpine-apk-setup.sh; \
+    apk_add_retry ca-certificates openssl
 COPY --from=builder /usr/local/bin/pertisk-proxy-ingress /usr/local/bin/pertisk-proxy-ingress
-COPY --from=admin /admin/dist /usr/share/pertisk-proxy/admin/dist
+COPY admin/dist /usr/share/pertisk-proxy/admin/dist
 USER 65532:65532
 EXPOSE 8080 8443 8443/udp 9080
 ENTRYPOINT ["/usr/local/bin/pertisk-proxy-ingress"]

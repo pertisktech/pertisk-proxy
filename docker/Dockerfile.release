@@ -3,8 +3,11 @@
 #
 # Uses Debian bookworm (not Alpine) so apt mirrors can succeed when Alpine CDN fails.
 # BUILDPLATFORM / TARGET* are injected by BuildKit — do not declare them before FROM.
+# Default base is Public ECR mirror (avoids docker.io timeouts on self-hosted runners).
 
-FROM --platform=$BUILDPLATFORM rust:1-bookworm AS builder
+ARG RUST_IMAGE=public.ecr.aws/docker/library/rust:1-bookworm
+
+FROM --platform=$BUILDPLATFORM ${RUST_IMAGE} AS builder
 
 ARG TARGETARCH
 ARG BUILDARCH

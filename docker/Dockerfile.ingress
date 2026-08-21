@@ -5,20 +5,20 @@
 # uses cargo-zigbuild (works arm64→amd64 and amd64→arm64). musl.cc -cross toolchains
 # are x86_64-hosted only and fail on arm64 build hosts.
 # The final stage is COPY-only (scratch) — no target-platform RUN (avoids exec format error).
+#
+# Admin UI is built on the host (make / ingress-image.sh / CI setup-node) so this image
+# never pulls node: from Docker Hub (often unreachable on self-hosted runners).
+#
+# Default bases use AWS Public ECR Docker Hub mirrors (same tags as docker.io/library/*).
+# Override: --build-arg RUST_IMAGE=rust:1-alpine3.21
 
+ARG RUST_IMAGE=public.ecr.aws/docker/library/rust:1-alpine3.21
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 ARG TARGETARCH
 ARG BUILDARCH
 
-FROM --platform=$BUILDPLATFORM node:22-alpine AS admin
-WORKDIR /admin
-COPY admin/package.json admin/pnpm-lock.yaml ./
-RUN corepack enable && pnpm install --frozen-lockfile
-COPY admin/ ./
-RUN pnpm build
-
-FROM --platform=$BUILDPLATFORM rust:1-alpine3.21 AS builder
+FROM --platform=$BUILDPLATFORM ${RUST_IMAGE} AS builder
 
 ARG TARGETPLATFORM
 ARG TARGETARCH
@@ -62,7 +62,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
 
 COPY src ./src
 COPY tunnel ./tunnel
-COPY --from=admin /admin/dist ./admin/dist
+# Prebuilt by host/CI — see build/ingress-image.sh
+COPY admin/dist ./admin/dist
 COPY docker/ingress-build.sh /usr/local/sbin/ingress-build
 
 ARG CARGO_BUILD_JOBS
@@ -76,6 +77,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=pertisk-ingress-git-${TARGETPLATFORM} \
     --mount=type=cache,target=/app/target,sharing=locked,id=pertisk-ingress-target-${TARGETPLATFORM} \
     chmod +x /usr/local/sbin/ingress-build \
+    && test -f admin/dist/index.html \
     && echo "ingress-build: TARGETPLATFORM=${TARGETPLATFORM} TARGETARCH=${TARGETARCH} BUILDARCH=${BUILDARCH}" \
     && ingress-build
 

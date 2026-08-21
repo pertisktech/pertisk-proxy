@@ -3,8 +3,9 @@
 #   docker buildx build --platform linux/amd64 -f docker/Dockerfile.tunnel --target artifacts -o type=local,dest=./out .
 
 ARG TARGETPLATFORM=linux/amd64
+ARG RUST_IMAGE=public.ecr.aws/docker/library/rust:1-bookworm
 
-FROM --platform=$TARGETPLATFORM rust:1-bookworm AS builder
+FROM --platform=$TARGETPLATFORM ${RUST_IMAGE} AS builder
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
