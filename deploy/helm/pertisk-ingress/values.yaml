@@ -277,11 +277,11 @@ auth0:
 # -- Resource limits and requests
 resources:
   limits:
-    cpu: "2"
-    memory: 1Gi
+    cpu: 800m
+    memory: 768Mi
   requests:
-    cpu: "1"
-    memory: 512Mi
+    cpu: 400m
+    memory: 256Mi
 
 # -- Liveness probe (management API /live)
 livenessProbe:
