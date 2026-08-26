@@ -12,6 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check Linux installer script
+        run: sh -n scripts/get.sh
+
       - name: Try native deps (or fall back to Docker)
         id: deps
         run: |

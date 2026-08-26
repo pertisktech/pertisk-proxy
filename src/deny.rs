@@ -8,6 +8,7 @@ use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 
 const BODY: &[u8] = b"not found";
+const INSTALL_SCRIPT: &str = include_str!("../scripts/get.sh");
 
 static PLAIN_404_HEADERS: LazyLock<ResponseHeader> = LazyLock::new(|| {
     // tarpaulin::skip_start
@@ -41,6 +42,53 @@ pub fn enabled() -> bool {
         // tarpaulin::skip_end
     });
     *DEFAULT
+}
+
+/// Hostnames (comma-separated) that serve [`scripts/get.sh`] as `text/plain`.
+/// Example: `PERTISK_INSTALLER_HOST=get.proxy.pertisk.com`
+pub fn installer_hosts_from(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|s| {
+            s.trim()
+                .trim_end_matches('.')
+                .trim_end_matches(':')
+                .to_ascii_lowercase()
+        })
+        .filter(|s| !s.is_empty() && !s.contains('/'))
+        .collect()
+}
+
+pub fn is_installer_host(host: &str) -> bool {
+    let host = host
+        .split(':')
+        .next()
+        .unwrap_or(host)
+        .trim()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if host.is_empty() {
+        return false;
+    }
+    let raw = std::env::var("PERTISK_INSTALLER_HOST").unwrap_or_default();
+    installer_hosts_from(&raw)
+        .iter()
+        .any(|configured| configured == &host)
+}
+
+/// Serve the Linux `curl | sh` installer (GET/HEAD any path on the installer host).
+pub async fn respond_installer(session: &mut Session, server: &str) -> pingora_core::Result<()> {
+    // tarpaulin::skip_start
+    let body = Bytes::from_static(INSTALL_SCRIPT.as_bytes());
+    let mut resp = ResponseHeader::build(StatusCode::OK, Some(5))?;
+    resp.insert_header("Content-Type", "text/plain; charset=utf-8")?;
+    resp.insert_header("Content-Length", body.len())?;
+    resp.insert_header("Cache-Control", "no-store")?;
+    resp.insert_header("Server", server)?;
+    resp.insert_header("X-App-Name", crate::app_name())?;
+    session.write_response_header(Box::new(resp), false).await?;
+    session.write_response_body(Some(body), true).await?;
+    Ok(())
+    // tarpaulin::skip_end
 }
 
 pub fn unknown_host_status(tls: bool) -> StatusCode {
@@ -154,6 +202,17 @@ pub fn h3_forbidden(reason: &str) -> http::Response<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installer_hosts_from_splits_and_normalizes() {
+        let hosts = installer_hosts_from(" get.proxy.pertisk.com, GET.pertisk.com. ");
+        assert_eq!(
+            hosts,
+            vec!["get.proxy.pertisk.com".to_string(), "get.pertisk.com".to_string()]
+        );
+        assert!(installer_hosts_from("").is_empty());
+        assert!(installer_hosts_from("https://evil.example/x").is_empty());
+    }
 
     #[test]
     fn unknown_host_status_codes() {

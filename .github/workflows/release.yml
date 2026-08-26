@@ -573,12 +573,19 @@ jobs:
             exit 1
           fi
 
+      - name: Add get.sh installer
+        run: |
+          set -euo pipefail
+          cp scripts/get.sh packages/get.sh
+          chmod +x packages/get.sh
+          sh -n packages/get.sh
+
       - name: Generate checksums
         run: |
           set -euo pipefail
           cd packages
           shopt -s globstar nullglob
-          files=( **/*.deb **/*.rpm **/*.tar.gz )
+          files=( **/*.deb **/*.rpm **/*.tar.gz get.sh )
           if [ "${#files[@]}" -eq 0 ]; then
             echo "::error::No release assets found in packages/"
             exit 1

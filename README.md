@@ -19,7 +19,23 @@ Default management API listen: `[::]:9080` (IPv4 + IPv6 dual-stack).
 
 Both share the same Pingora + HTTP/3 data plane.
 
-## Quick start
+## Install (Linux)
+
+One command installs the latest GitHub **proxy** package (DEB / RPM / tarball), then enables `pertisk-proxy`:
+
+```bash
+curl -sfL https://get.proxy.pertisk.com | sh -
+```
+
+`get.proxy.pertisk.com` needs a matching TLS certificate (a `*.pertisk.com` wildcard does **not** cover it). Until that hostname is issued, use the same script from GitHub:
+
+```bash
+curl -sfL https://github.com/pertisktech/pertisk-proxy/releases/latest/download/get.sh | sh -
+```
+
+Optional: `INSTALL_PERTISK_VERSION=0.1.87` pins a release. `INSTALL_PERTISK_SKIP_START=1` installs without starting systemd. Default admin login is `admin` / `admin`.
+
+## Quick start (from source)
 
 ```bash
 cargo build --release --bin pertisk-proxy

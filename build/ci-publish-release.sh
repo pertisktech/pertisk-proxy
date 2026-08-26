@@ -43,7 +43,7 @@ shopt -s nullglob globstar
 assets=()
 while IFS= read -r -d '' f; do
   assets+=("$f")
-done < <(find "$PACKAGES_DIR" \( -name '*.deb' -o -name '*.rpm' -o -name '*.tar.gz' \) -type f -print0 | sort -z)
+done < <(find "$PACKAGES_DIR" \( -name '*.deb' -o -name '*.rpm' -o -name '*.tar.gz' -o -name 'get.sh' \) -type f -print0 | sort -z)
 
 checksum="${PACKAGES_DIR}/SHA256SUMS.txt"
 [ -f "$checksum" ] && assets+=("$checksum")

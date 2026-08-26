@@ -240,6 +240,15 @@ impl ProxyHttp for Gateway {
             }
         }
 
+        {
+            let installer_host = request_host(session.req_header());
+            if crate::deny::is_installer_host(&installer_host) {
+                crate::deny::respond_installer(session, &format!("pertisk-proxy/{protocol}"))
+                    .await?;
+                return Ok(true);
+            }
+        }
+
         if self.auto_https && is_plain_http(session) {
             let req = session.req_header();
             let host = request_host(req);

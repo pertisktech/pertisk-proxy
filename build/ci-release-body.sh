@@ -70,6 +70,23 @@ for f in $(find "$PACKAGES_DIR" -name '*.tar.gz' -type f | sort); do
   echo "| Tarball | ${arch} | \`${n}\` |"
 done
 
+cat <<EOF
+## Quick install (Linux)
+
+\`\`\`bash
+curl -sfL https://get.proxy.pertisk.com | sh -
+\`\`\`
+
+Same script from this release (works without the custom hostname):
+
+\`\`\`bash
+curl -sfL ${BASE}/get.sh | sh -
+\`\`\`
+
+Pin a version: \`INSTALL_PERTISK_VERSION=${VERSION} curl -sfL ${BASE}/get.sh | sh -\`
+
+EOF
+
 cat <<'EOF'
 
 ## Installation (proxy)
