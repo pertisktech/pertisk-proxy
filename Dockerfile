@@ -60,6 +60,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
     cargo fetch --locked
 
 COPY src ./src
+COPY scripts/get.sh ./scripts/get.sh
 COPY tunnel ./tunnel
 COPY admin/dist ./admin/dist
 ENV RUST_MIN_STACK=16777216

@@ -52,6 +52,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=pertis
     cargo fetch --locked
 
 COPY src ./src
+COPY scripts/get.sh ./scripts/get.sh
 COPY tunnel ./tunnel
 COPY docker/release-build.sh /usr/local/sbin/release-build
 
