@@ -10,10 +10,10 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Get/list Secrets (for Ingress spec.tls[].secretName; TLS certs)
+  # Get/list/watch Secrets (Ingress spec.tls[].secretName; cert-manager kubernetes.io/tls)
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "watch"]
   # Custom kinds: PertiskBackend and PertiskIngress (proxy.pertisk.tech)
   - apiGroups: ["proxy.pertisk.tech"]
     resources: ["pertiskbackends", "pertiskingresses"]

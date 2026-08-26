@@ -30,6 +30,10 @@ pub struct PendingH3 {
 }
 
 /// Start the Pingora reverse proxy. HTTP/3 is started on the Tokio runtime after TCP/TLS bind.
+///
+/// `https_sni_always` binds the HTTPS port with SNI callbacks even when `CertStore` is empty.
+/// Ingress mode needs this because cert-manager issues the Secret after the Ingress exists;
+/// Pingora cannot open :443 after `run` has started.
 pub fn run(
     server_config: &ServerConfig,
     router: Arc<Router>,
@@ -278,4 +282,48 @@ fn pingora_prometheus_listen_addr() -> Option<String> {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .or_else(|| Some("127.0.0.1:9091".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn empty_server_config() -> ServerConfig {
+        ServerConfig {
+            http_listen: "0.0.0.0:8080".into(),
+            https_listen: "0.0.0.0:8443".into(),
+            h3_udp_listen: "[::]:8443".into(),
+            enable_h3: false,
+            enable_h2: true,
+            tls_cert_path: None,
+            tls_key_path: None,
+        }
+    }
+
+    #[test]
+    fn https_stays_off_without_certs_unless_sni_always() {
+        let store = CertStore::new();
+        let cfg = empty_server_config();
+        assert!(
+            !https_should_listen(&cfg, &store, false, false),
+            "empty store must not bind HTTPS (the cert-manager race)"
+        );
+        assert!(
+            https_should_listen(&cfg, &store, false, true),
+            "ingress mode binds HTTPS with SNI callbacks before any Secret exists"
+        );
+    }
+
+    #[test]
+    fn https_listens_when_acme_pending_or_file_paths_set() {
+        let store = CertStore::new();
+        let cfg = empty_server_config();
+        assert!(https_should_listen(&cfg, &store, true, false));
+
+        let mut cfg = empty_server_config();
+        cfg.tls_cert_path = Some(PathBuf::from("/tmp/cert.pem"));
+        cfg.tls_key_path = Some(PathBuf::from("/tmp/key.pem"));
+        assert!(https_should_listen(&cfg, &store, false, false));
+    }
 }

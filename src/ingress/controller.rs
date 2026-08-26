@@ -13,16 +13,21 @@ use crate::proxy_config::{
 };
 use crate::tls::CertStore;
 use crate::Router;
+use futures::StreamExt;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::api::networking::v1::{Ingress, IngressBackend};
 use kube::{
     api::{Api, ListParams, Patch, PatchParams},
-    Client, ResourceExt,
+    runtime::{watcher, WatchStreamExt},
+    Client, Resource, ResourceExt,
 };
+use serde::de::DeserializeOwned;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::RwLock;
-use tokio::sync::RwLock as AsyncRwLock;
+use std::time::Duration;
+use tokio::sync::{Notify, RwLock as AsyncRwLock};
 use tracing::{info, warn};
 
 /// Config for the Ingress controller (namespace filter, class name, etc.).
@@ -78,6 +83,58 @@ impl IngressController {
             cert_store,
             proxy_log,
             last_ingress_tls_hosts: RwLock::new(Vec::new()),
+        }
+    }
+
+    /// Watch Ingress, TLS Secrets, and Gateway API objects and reconcile as they change.
+    ///
+    /// cert-manager often creates the Ingress first and fills `kubernetes.io/tls` later.
+    /// Polling every 30s is too slow; watches pick up the Secret as soon as it is Ready.
+    pub async fn run_watches(self: Arc<Self>) {
+        let notify = Arc::new(Notify::new());
+        self.spawn_resource_watchers(Arc::clone(&notify));
+        loop {
+            notify.notified().await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            if let Err(e) = self.reconcile().await {
+                tracing::error!(error = %e, "Reconcile error");
+            }
+        }
+    }
+
+    fn spawn_resource_watchers(&self, notify: Arc<Notify>) {
+        let client = self.client.clone();
+        let ns = self.config.namespace.clone();
+
+        spawn_kube_watch::<Ingress>(
+            client.clone(),
+            ns.clone(),
+            watcher::Config::default(),
+            Arc::clone(&notify),
+            "Ingress",
+        );
+        spawn_kube_watch::<Secret>(
+            client.clone(),
+            ns.clone(),
+            watcher::Config::default().fields("type=kubernetes.io/tls"),
+            Arc::clone(&notify),
+            "Secret",
+        );
+        if self.config.gateway_api_enabled {
+            spawn_kube_watch::<Gateway>(
+                client.clone(),
+                ns.clone(),
+                watcher::Config::default(),
+                Arc::clone(&notify),
+                "Gateway",
+            );
+            spawn_kube_watch::<HTTPRoute>(
+                client,
+                ns,
+                watcher::Config::default(),
+                notify,
+                "HTTPRoute",
+            );
         }
     }
 
@@ -237,7 +294,7 @@ impl IngressController {
             .map(|g| g.clone())
             .unwrap_or_default();
 
-        let n_tls_secrets = tls_secrets.len();
+        let n_tls_referenced = tls_secrets.len();
         let mut new_ingress_hosts: Vec<String> = Vec::new();
         let mut tls_from_secrets: Vec<TlsConfig> = Vec::new();
 
@@ -246,7 +303,14 @@ impl IngressController {
             let secret = match ns_api.get(&secret_name).await {
                 Ok(s) => s,
                 Err(e) => {
-                    warn!("Failed to get Secret {}/{}: {}", namespace, secret_name, e);
+                    if secret_is_not_found(&e) {
+                        info!(
+                            "TLS Secret {}/{} not found yet (waiting for cert-manager)",
+                            namespace, secret_name
+                        );
+                    } else {
+                        warn!("Failed to get Secret {}/{}: {}", namespace, secret_name, e);
+                    }
                     continue;
                 }
             };
@@ -319,6 +383,7 @@ impl IngressController {
 
         let n_backends = backends.len();
         let n_sites = sites.len();
+        let n_tls_loaded = tls_from_secrets.len();
         let (access_lists, waf_policies) = {
             let prev = self.runtime_config.read().await;
             (prev.access_lists.clone(), prev.waf_policies.clone())
@@ -334,21 +399,23 @@ impl IngressController {
         if let Err(e) = apply::apply_config(self.router.as_ref(), &config) {
             warn!("Failed to apply ingress config to router: {}", e);
         } else {
+            self.cert_store.set_expected_from_config(&config);
             *self.runtime_config.write().await = config;
         }
         info!(
-            "Ingress reconciliation complete ({} backends, {} sites, TLS from {} Secrets, {} Gateways, {} HTTPRoutes)",
+            "Ingress reconciliation complete ({} backends, {} sites, TLS {}/{} Secrets loaded, {} Gateways, {} HTTPRoutes)",
             n_backends,
             n_sites,
-            n_tls_secrets,
+            n_tls_loaded,
+            n_tls_referenced,
             n_gateways,
             n_httproutes
         );
         let _ = self
             .proxy_log
             .push(ProxyLogEntry::config_reload(format!(
-                "Ingress reconciliation: {} backends, {} sites, TLS from {} Secrets, {} Gateways, {} HTTPRoutes",
-                n_backends, n_sites, n_tls_secrets, n_gateways, n_httproutes
+                "Ingress reconciliation: {} backends, {} sites, TLS {}/{} Secrets loaded, {} Gateways, {} HTTPRoutes",
+                n_backends, n_sites, n_tls_loaded, n_tls_referenced, n_gateways, n_httproutes
             )))
             .await;
         Ok(())
@@ -845,6 +912,41 @@ impl IngressController {
             })
             .collect()
     }
+}
+
+fn secret_is_not_found(err: &kube::Error) -> bool {
+    matches!(err, kube::Error::Api(status) if status.code == 404)
+}
+
+fn spawn_kube_watch<K>(
+    client: Client,
+    namespace: Option<String>,
+    watch_config: watcher::Config,
+    notify: Arc<Notify>,
+    kind: &'static str,
+) where
+    K: Clone + DeserializeOwned + Debug + Send + Sync + 'static,
+    K: Resource<Scope = kube::core::NamespaceResourceScope>,
+    <K as Resource>::DynamicType: Default,
+{
+    tokio::spawn(async move {
+        let api: Api<K> = match namespace.as_deref() {
+            Some(ns) if !ns.is_empty() => Api::namespaced(client, ns),
+            _ => Api::all(client),
+        };
+        info!(kind, "watching Kubernetes resources");
+        let mut stream = watcher(api, watch_config)
+            .default_backoff()
+            .touched_objects()
+            .boxed();
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(_) => notify.notify_one(),
+                Err(e) => warn!(kind, error = %e, "watch stream error"),
+            }
+        }
+        warn!(kind, "watch stream ended");
+    });
 }
 
 fn backend_name_for(backend: &IngressBackend, ingress_name: &str) -> String {

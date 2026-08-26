@@ -176,14 +176,14 @@ pub fn run() -> anyhow::Result<()> {
     ));
     let metrics = crate::metrics::ProxyMetrics::new();
 
-    let controller = IngressController::new(
+    let controller = Arc::new(IngressController::new(
         client.clone(),
         controller_config.clone(),
         Arc::clone(&router),
         Arc::clone(&runtime_config),
         Arc::clone(&cert_store),
         Arc::clone(&proxy_log),
-    );
+    ));
 
     let leader_election_state = Some(LeaderElectionState {
         enabled: leader_enabled,
@@ -249,14 +249,23 @@ pub fn run() -> anyhow::Result<()> {
         );
     }
 
-    tokio_runtime.spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(30)).await;
-            if let Err(e) = controller.reconcile().await {
-                tracing::error!("Reconcile error: {}", e);
+    {
+        let controller = Arc::clone(&controller);
+        tokio_runtime.spawn(async move {
+            controller.run_watches().await;
+        });
+    }
+    {
+        let controller = Arc::clone(&controller);
+        tokio_runtime.spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                if let Err(e) = controller.reconcile().await {
+                    tracing::error!("Reconcile error: {}", e);
+                }
             }
-        }
-    });
+        });
+    }
 
     if let (Ok(cert), Ok(key)) = (
         ingress_env.server.tls_cert_path(),
@@ -302,13 +311,16 @@ pub fn run() -> anyhow::Result<()> {
         });
     }
 
+    // Bind HTTPS with SNI callbacks even when CertStore is empty. cert-manager often
+    // creates the Ingress before the TLS Secret exists; Pingora cannot add :443 later.
+    info!("HTTPS SNI listener enabled in ingress mode (certificates may arrive after Ingress)");
     server::run(
         &ingress_env.server,
         router,
         cert_store,
         false,
         false,
-        false,
+        true,
         &runtime_cfg,
         None,
         None,
