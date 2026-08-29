@@ -25,6 +25,20 @@ fi
 chmod +x build/ci-install-deps.sh
 ./build/ci-install-deps.sh
 
+# Pin the glibc baseline via zig so DEB/RPM binaries run on older-glibc distros
+# (e.g. AlmaLinux 9 / RHEL9 ship glibc 2.34) even though this runner's own
+# glibc is newer. Without this, a plain `cargo build` links against whatever
+# glibc is installed on the CI host, which can be too new for target servers.
+chmod +x build/ci-ensure-zig.sh
+./build/ci-ensure-zig.sh
+
+case "$ARCH" in
+  amd64) RUST_TARGET=x86_64-unknown-linux-gnu.2.28 ;;
+  arm64) RUST_TARGET=aarch64-unknown-linux-gnu.2.28 ;;
+esac
+RUST_TARGET_DIR="${RUST_TARGET%%.*}"
+rustup target add "${RUST_TARGET_DIR}" 2>/dev/null || true
+
 NPROC="$(nproc 2>/dev/null || echo 16)"
 # Leave a little headroom for the linker + OS on 32GB-class machines.
 if [ "$NPROC" -ge 16 ]; then
@@ -40,27 +54,27 @@ export RUST_MIN_STACK="${RUST_MIN_STACK:-16777216}"
 # CI: no incremental cache across clean checkouts; slightly less disk/RAM churn.
 export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 
-echo "ci-release-native-bins: arch=${ARCH} jobs=${JOBS} target=${TARGET} version=${pertisk_proxy_VERSION}"
+echo "ci-release-native-bins: arch=${ARCH} jobs=${JOBS} target=${TARGET} rust_target=${RUST_TARGET} version=${pertisk_proxy_VERSION}"
 
 copy_bin() {
   local bin="$1"
-  cp "target/release/${bin}" "./${bin}-linux-${ARCH}"
+  cp "target/${RUST_TARGET_DIR}/release/${bin}" "./${bin}-linux-${ARCH}"
   chmod +x "./${bin}-linux-${ARCH}"
   file "./${bin}-linux-${ARCH}" || true
 }
 
 case "$TARGET" in
   proxy)
-    cargo build --release --locked --bin pertisk-proxy
+    cargo zigbuild --release --locked --target "${RUST_TARGET}" --bin pertisk-proxy
     copy_bin pertisk-proxy
     ;;
   ingress)
-    cargo build --release --locked --bin pertisk-proxy-ingress --features ingress
+    cargo zigbuild --release --locked --target "${RUST_TARGET}" --bin pertisk-proxy-ingress --features ingress
     copy_bin pertisk-proxy-ingress
     ;;
   all)
     # Single graph: compile shared deps once, emit both bins.
-    cargo build --release --locked \
+    cargo zigbuild --release --locked --target "${RUST_TARGET}" \
       --bin pertisk-proxy \
       --bin pertisk-proxy-ingress \
       --features ingress
