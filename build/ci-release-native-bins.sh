@@ -29,8 +29,9 @@ chmod +x build/ci-install-deps.sh
 # (e.g. AlmaLinux 9 / RHEL9 ship glibc 2.34) even though this runner's own
 # glibc is newer. Without this, a plain `cargo build` links against whatever
 # glibc is installed on the CI host, which can be too new for target servers.
-chmod +x build/ci-ensure-zig.sh
-./build/ci-ensure-zig.sh
+# Must be sourced (not executed) so its PATH/CARGO_ZIGBUILD_ZIG_PATH exports
+# reach the `cargo zigbuild` call below.
+. build/ci-ensure-zig.sh
 
 case "$ARCH" in
   amd64) RUST_TARGET=x86_64-unknown-linux-gnu.2.28 ;;

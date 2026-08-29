@@ -93,7 +93,8 @@ build_native() {
   rust_target="$(native_rust_target)"
   rust_target_dir="${rust_target%%.*}"
   echo "Using native cargo zigbuild for $bin (linux/$ARCH, target $rust_target, version $VERSION)..."
-  command -v zig >/dev/null 2>&1 || { chmod +x build/ci-ensure-zig.sh; ./build/ci-ensure-zig.sh; }
+  # Sourced (not executed) so PATH/CARGO_ZIGBUILD_ZIG_PATH exports reach the zigbuild call below.
+  command -v zig >/dev/null 2>&1 || . build/ci-ensure-zig.sh
   rustup target add "$rust_target_dir" 2>/dev/null || true
   if [ -n "$features" ]; then
     CARGO_BUILD_JOBS="$CARGO_JOBS" pertisk_proxy_VERSION="$VERSION" cargo zigbuild --release --locked --target "$rust_target" --bin "$bin" --features "$features"
