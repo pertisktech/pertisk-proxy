@@ -75,16 +75,33 @@ host_rust_minor_version() {
   rustc --version | awk '{print $2}' | cut -d. -f2
 }
 
+native_rust_target() {
+  # Pin glibc to 2.28 via zig so the binary runs on older-glibc distros
+  # (e.g. AlmaLinux 9 / RHEL9 ship glibc 2.34) even when built on a dev
+  # machine with a newer glibc (plain `cargo build` would link against
+  # whatever glibc is installed locally).
+  case "$ARCH" in
+    amd64) echo "x86_64-unknown-linux-gnu.2.28" ;;
+    arm64) echo "aarch64-unknown-linux-gnu.2.28" ;;
+  esac
+}
+
 build_native() {
   local bin="$1"
   local features="${2:-}"
-  echo "Using native cargo build for $bin (linux/$ARCH, version $VERSION)..."
+  local rust_target rust_target_dir
+  rust_target="$(native_rust_target)"
+  rust_target_dir="${rust_target%%.*}"
+  echo "Using native cargo zigbuild for $bin (linux/$ARCH, target $rust_target, version $VERSION)..."
+  # Sourced (not executed) so PATH/CARGO_ZIGBUILD_ZIG_PATH exports reach the zigbuild call below.
+  command -v zig >/dev/null 2>&1 || . build/ci-ensure-zig.sh
+  rustup target add "$rust_target_dir" 2>/dev/null || true
   if [ -n "$features" ]; then
-    CARGO_BUILD_JOBS="$CARGO_JOBS" pertisk_proxy_VERSION="$VERSION" cargo build --release --locked --bin "$bin" --features "$features"
+    CARGO_BUILD_JOBS="$CARGO_JOBS" pertisk_proxy_VERSION="$VERSION" cargo zigbuild --release --locked --target "$rust_target" --bin "$bin" --features "$features"
   else
-    CARGO_BUILD_JOBS="$CARGO_JOBS" pertisk_proxy_VERSION="$VERSION" cargo build --release --locked --bin "$bin"
+    CARGO_BUILD_JOBS="$CARGO_JOBS" pertisk_proxy_VERSION="$VERSION" cargo zigbuild --release --locked --target "$rust_target" --bin "$bin"
   fi
-  cp "target/release/$bin" "./${bin}-linux-${ARCH}"
+  cp "target/${rust_target_dir}/release/$bin" "./${bin}-linux-${ARCH}"
 }
 
 build_binaries_docker() {

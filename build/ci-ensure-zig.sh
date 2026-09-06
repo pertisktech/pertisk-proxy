@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Ensure zig (+ optional cargo-zigbuild) is on PATH for host cross-compiles.
 # Installs under $HOME/.local (no root) when missing.
+# NOTE: source this script (`. build/ci-ensure-zig.sh`), don't execute it —
+# executing it as a subprocess would discard the PATH/env exports below once
+# it exits, leaving the calling script's later `cargo zigbuild` unable to find zig.
 set -euo pipefail
 
 ZIG_VERSION="${ZIG_VERSION:-0.13.0}"
@@ -38,6 +41,10 @@ command -v zig >/dev/null 2>&1 || {
   exit 1
 }
 echo "zig $(zig version)"
+
+# Pin the resolved absolute path so cargo-zigbuild's own `which zig` lookup
+# (run from separate child processes during linking) can't miss it.
+export CARGO_ZIGBUILD_ZIG_PATH="$(command -v zig)"
 
 if [ "${INSTALL_CARGO_ZIGBUILD:-1}" = "1" ]; then
   if ! command -v cargo-zigbuild >/dev/null 2>&1; then
