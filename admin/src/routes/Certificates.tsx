@@ -23,6 +23,7 @@ import { usePageSize } from '@/utils/usePageSize';
 import { useOpenOnQuery } from '@/utils/useOpenOnQuery';
 import { formatDate, formatDateOnly } from '@/utils/dateFormat';
 import { resolveTlsForHost, certRowMatchesTlsConfig } from '@/utils/tlsHostMatch';
+import { useLiveChannel } from '@/utils/useLiveChannel';
 import { cn } from '@/utils';
 
 type SortKey = 'domain' | 'issuer' | 'challenge' | 'expires' | 'sites';
@@ -166,20 +167,12 @@ export function Certificates() {
     refreshAll().catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'));
   }, [refreshAll]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const tick = () => {
-      if (document.visibilityState !== 'visible') return;
-      refreshAll().catch(() => {});
-    };
-    const t = setInterval(() => {
-      if (!cancelled) tick();
-    }, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [refreshAll]);
+  useLiveChannel<ProxyConfig>('config', {
+    onData: (nextConfig) => setConfig(nextConfig),
+  });
+  useLiveChannel<CertificateRow[]>('certificates', {
+    onData: (nextCertRows) => setCertRows(nextCertRows),
+  });
 
   function getCertIdForTls(tls: TlsConfig, rows = certRows): string | null {
     const want = tls.hosts ?? [];

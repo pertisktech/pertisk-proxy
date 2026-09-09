@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, type K8sPodRow, type ManagementInfo, type Metrics, type ProxyConfig } from '@/api/client';
 import { Card, Stat } from '@/components/Card';
+import { useLiveChannel } from '@/utils/useLiveChannel';
 
 function formatUptime(secs: number) {
   const total = Math.max(0, Math.floor(Number.isFinite(secs) ? secs : 0));
@@ -106,7 +107,6 @@ export function Dashboard() {
 
   useEffect(() => {
     let cancelled = false;
-
     async function load() {
       try {
         const [mgmt, cfg, m] = await Promise.all([api.management(), api.config(), api.metrics()]);
@@ -120,41 +120,57 @@ export function Dashboard() {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load dashboard');
       }
     }
-
     load();
-    const timer = setInterval(load, 5000);
     return () => {
       cancelled = true;
-      clearInterval(timer);
     };
   }, []);
 
+  useLiveChannel<ManagementInfo>('management', {
+    onData: (mgmt) => {
+      setInfo(mgmt);
+      setError('');
+    },
+  });
+  useLiveChannel<ProxyConfig>('config', {
+    onData: (cfg) => setConfig(cfg),
+  });
+  useLiveChannel<Metrics>('metrics', {
+    onData: (m) => setMetrics(m),
+  });
+
+  const podsLive = info?.mode === 'ingress';
   useEffect(() => {
-    if (info?.mode !== 'ingress') {
+    if (!podsLive) {
       setK8sPods([]);
+      setK8sLoading(false);
       return;
     }
     let cancelled = false;
-
-    async function loadPods() {
-      setK8sLoading(true);
-      try {
-        const pods = await api.kubernetes.pods();
+    setK8sLoading(true);
+    api.kubernetes
+      .pods()
+      .then((pods) => {
         if (!cancelled) setK8sPods(pods);
-      } catch {
+      })
+      .catch(() => {
         if (!cancelled) setK8sPods([]);
-      } finally {
+      })
+      .finally(() => {
         if (!cancelled) setK8sLoading(false);
-      }
-    }
-
-    loadPods();
-    const timer = setInterval(loadPods, 10000);
+      });
     return () => {
       cancelled = true;
-      clearInterval(timer);
     };
-  }, [info?.mode]);
+  }, [podsLive]);
+
+  useLiveChannel<K8sPodRow[]>('pods', {
+    enabled: !!podsLive,
+    onData: (pods) => {
+      setK8sPods(pods);
+      setK8sLoading(false);
+    },
+  });
 
   const ingressPods = useMemo(
     () => (info ? filterIngressPods(k8sPods, info) : []),
@@ -383,7 +399,7 @@ export function Dashboard() {
             <div>
               <h2 className="text-lg font-semibold">Ingress pods</h2>
               <p className="text-sm text-text-secondary">
-                Pods for this controller deployment only (refreshes every 10s)
+                Pods for this controller deployment only (live via WebSocket)
               </p>
             </div>
             <span className="text-sm text-text-secondary">

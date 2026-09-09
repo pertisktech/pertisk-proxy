@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { RefreshCw } from 'lucide-react';
 import {
@@ -17,8 +17,8 @@ import { api, type ManagementInfo, type Metrics as ApiMetrics } from '@/api/clie
 import { Card, Stat } from '@/components/Card';
 import { Checkbox } from '@/components/Checkbox';
 import { formatTimeOnly } from '@/utils/dateFormat';
+import { useLiveChannel } from '@/utils/useLiveChannel';
 
-const POLL_INTERVAL_MS = 3000;
 const MAX_POINTS = 60;
 
 type MetricPoint = {
@@ -149,17 +149,25 @@ export function Metrics() {
     fetchMetrics();
   }, []);
 
+  const mgmtRef = useRef<ManagementInfo | null>(null);
   useEffect(() => {
-    if (!live) return;
-    const id = setInterval(() => {
-      Promise.all([api.metrics(), api.management()])
-        .then(([m, management]) => appendPoint(m, management))
-        .catch(() => {
-          /* keep last snapshot; toast only on manual refresh */
-        });
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [live]);
+    mgmtRef.current = mgmt;
+  }, [mgmt]);
+
+  useLiveChannel<ManagementInfo>('management', {
+    enabled: live,
+    onData: (management) => {
+      mgmtRef.current = management;
+      setMgmt(management);
+    },
+  });
+  useLiveChannel<ApiMetrics>('metrics', {
+    enabled: live,
+    onData: (m) => {
+      const management = mgmtRef.current;
+      if (management) appendPoint(m, management);
+    },
+  });
 
   const rates = useMemo(() => {
     if (history.length < 2) return [];

@@ -12,6 +12,9 @@ pub mod policies;
 #[cfg(feature = "admin")]
 pub mod notifications;
 
+#[cfg(feature = "admin")]
+pub mod ws;
+
 #[cfg(all(feature = "admin", feature = "acme"))]
 pub mod acme;
 
@@ -164,6 +167,7 @@ pub fn router(state: AdminState) -> Router {
         .route("/api/auth/config", get(auth_config))
         .route("/api/auth/login", post(auth_login))
         .route("/api/auth/check", get(auth_check))
+        .route("/api/ws", get(ws::ws_handler))
         .route("/live", get(|| async { "ok" }))
         .route("/ready", get(|| async { "ok" }))
         .route("/healthz", get(|| async { "ok" }))
@@ -331,8 +335,22 @@ pub(super) async fn is_authorized(state: &AdminState, headers: &HeaderMap) -> bo
     resolve_username(state, headers).await.is_some()
 }
 
+pub(crate) async fn is_token_authorized(state: &AdminState, token: Option<&str>) -> bool {
+    if !state.auth_required {
+        return true;
+    }
+    let Some(token) = token.map(str::trim).filter(|t| !t.is_empty()) else {
+        return false;
+    };
+    resolve_username_from_token(state, token).await.is_some()
+}
+
 async fn resolve_username(state: &AdminState, headers: &HeaderMap) -> Option<String> {
     let token = extract_bearer(headers)?;
+    resolve_username_from_token(state, token).await
+}
+
+async fn resolve_username_from_token(state: &AdminState, token: &str) -> Option<String> {
     if let Some(ref sessions) = state.sessions {
         if let Some(username) = session_username(sessions, token) {
             return Some(username);
@@ -356,7 +374,7 @@ async fn resolve_username(state: &AdminState, headers: &HeaderMap) -> Option<Str
 
 const DEFAULT_ADMIN_USERNAME: &str = crate::db::DEFAULT_ADMIN_USERNAME;
 
-fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     value.strip_prefix("Bearer ").map(str::trim)
 }
@@ -697,7 +715,7 @@ async fn auth_change_password(
 
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
-struct ManagementInfo {
+pub(crate) struct ManagementInfo {
     mode: &'static str,
     version: &'static str,
     uptime_secs: u64,
@@ -974,7 +992,7 @@ fn management_ingress_fields(state: &AdminState) -> (Option<bool>, Option<String
 }
 
 #[derive(Serialize)]
-struct MetricsResponse {
+pub(crate) struct MetricsResponse {
     uptime_secs: u64,
     log_entries: u64,
     http_requests_total: u64,
@@ -999,19 +1017,7 @@ struct MetricsResponse {
     metrics_addr: String,
 }
 
-async fn get_metrics(
-    State(state): State<AdminState>,
-    headers: HeaderMap,
-) -> Result<Json<MetricsResponse>, (StatusCode, Json<ApiError>)> {
-    if !is_authorized(&state, &headers).await {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(ApiError {
-                error: "unauthorized".into(),
-            }),
-        ));
-    }
-
+pub(crate) fn build_metrics_response(state: &AdminState) -> MetricsResponse {
     let m = &state.metrics;
     let h3 = m.h3_requests_total.load(Ordering::Relaxed) as f64;
     let h2 = m.h2_requests_total.load(Ordering::Relaxed) as f64;
@@ -1030,7 +1036,7 @@ async fn get_metrics(
         site_h3_requests_total.insert(host, h3_count);
     }
 
-    Ok(Json(MetricsResponse {
+    MetricsResponse {
         uptime_secs: state.started_at.elapsed().as_secs(),
         log_entries: state.proxy_log.len() as u64,
         http_requests_total: m.http_requests_total.load(Ordering::Relaxed),
@@ -1053,10 +1059,47 @@ async fn get_metrics(
         site_h2_requests_total,
         site_h3_requests_total,
         metrics_addr: crate::metrics::metrics_addr_from_env().to_string(),
-    }))
+    }
+}
+
+async fn get_metrics(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> Result<Json<MetricsResponse>, (StatusCode, Json<ApiError>)> {
+    if !is_authorized(&state, &headers).await {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiError {
+                error: "unauthorized".into(),
+            }),
+        ));
+    }
+    Ok(Json(build_metrics_response(&state)))
 }
 
 /// Proxies tunnel server loopback status (`PERTISK_TUNNEL_STATUS_URL`, default http://127.0.0.1:7700/status).
+pub(crate) async fn fetch_tunnel_status_value() -> Result<serde_json::Value, String> {
+    let url = std::env::var("PERTISK_TUNNEL_STATUS_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:7700/status".to_string());
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| e.to_string())?;
+    match client.get(&url).send().await {
+        Ok(resp) if resp.status().is_success() => resp
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|e| format!("invalid tunnel status JSON: {e}")),
+        Ok(resp) => Err(format!(
+            "tunnel status at {url} returned HTTP {}",
+            resp.status().as_u16()
+        )),
+        Err(e) => Err(format!(
+            "tunnel status unreachable ({url}): {e}. Is pertisk-tunnel-server running?"
+        )),
+    }
+}
+
 async fn get_tunnel_status(
     State(state): State<AdminState>,
     headers: HeaderMap,
@@ -1070,52 +1113,13 @@ async fn get_tunnel_status(
         ));
     }
 
-    let url = std::env::var("PERTISK_TUNNEL_STATUS_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:7700/status".to_string());
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiError {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
-    match client.get(&url).send().await {
-        Ok(resp) if resp.status().is_success() => {
-            let body = resp.json::<serde_json::Value>().await.map_err(|e| {
-                (
-                    StatusCode::BAD_GATEWAY,
-                    Json(ApiError {
-                        error: format!("invalid tunnel status JSON: {e}"),
-                    }),
-                )
-            })?;
-            Ok(Json(body))
-        }
-        Ok(resp) => Err((
-            StatusCode::BAD_GATEWAY,
-            Json(ApiError {
-                error: format!(
-                    "tunnel status at {url} returned HTTP {}",
-                    resp.status().as_u16()
-                ),
-            }),
-        )),
-        Err(e) => Err((
-            StatusCode::BAD_GATEWAY,
-            Json(ApiError {
-                error: format!(
-                    "tunnel status unreachable ({url}): {e}. Is pertisk-tunnel-server running?"
-                ),
-            }),
-        )),
+    match fetch_tunnel_status_value().await {
+        Ok(body) => Ok(Json(body)),
+        Err(error) => Err((StatusCode::BAD_GATEWAY, Json(ApiError { error }))),
     }
 }
 
-async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo> {
+pub(crate) async fn build_management_info(state: &AdminState) -> ManagementInfo {
     let server = &state.proxy_config.server;
     let cfg = state.runtime_config.read().await;
     let data_path = state
@@ -1140,14 +1144,14 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
     let (gateway_api_enabled, ingress_class, gateway_class, leader_election) = {
         #[cfg(feature = "ingress")]
         {
-            management_ingress_fields(&state)
+            management_ingress_fields(state)
         }
         #[cfg(not(feature = "ingress"))]
         {
             (None, None, None, None)
         }
     };
-    Json(ManagementInfo {
+    ManagementInfo {
         mode: if state.viewer_mode { "ingress" } else { "proxy" },
         version: VERSION,
         uptime_secs: state.started_at.elapsed().as_secs(),
@@ -1199,7 +1203,11 @@ async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo>
         gateway_class,
         leader_election,
         geoip: crate::geoip::status(),
-    })
+    }
+}
+
+async fn get_management(State(state): State<AdminState>) -> Json<ManagementInfo> {
+    Json(build_management_info(&state).await)
 }
 
 fn disk_usage_for_path(data_path: &std::path::Path) -> (Option<u64>, Option<u64>, Option<String>) {
@@ -1329,18 +1337,15 @@ fn gather_system_info() -> (
     )
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
-struct LogsQuery {
+pub(crate) struct LogsQuery {
     #[serde(rename = "type")]
     log_type: Option<String>,
     host: Option<String>,
 }
 
-async fn get_logs(
-    State(state): State<AdminState>,
-    Query(q): Query<LogsQuery>,
-) -> Json<Vec<ProxyLogEntry>> {
+pub(crate) async fn build_logs_entries(state: &AdminState, q: &LogsQuery) -> Vec<ProxyLogEntry> {
     let mut entries = state.proxy_log.recent(500).await;
     entries.retain(|e| e.entry_type != crate::log::LogEntryType::Request);
     entries.retain(|e| crate::log::ui_log_enabled(e.level));
@@ -1375,17 +1380,24 @@ async fn get_logs(
         entries = dedupe_consecutive_system_logs(entries);
     }
 
-    Json(entries)
+    entries
+}
+
+async fn get_logs(
+    State(state): State<AdminState>,
+    Query(q): Query<LogsQuery>,
+) -> Json<Vec<ProxyLogEntry>> {
+    Json(build_logs_entries(&state, &q).await)
 }
 
 #[derive(Serialize)]
-struct RoutesResponse {
+pub(crate) struct RoutesResponse {
     routes: Vec<RouteView>,
     count: usize,
 }
 
 #[derive(Serialize)]
-struct RouteView {
+pub(crate) struct RouteView {
     host: String,
     path: String,
     path_type: String,
@@ -1393,7 +1405,7 @@ struct RouteView {
     middlewares: usize,
 }
 
-async fn get_routes(State(state): State<AdminState>) -> Json<RoutesResponse> {
+pub(crate) fn build_routes_response(state: &AdminState) -> RoutesResponse {
     let mut routes = Vec::new();
     for (host, route) in state.router.snapshot().all_routes() {
         let path_type = match route.path_type {
@@ -1410,7 +1422,11 @@ async fn get_routes(State(state): State<AdminState>) -> Json<RoutesResponse> {
         });
     }
     let count = routes.len();
-    Json(RoutesResponse { routes, count })
+    RoutesResponse { routes, count }
+}
+
+async fn get_routes(State(state): State<AdminState>) -> Json<RoutesResponse> {
+    Json(build_routes_response(&state))
 }
 
 async fn acme_http01_challenge(
@@ -1427,13 +1443,17 @@ async fn acme_http01_challenge(
     StatusCode::NOT_FOUND.into_response()
 }
 
-async fn get_config(State(state): State<AdminState>) -> Result<Json<Config>, (StatusCode, Json<ApiError>)> {
+pub(crate) async fn build_config(state: &AdminState) -> Config {
     let mut cfg = state.runtime_config.read().await.clone();
     crate::proxy_config::normalize_tls_config(&mut cfg.tls);
     if let Some(db) = &state.db {
         enrich_tls_expiries(&mut cfg, db).await;
     }
-    Ok(Json(cfg))
+    cfg
+}
+
+async fn get_config(State(state): State<AdminState>) -> Result<Json<Config>, (StatusCode, Json<ApiError>)> {
+    Ok(Json(build_config(&state).await))
 }
 
 async fn enrich_tls_expiries(cfg: &mut Config, db: &Database) {
@@ -1567,21 +1587,23 @@ struct ReloadResponse {
     route_count: usize,
 }
 
+pub(crate) async fn build_certificates(state: &AdminState) -> Result<Vec<CertificateRow>, String> {
+    let Some(db) = &state.db else {
+        return Ok(Vec::new());
+    };
+    db.list_certificates().await.map_err(|e| e.to_string())
+}
+
 async fn certificates_list(
     State(state): State<AdminState>,
 ) -> Result<Json<Vec<CertificateRow>>, (StatusCode, Json<ApiError>)> {
-    let Some(db) = &state.db else {
-        return Ok(Json(Vec::new()));
-    };
-    let rows = db.list_certificates().await.map_err(|e| {
-        (
+    match build_certificates(&state).await {
+        Ok(rows) => Ok(Json(rows)),
+        Err(error) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError {
-                error: e.to_string(),
-            }),
-        )
-    })?;
-    Ok(Json(rows))
+            Json(ApiError { error }),
+        )),
+    }
 }
 
 #[derive(Deserialize)]

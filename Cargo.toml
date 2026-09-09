@@ -47,7 +47,7 @@ h3-quiche = ["dep:quiche", "dep:tokio-quiche"]
 anyhow = "1.0.102"
 arc-swap = "1.9.1"
 async-trait = "0.1.89"
-axum = { version = "0.8", features = ["json", "macros"], optional = true }
+axum = { version = "0.8", features = ["json", "macros", "ws"], optional = true }
 bcrypt = { version = "0.17", optional = true }
 bytes = "1.10.1"
 chrono = { version = "0.4", features = ["serde"] }

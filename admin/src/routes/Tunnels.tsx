@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Cable, RefreshCw } from 'lucide-react';
 import { api } from '@/api/client';
+import { useLiveChannel } from '@/utils/useLiveChannel';
 import { cn } from '@/utils';
 
 type TunnelEntry = {
@@ -50,9 +51,15 @@ export function Tunnels() {
 
   useEffect(() => {
     void load();
-    const id = window.setInterval(() => void load(), 10000);
-    return () => window.clearInterval(id);
   }, [load]);
+
+  useLiveChannel<TunnelStatus>('tunnel', {
+    onData: (data) => {
+      setStatus(data);
+      setError('');
+      setLoading(false);
+    },
+  });
 
   return (
     <div className="space-y-6">

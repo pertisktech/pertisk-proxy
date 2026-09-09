@@ -42,6 +42,7 @@ import {
   tlsIndexForHost,
   type SiteSslMode,
 } from '@/utils/tlsHostMatch';
+import { useLiveChannel } from '@/utils/useLiveChannel';
 import { cn } from '@/utils';
 
 const PATH_TYPES = ['Exact', 'Prefix', 'ImplementationSpecific'];
@@ -170,22 +171,6 @@ export function Sites() {
       .finally(() => setLoading(false));
   }
 
-  function refreshQuiet() {
-    Promise.all([
-      api.config(),
-      api.dnsProviders.list().catch(() => []),
-      api.accessLists.list().catch(() => []),
-      api.wafPolicies.list().catch(() => []),
-    ])
-      .then(([c, dns, acls, wafs]) => {
-        applyConfig(c);
-        setDnsProviders(dns);
-        setAccessLists(acls);
-        setWafPolicies(wafs);
-      })
-      .catch(() => {});
-  }
-
   const hasPendingAcme = useMemo(() => {
     return sites.some((site) => {
       const tls = resolveTlsForHost(site.host, tlsList);
@@ -197,19 +182,10 @@ export function Sites() {
     load();
   }, []);
 
-  useEffect(() => {
-    if (!hasPendingAcme) return;
-    let cancelled = false;
-    const tick = () => {
-      if (cancelled || document.visibilityState !== 'visible') return;
-      refreshQuiet();
-    };
-    const t = setInterval(tick, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [hasPendingAcme]);
+  useLiveChannel<ProxyConfig>('config', {
+    enabled: hasPendingAcme,
+    onData: (c) => applyConfig(c),
+  });
 
   useEffect(() => {
     if (!siteModal || editingIndex === null || formSslMode !== 'generate' || formAcmeChallenge !== 'dns01') return;

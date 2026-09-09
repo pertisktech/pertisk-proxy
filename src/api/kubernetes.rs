@@ -329,28 +329,36 @@ pub struct NamespaceQuery {
 }
 
 pub async fn kubernetes_pods(State(state): State<AdminState>, Query(q): Query<NamespaceQuery>) -> Response {
+    match list_pods_rows(&state, q.namespace.as_deref()).await {
+        Ok(None) => not_available(),
+        Ok(Some(rows)) => Json(rows).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+pub(crate) async fn list_pods_rows(
+    state: &AdminState,
+    namespace: Option<&str>,
+) -> Result<Option<Vec<K8sPodRow>>, String> {
     if !state.viewer_mode {
-        return not_available();
+        return Ok(None);
     }
     let Some(ref client) = state.kube_client else {
-        return not_available();
+        return Ok(None);
     };
-    let api: Api<Pod> = if let Some(ref ns) = q.namespace {
+    let api: Api<Pod> = if let Some(ns) = namespace {
         Api::namespaced(client.clone(), ns)
     } else {
         Api::all(client.clone())
     };
-    let list = match api.list(&ListParams::default()).await {
-        Ok(l) => l,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
+    let list = api
+        .list(&ListParams::default())
+        .await
+        .map_err(|e| e.to_string())?;
     let nodes_api: Api<Node> = Api::all(client.clone());
     let node_status_map: std::collections::HashMap<String, String> = match nodes_api.list(&ListParams::default()).await {
         Ok(nodes) => nodes
@@ -500,7 +508,7 @@ pub async fn kubernetes_pods(State(state): State<AdminState>, Query(q): Query<Na
             }
         })
         .collect();
-    Json(rows).into_response()
+    Ok(Some(rows))
 }
 
 pub async fn kubernetes_deployments(State(state): State<AdminState>, Query(q): Query<NamespaceQuery>) -> Response {

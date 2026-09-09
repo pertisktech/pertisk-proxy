@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Activity, Globe, RefreshCw } from 'lucide-react';
 import { api, type LogEntry } from '@/api/client';
 import { Card } from '@/components/Card';
 import { Checkbox } from '@/components/Checkbox';
 import { formatDateTime } from '@/utils/dateFormat';
+import { useLiveChannel } from '@/utils/useLiveChannel';
 import { cn } from '@/utils';
 
 type LogKind = 'system' | 'http';
@@ -146,13 +147,28 @@ export function Logs() {
     }
 
     load();
-    if (!autoRefresh) return;
-    const timer = setInterval(load, 3000);
     return () => {
       cancelled = true;
-      clearInterval(timer);
     };
-  }, [kind, hostFilter, autoRefresh]);
+  }, [kind, hostFilter]);
+
+  const logsFilter = useMemo(
+    () => ({
+      type: (kind === 'http' ? 'proxy' : 'system') as 'proxy' | 'system',
+      host: kind === 'http' && hostFilter.trim() ? hostFilter.trim() : '',
+    }),
+    [kind, hostFilter],
+  );
+
+  useLiveChannel<LogEntry[]>('logs', {
+    enabled: autoRefresh,
+    logsFilter,
+    onData: (data) => {
+      setEntries([...data].reverse());
+      setError('');
+      setLoading(false);
+    },
+  });
 
   const emptyMessage =
     kind === 'http'
@@ -176,7 +192,7 @@ export function Logs() {
             label={
               <>
                 <RefreshCw size={14} className={cn('inline', autoRefresh && 'text-primary')} />
-                Auto-refresh 3s
+                Auto-refresh (live)
               </>
             }
           />

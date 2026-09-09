@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, type ProxyConfig, type RouteView } from '@/api/client';
+import { useLiveChannel } from '@/utils/useLiveChannel';
 import { useMode } from '@/context/ModeContext';
 import { cn } from '@/utils';
 
@@ -135,7 +136,6 @@ const KIND_COL: Record<string, number> = {
 const NODE_WIDTH = 192;
 const COL_GAP = 272;
 const ROW_GAP = 86;
-const REFRESH_INTERVAL = 15_000;
 
 function computeVisibleNodeIds(
   apiNodes: RouteMapNode[],
@@ -631,12 +631,17 @@ export function RouteMap() {
   const [collapsedNodeIds, setCollapsedNodeIds] = useState<Set<string>>(new Set());
   const [isSummaryPanelCollapsed, setIsSummaryPanelCollapsed] = useState(true);
 
+  const routesRef = useRef<RouteView[]>([]);
+  const configRef = useRef<ProxyConfig | null>(null);
+
   const fetchMap = useCallback(async () => {
     try {
       const [routesRes, config] = await Promise.all([
         api.routes(),
         api.config().catch(() => null),
       ]);
+      routesRef.current = routesRes.routes ?? [];
+      configRef.current = config;
       setData(buildRouteMapData(routesRes.routes ?? [], config));
       setError('');
     } catch (e) {
@@ -648,9 +653,25 @@ export function RouteMap() {
 
   useEffect(() => {
     fetchMap();
-    const timer = setInterval(fetchMap, REFRESH_INTERVAL);
-    return () => clearInterval(timer);
   }, [fetchMap]);
+
+  useLiveChannel<{ routes: RouteView[]; count: number }>('routes', {
+    onData: (routesRes) => {
+      routesRef.current = routesRes.routes ?? [];
+      setData(buildRouteMapData(routesRef.current, configRef.current));
+      setError('');
+      setLoading(false);
+    },
+  });
+
+  useLiveChannel<ProxyConfig>('config', {
+    onData: (config) => {
+      configRef.current = config;
+      setData(buildRouteMapData(routesRef.current, config));
+      setError('');
+      setLoading(false);
+    },
+  });
 
   const toggleNodeCollapse = useCallback((nodeId: string) => {
     setCollapsedNodeIds((previous) => {
