@@ -168,10 +168,14 @@ export function Certificates() {
   }, [refreshAll]);
 
   useLiveChannel<ProxyConfig>('config', {
-    onData: (nextConfig) => setConfig(nextConfig),
+    onData: (nextConfig) => {
+      if (nextConfig && Array.isArray(nextConfig.tls)) setConfig(nextConfig);
+    },
   });
   useLiveChannel<CertificateRow[]>('certificates', {
-    onData: (nextCertRows) => setCertRows(nextCertRows),
+    onData: (nextCertRows) => {
+      if (Array.isArray(nextCertRows)) setCertRows(nextCertRows);
+    },
   });
 
   function getCertIdForTls(tls: TlsConfig, rows = certRows): string | null {
@@ -209,21 +213,23 @@ export function Certificates() {
       id: tlsItemId(tls, originalIndex),
     }));
     for (const row of certRows) {
-      if (row.source_type === 'acme') continue;
       const covered = items.some(
         ({ tls }) => hostsMatch(tls.hosts, row.hosts) || certMatchesTls(row.hosts, tls.hosts),
       );
-      if (!covered) {
-        items.push({
-          tls: {
-            hosts: row.hosts,
-            source: { type: 'file', cert: '', key: '' },
-            expires_at: row.expires_at,
-          },
-          originalIndex: -1,
-          id: `cert:${row.id}`,
-        });
-      }
+      if (covered) continue;
+      const source: TlsSource =
+        row.source_type === 'acme'
+          ? { type: 'acme', challenge: 'http01' }
+          : { type: 'file', cert: '', key: '' };
+      items.push({
+        tls: {
+          hosts: row.hosts,
+          source,
+          expires_at: row.expires_at,
+        },
+        originalIndex: -1,
+        id: `cert:${row.id}`,
+      });
     }
     return items;
   }, [tlsList, certRows]);
@@ -445,7 +451,7 @@ export function Certificates() {
         actionIcon={<FileUp size={16} />}
       />
 
-      {tlsList.length === 0 ? (
+      {tlsItems.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border py-16 text-center">
           <Award className="mx-auto text-muted" size={40} />
           <h3 className="mt-3 font-semibold">No certificates configured</h3>
@@ -572,7 +578,7 @@ export function Certificates() {
         </div>
       )}
 
-      <Pagination totalItems={tlsList.length} pageSize={pageSize} page={page} onPageChange={setPage} />
+      <Pagination totalItems={sortedTlsItems.length} pageSize={pageSize} page={page} onPageChange={setPage} />
 
       <Modal open={uploadOpen} onClose={() => setUploadOpen(false)} title="Import certificate" wide protect={uploading}>
         <form onSubmit={handleUploadSubmit} className="space-y-4">
