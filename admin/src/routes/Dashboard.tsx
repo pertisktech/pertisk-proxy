@@ -399,7 +399,7 @@ export function Dashboard() {
             <div>
               <h2 className="text-lg font-semibold">Ingress pods</h2>
               <p className="text-sm text-text-secondary">
-                Pods for this controller deployment only (live via WebSocket)
+                Pods for this controller deployment only (live)
               </p>
             </div>
             <span className="text-sm text-text-secondary">

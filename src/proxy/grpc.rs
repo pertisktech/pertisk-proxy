@@ -97,14 +97,41 @@ pub fn is_sse_request(method: &Method, path: &str, headers: &http::HeaderMap) ->
     path == "/events" || path == "/api/events" || path.ends_with("/events")
 }
 
-/// Long-lived streams: Connect/gRPC Watch, SSE, etc.
+/// Long-lived streams: Connect/gRPC Watch, SSE, admin live SSE, etc.
 pub fn is_long_lived_api_stream(method: &Method, path: &str, headers: &http::HeaderMap) -> bool {
     if is_sse_request(method, path, headers) {
+        return true;
+    }
+    let path = path.split('?').next().unwrap_or(path);
+    if *method == Method::GET && path == "/api/live" {
         return true;
     }
     *method == Method::POST
         && is_grpc_rpc_path(path)
         && (is_grpc_server_streaming(path) || is_connect_request(headers))
+}
+
+/// HTTP/1.1 WebSocket upgrade request.
+pub fn is_websocket_upgrade(method: &Method, headers: &http::HeaderMap) -> bool {
+    if *method != Method::GET {
+        return false;
+    }
+    let upgrade = headers
+        .get(header::UPGRADE.as_str())
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.split(',').any(|p| p.trim().eq_ignore_ascii_case("websocket")))
+        .unwrap_or(false);
+    if !upgrade {
+        return false;
+    }
+    headers
+        .get(header::CONNECTION.as_str())
+        .and_then(|v| v.to_str().ok())
+        .map(|v| {
+            v.split(',')
+                .any(|p| p.trim().eq_ignore_ascii_case("upgrade"))
+        })
+        .unwrap_or(false)
 }
 
 /// gRPC method name from an RPC path (`/api/foo.Bar/Baz` → `Baz`).

@@ -168,6 +168,7 @@ pub fn router(state: AdminState) -> Router {
         .route("/api/auth/login", post(auth_login))
         .route("/api/auth/check", get(auth_check))
         .route("/api/ws", get(ws::ws_handler))
+        .route("/api/live", get(ws::live_sse_handler))
         .route("/live", get(|| async { "ok" }))
         .route("/ready", get(|| async { "ok" }))
         .route("/healthz", get(|| async { "ok" }))

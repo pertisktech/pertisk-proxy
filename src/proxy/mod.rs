@@ -35,6 +35,7 @@ pub struct RequestCtx {
     pub is_grpc: bool,
     pub is_grpc_web: bool,
     pub is_long_lived_stream: bool,
+    pub is_websocket: bool,
     pub is_registry: bool,
     pub log_started: Option<Instant>,
     pub log_upstream: Option<String>,
@@ -53,6 +54,7 @@ impl From<crate::proxy::forward::MiddlewareAction> for RequestCtx {
             is_grpc: false,
             is_grpc_web: false,
             is_long_lived_stream: false,
+            is_websocket: false,
             is_registry: false,
             log_started: None,
             log_upstream: None,
@@ -192,6 +194,10 @@ impl ProxyHttp for Gateway {
         );
         ctx.is_long_lived_stream =
             grpc::is_long_lived_api_stream(&req.method, req.uri.path(), &req.headers);
+        ctx.is_websocket = grpc::is_websocket_upgrade(&req.method, &req.headers);
+        if ctx.is_websocket {
+            ctx.is_long_lived_stream = true;
+        }
         ctx.is_registry = registry::is_oci_registry_path(req.uri.path());
         if ctx.is_long_lived_stream {
             grpc::prepare_long_lived_downstream_session(session);
@@ -317,11 +323,13 @@ impl ProxyHttp for Gateway {
             let is_grpc = ctx.is_grpc;
             let is_grpc_web = ctx.is_grpc_web;
             let is_long_lived_stream = ctx.is_long_lived_stream;
+            let is_websocket = ctx.is_websocket;
             let is_registry = ctx.is_registry;
             *ctx = plan.middleware.into();
             ctx.is_grpc = is_grpc;
             ctx.is_grpc_web = is_grpc_web;
             ctx.is_long_lived_stream = is_long_lived_stream;
+            ctx.is_websocket = is_websocket;
             ctx.is_registry = is_registry;
         }
 
@@ -519,11 +527,13 @@ impl ProxyHttp for Gateway {
             let is_grpc = ctx.is_grpc;
             let is_grpc_web = ctx.is_grpc_web;
             let is_long_lived_stream = ctx.is_long_lived_stream;
+            let is_websocket = ctx.is_websocket;
             let is_registry = ctx.is_registry;
             *ctx = plan.middleware.into();
             ctx.is_grpc = is_grpc;
             ctx.is_grpc_web = is_grpc_web;
             ctx.is_long_lived_stream = is_long_lived_stream;
+            ctx.is_websocket = is_websocket;
             ctx.is_registry = is_registry;
         }
 
@@ -644,7 +654,9 @@ impl ProxyHttp for Gateway {
         }
         let streaming = ctx.is_long_lived_stream
             || (ctx.is_grpc && grpc::is_grpc_server_streaming(path));
-        if streaming && upstream_response.status.is_success() {
+        if ctx.is_websocket || upstream_response.status.as_u16() == 101 {
+            // Preserve Connection/Upgrade for WebSocket handshakes.
+        } else if streaming && upstream_response.status.is_success() {
             grpc::prepare_streaming_response_headers(upstream_response);
         } else if ctx.is_grpc || ctx.is_long_lived_stream || session.as_downstream().is_http2() {
             grpc::strip_hop_by_hop_response_headers(upstream_response);
@@ -837,6 +849,9 @@ fn configure_upstream_peer(
         peer.options.alpn = ALPN::H2;
         peer.options.max_h2_streams = 128;
         peer.options.h2_ping_interval = Some(grpc::grpc_h2_ping_interval());
+    } else if ctx.is_websocket {
+        // WebSocket upgrades require HTTP/1.1 end-to-end.
+        peer.options.alpn = ALPN::H1;
     }
     if ctx.is_grpc || ctx.is_long_lived_stream {
         let timeout = grpc::grpc_upstream_timeout();

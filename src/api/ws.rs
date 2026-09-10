@@ -1,6 +1,11 @@
-//! Live admin WebSocket: subscribe to snapshot channels that replace UI fetch intervals.
+//! Live admin updates: WebSocket (`/api/ws`) and SSE (`/api/live`).
+//!
+//! Ingress mode terminates TLS on the data plane with HTTP/2 preferred. Browsers then often use
+//! WebSocket-over-H2 (Extended CONNECT), which Pingora does not upgrade. SSE is a normal streaming
+//! GET and works through that path; keep `/api/ws` for direct management access.
 
 use std::collections::{HashMap, HashSet};
+use std::convert::Infallible;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,9 +16,12 @@ use axum::{
         Query, State,
     },
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
 };
-use futures::{SinkExt, StreamExt};
+use futures::{SinkExt, Stream, StreamExt};
 use serde::Deserialize;
 use tokio::sync::{mpsc, Mutex};
 use tracing::debug;
@@ -24,12 +32,22 @@ use super::{
     is_token_authorized, AdminState, LogsQuery,
 };
 
-const MAX_WS_CONNECTIONS: usize = 64;
-static WS_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
+const MAX_LIVE_CONNECTIONS: usize = 64;
+static LIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Deserialize)]
 pub struct WsConnectQuery {
     token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LiveSseQuery {
+    token: Option<String>,
+    /// Comma-separated channel names.
+    channels: Option<String>,
+    #[serde(rename = "logs_type")]
+    logs_type: Option<String>,
+    logs_host: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -115,33 +133,170 @@ impl Default for ConnState {
     }
 }
 
+fn parse_channels(raw: Option<&str>) -> HashSet<Channel> {
+    raw.unwrap_or("")
+        .split(',')
+        .filter_map(|c| Channel::parse(c.trim()))
+        .collect()
+}
+
+fn acquire_live_slot() -> Result<(), Response> {
+    let prev = LIVE_CONNECTIONS.fetch_add(1, Ordering::SeqCst);
+    if prev >= MAX_LIVE_CONNECTIONS {
+        LIVE_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
+        return Err((StatusCode::SERVICE_UNAVAILABLE, "too many live connections").into_response());
+    }
+    Ok(())
+}
+
+fn release_live_slot() {
+    LIVE_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
+}
+
+struct LiveSlotGuard;
+impl Drop for LiveSlotGuard {
+    fn drop(&mut self) {
+        release_live_slot();
+    }
+}
+
+async fn authorize_live(state: &AdminState, token: Option<&str>, headers: &HeaderMap) -> bool {
+    let token = token
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .or_else(|| extract_bearer(headers));
+    is_token_authorized(state, token).await
+}
+
 pub async fn ws_handler(
     State(state): State<AdminState>,
     Query(q): Query<WsConnectQuery>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let token = q
-        .token
-        .as_deref()
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .or_else(|| extract_bearer(&headers));
-
-    if !is_token_authorized(&state, token).await {
+    if !authorize_live(&state, q.token.as_deref(), &headers).await {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
-
-    let prev = WS_CONNECTIONS.fetch_add(1, Ordering::SeqCst);
-    if prev >= MAX_WS_CONNECTIONS {
-        WS_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
-        return (StatusCode::SERVICE_UNAVAILABLE, "too many websocket connections").into_response();
+    if let Err(resp) = acquire_live_slot() {
+        return resp;
     }
 
     ws.on_upgrade(move |socket| async move {
         handle_socket(state, socket).await;
-        WS_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
+        release_live_slot();
     })
+}
+
+/// SSE live feed used by the admin UI (works through ingress HTTP/2).
+pub async fn live_sse_handler(
+    State(state): State<AdminState>,
+    Query(q): Query<LiveSseQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !authorize_live(&state, q.token.as_deref(), &headers).await {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    if let Err(resp) = acquire_live_slot() {
+        return resp;
+    }
+
+    let channels = parse_channels(q.channels.as_deref());
+    if channels.is_empty() {
+        release_live_slot();
+        return (StatusCode::BAD_REQUEST, "channels required").into_response();
+    }
+
+    let logs_filter = LogsQuery {
+        log_type: q.logs_type,
+        host: q.logs_host,
+    };
+
+    Sse::new(sse_stream(state, channels, logs_filter))
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("ping"),
+        )
+        .into_response()
+}
+
+fn sse_stream(
+    state: AdminState,
+    channels: HashSet<Channel>,
+    logs_filter: LogsQuery,
+) -> impl Stream<Item = Result<Event, Infallible>> {
+    let (tx, rx) = mpsc::channel::<Event>(8);
+    tokio::spawn(async move {
+        let _guard = LiveSlotGuard;
+        let mut last_payload: HashMap<Channel, String> = HashMap::new();
+        let mut last_sent_at: HashMap<Channel, std::time::Instant> = HashMap::new();
+        let channel_list: Vec<Channel> = channels.into_iter().collect();
+
+        for ch in &channel_list {
+            if let Some(event) =
+                channel_event(&state, *ch, &logs_filter, &mut last_payload, true).await
+            {
+                last_sent_at.insert(*ch, std::time::Instant::now());
+                if tx.send(event).await.is_err() {
+                    return;
+                }
+            }
+        }
+
+        let mut interval = tokio::time::interval(Duration::from_millis(500));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let now = std::time::Instant::now();
+            for ch in &channel_list {
+                let due = last_sent_at
+                    .get(ch)
+                    .map(|t| now.duration_since(*t) >= ch.interval())
+                    .unwrap_or(true);
+                if !due {
+                    continue;
+                }
+                match channel_event(&state, *ch, &logs_filter, &mut last_payload, false).await {
+                    Some(event) => {
+                        last_sent_at.insert(*ch, std::time::Instant::now());
+                        if tx.send(event).await.is_err() {
+                            return;
+                        }
+                    }
+                    None => {
+                        last_sent_at.insert(*ch, std::time::Instant::now());
+                    }
+                }
+            }
+        }
+    });
+
+    futures::stream::unfold(rx, |mut rx| async move {
+        match rx.recv().await {
+            Some(event) => Some((Ok::<Event, Infallible>(event), rx)),
+            None => None,
+        }
+    })
+}
+
+async fn channel_event(
+    state: &AdminState,
+    channel: Channel,
+    logs_filter: &LogsQuery,
+    last_payload: &mut HashMap<Channel, String>,
+    force: bool,
+) -> Option<Event> {
+    let payload = match snapshot_channel(state, channel, logs_filter).await {
+        Ok(data) => serde_json::json!({ "channel": channel.as_str(), "data": data }).to_string(),
+        Err(error) => {
+            serde_json::json!({ "channel": channel.as_str(), "error": error }).to_string()
+        }
+    };
+    if !force && last_payload.get(&channel).is_some_and(|prev| prev == &payload) {
+        return None;
+    }
+    last_payload.insert(channel, payload.clone());
+    Some(Event::default().data(payload))
 }
 
 async fn handle_socket(state: AdminState, socket: WebSocket) {
@@ -225,7 +380,6 @@ async fn handle_client_text(
                     guard.last_sent_at.remove(ch);
                 }
             }
-            // Immediate push for newly subscribed channels.
             for ch in parsed {
                 push_channel(state, conn, tx, ch, true).await?;
             }
@@ -243,10 +397,7 @@ async fn handle_client_text(
         ClientMsg::LogsFilter { log_type, host } => {
             {
                 let mut guard = conn.lock().await;
-                guard.logs_filter = LogsQuery {
-                    log_type,
-                    host,
-                };
+                guard.logs_filter = LogsQuery { log_type, host };
                 guard.last_payload.remove(&Channel::Logs);
                 guard.last_sent_at.remove(&Channel::Logs);
             }
@@ -324,11 +475,9 @@ async fn push_channel(
 
     {
         let mut guard = conn.lock().await;
-        if !force {
-            if guard.last_payload.get(&channel).is_some_and(|prev| prev == &payload) {
-                guard.last_sent_at.insert(channel, std::time::Instant::now());
-                return Ok(());
-            }
+        if !force && guard.last_payload.get(&channel).is_some_and(|prev| prev == &payload) {
+            guard.last_sent_at.insert(channel, std::time::Instant::now());
+            return Ok(());
         }
         guard.last_payload.insert(channel, payload.clone());
         guard.last_sent_at.insert(channel, std::time::Instant::now());

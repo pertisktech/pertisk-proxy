@@ -21,21 +21,29 @@ type ServerMsg =
   | { channel: string; data: unknown; error?: undefined }
   | { channel?: string; error: string; data?: undefined };
 
-function wsUrl(): string {
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+/**
+ * Prefer SSE (`/api/live`) over WebSocket. Ingress terminates TLS with HTTP/2 preferred;
+ * browser WebSocket-over-H2 fails with Pingora, while SSE streams normally.
+ */
+function liveUrl(channels: LiveChannel[], logsFilter: LogsFilter): string {
   const token = getToken();
-  const q = token ? `?token=${encodeURIComponent(token)}` : '';
-  return `${proto}//${window.location.host}/api/ws${q}`;
+  const params = new URLSearchParams();
+  if (token) params.set('token', token);
+  params.set('channels', channels.join(','));
+  if (logsFilter.type) params.set('logs_type', logsFilter.type);
+  if (logsFilter.host) params.set('logs_host', logsFilter.host);
+  return `/api/live?${params.toString()}`;
 }
 
 class LiveClient {
-  private ws: WebSocket | null = null;
+  private es: EventSource | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private backoffMs = 1000;
   private readonly handlers = new Map<LiveChannel, Set<ChannelHandler>>();
   private readonly refCounts = new Map<LiveChannel, number>();
   private logsFilter: LogsFilter = {};
   private intentionalClose = false;
+  private connectedKey = '';
 
   subscribe(channel: LiveChannel, handler: ChannelHandler): () => void {
     let set = this.handlers.get(channel);
@@ -46,20 +54,16 @@ class LiveClient {
     set.add(handler);
     const count = (this.refCounts.get(channel) ?? 0) + 1;
     this.refCounts.set(channel, count);
-    this.ensureConnected();
-    if (count === 1 && this.ws?.readyState === WebSocket.OPEN) {
-      this.send({ op: 'subscribe', channels: [channel] });
-      if (channel === 'logs') {
-        this.sendLogsFilter();
-      }
-    }
+    this.syncConnection();
     return () => this.unsubscribe(channel, handler);
   }
 
   setLogsFilter(filter: LogsFilter) {
+    const prev = `${this.logsFilter.type ?? ''}|${this.logsFilter.host ?? ''}`;
     this.logsFilter = filter;
-    if ((this.refCounts.get('logs') ?? 0) > 0 && this.ws?.readyState === WebSocket.OPEN) {
-      this.sendLogsFilter();
+    const next = `${filter.type ?? ''}|${filter.host ?? ''}`;
+    if (prev !== next && (this.refCounts.get('logs') ?? 0) > 0) {
+      this.syncConnection(true);
     }
   }
 
@@ -68,53 +72,61 @@ class LiveClient {
     set?.delete(handler);
     if (set && set.size === 0) this.handlers.delete(channel);
     const count = (this.refCounts.get(channel) ?? 0) - 1;
-    if (count <= 0) {
-      this.refCounts.delete(channel);
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        this.send({ op: 'unsubscribe', channels: [channel] });
-      }
-    } else {
-      this.refCounts.set(channel, count);
-    }
-    if (this.refCounts.size === 0) {
-      this.close();
-    }
+    if (count <= 0) this.refCounts.delete(channel);
+    else this.refCounts.set(channel, count);
+    if (this.refCounts.size === 0) this.close();
+    else this.syncConnection();
   }
 
-  private ensureConnected() {
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+  private channelList(): LiveChannel[] {
+    return [...this.refCounts.keys()].sort();
+  }
+
+  private connectionKey(channels: LiveChannel[]): string {
+    return `${channels.join(',')}|${this.logsFilter.type ?? ''}|${this.logsFilter.host ?? ''}|${getToken() ?? ''}`;
+  }
+
+  private syncConnection(force = false) {
+    const channels = this.channelList();
+    if (channels.length === 0) {
+      this.close();
       return;
     }
-    this.intentionalClose = false;
-    const ws = new WebSocket(wsUrl());
-    this.ws = ws;
+    const key = this.connectionKey(channels);
+    if (!force && this.es && this.connectedKey === key) {
+      return;
+    }
+    this.open(channels, key);
+  }
 
-    ws.onopen = () => {
+  private open(channels: LiveChannel[], key: string) {
+    this.intentionalClose = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.es) {
+      this.es.close();
+      this.es = null;
+    }
+
+    const es = new EventSource(liveUrl(channels, this.logsFilter));
+    this.es = es;
+    this.connectedKey = key;
+
+    es.onopen = () => {
       this.backoffMs = 1000;
-      const channels = [...this.refCounts.keys()];
-      if (channels.length > 0) {
-        this.send({ op: 'subscribe', channels });
-        if (this.refCounts.has('logs')) {
-          this.sendLogsFilter();
-        }
-      }
     };
 
-    ws.onmessage = (ev) => {
+    es.onmessage = (ev) => {
       let msg: ServerMsg;
       try {
         msg = JSON.parse(String(ev.data)) as ServerMsg;
       } catch {
         return;
       }
-      if (msg.error && !msg.channel) {
-        return;
-      }
-      if (!msg.channel) return;
+      if (!msg.channel || msg.error != null) return;
       const channel = msg.channel as LiveChannel;
-      if (msg.error != null) {
-        return;
-      }
       const set = this.handlers.get(channel);
       if (!set) return;
       for (const handler of [...set]) {
@@ -126,48 +138,35 @@ class LiveClient {
       }
     };
 
-    ws.onclose = (ev) => {
-      this.ws = null;
-      if (ev.code === 1008 || ev.code === 4401) {
-        clearToken();
-        const onLogin =
-          window.location.pathname === '/login' || window.location.pathname.startsWith('/login/');
-        if (!onLogin) window.location.href = '/login';
-        return;
+    es.onerror = () => {
+      // EventSource auto-retries; after auth failures readyState becomes CLOSED.
+      if (es.readyState === EventSource.CLOSED) {
+        this.es = null;
+        if (this.intentionalClose || this.refCounts.size === 0) return;
+        // Likely unauthorized — mirror REST client behavior after a few failures.
+        if (this.backoffMs >= 8000) {
+          clearToken();
+          const onLogin =
+            window.location.pathname === '/login' || window.location.pathname.startsWith('/login/');
+          if (!onLogin) window.location.href = '/login';
+          return;
+        }
+        const delay = this.backoffMs;
+        this.backoffMs = Math.min(this.backoffMs * 2, 15000);
+        this.reconnectTimer = setTimeout(() => this.syncConnection(true), delay);
       }
-      if (this.intentionalClose || this.refCounts.size === 0) return;
-      const delay = this.backoffMs;
-      this.backoffMs = Math.min(this.backoffMs * 2, 15000);
-      this.reconnectTimer = setTimeout(() => this.ensureConnected(), delay);
     };
-
-    ws.onerror = () => {
-      /* onclose handles reconnect */
-    };
-  }
-
-  private send(payload: Record<string, unknown>) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(payload));
-    }
-  }
-
-  private sendLogsFilter() {
-    this.send({
-      op: 'logs_filter',
-      type: this.logsFilter.type || undefined,
-      host: this.logsFilter.host || undefined,
-    });
   }
 
   private close() {
     this.intentionalClose = true;
+    this.connectedKey = '';
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.ws?.close();
-    this.ws = null;
+    this.es?.close();
+    this.es = null;
   }
 }
 
