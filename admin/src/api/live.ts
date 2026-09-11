@@ -1,4 +1,4 @@
-import { getToken, clearToken } from '@/auth';
+import { getToken } from '@/auth';
 
 export type LiveChannel =
   | 'management'
@@ -24,6 +24,8 @@ type ServerMsg =
 /**
  * Prefer SSE (`/api/live`) over WebSocket. Ingress terminates TLS with HTTP/2 preferred;
  * browser WebSocket-over-H2 fails with Pingora, while SSE streams normally.
+ *
+ * Live transport failures must never clear the session — only REST 401 does that.
  */
 function liveUrl(channels: LiveChannel[], logsFilter: LogsFilter): string {
   const token = getToken();
@@ -139,22 +141,13 @@ class LiveClient {
     };
 
     es.onerror = () => {
-      // EventSource auto-retries; after auth failures readyState becomes CLOSED.
-      if (es.readyState === EventSource.CLOSED) {
-        this.es = null;
-        if (this.intentionalClose || this.refCounts.size === 0) return;
-        // Likely unauthorized — mirror REST client behavior after a few failures.
-        if (this.backoffMs >= 8000) {
-          clearToken();
-          const onLogin =
-            window.location.pathname === '/login' || window.location.pathname.startsWith('/login/');
-          if (!onLogin) window.location.href = '/login';
-          return;
-        }
-        const delay = this.backoffMs;
-        this.backoffMs = Math.min(this.backoffMs * 2, 15000);
-        this.reconnectTimer = setTimeout(() => this.syncConnection(true), delay);
-      }
+      // EventSource may close on proxy blips / non-200; never treat that as logout.
+      if (es.readyState !== EventSource.CLOSED) return;
+      this.es = null;
+      if (this.intentionalClose || this.refCounts.size === 0) return;
+      const delay = this.backoffMs;
+      this.backoffMs = Math.min(this.backoffMs * 2, 15000);
+      this.reconnectTimer = setTimeout(() => this.syncConnection(true), delay);
     };
   }
 
