@@ -2,38 +2,17 @@ import { Moon, Sun } from 'lucide-react';
 import { useTheme } from '@/context/ThemeContext';
 
 export function ThemeToggle() {
-  const { theme, setTheme } = useTheme();
+  const { isDark, toggleTheme } = useTheme();
 
   return (
-    <div
-      role="radiogroup"
-      aria-label="Color theme"
-      className="flex h-9 items-center gap-0.5 rounded-md border border-border bg-card p-0.5"
+    <button
+      type="button"
+      onClick={toggleTheme}
+      aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+      title={isDark ? 'Light' : 'Dark'}
+      className="flex size-9 items-center justify-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:text-foreground"
     >
-      {(
-        [
-          { value: 'light' as const, label: 'Light', icon: Sun },
-          { value: 'dark' as const, label: 'Dark', icon: Moon },
-        ] as const
-      ).map(({ value, label, icon: Icon }) => {
-        const active = theme === value;
-        return (
-          <button
-            key={value}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            aria-label={label}
-            title={label}
-            onClick={() => setTheme(value)}
-            className={`flex size-7 items-center justify-center rounded-[5px] transition-colors ${
-              active ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            <Icon className="size-4" />
-          </button>
-        );
-      })}
-    </div>
+      {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+    </button>
   );
 }
