@@ -81,7 +81,7 @@ export function Layout({ onLogout, loading = false }: { onLogout: () => void; lo
           onLogout={onLogout}
         />
         <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
-          <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+          <div className="flex w-full flex-col gap-6">
             {loading ? <p className="text-sm text-muted-foreground">Loading…</p> : <Outlet />}
           </div>
         </main>

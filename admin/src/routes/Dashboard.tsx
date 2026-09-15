@@ -1,12 +1,23 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, Cpu, HardDrive, MemoryStick } from 'lucide-react';
 import { api, type K8sPodRow, type ManagementInfo, type Metrics, type ProxyConfig } from '@/api/client';
+import {
+  BandwidthChart,
+  ChartLegend,
+  RequestsChart,
+  StatusMixChart,
+  type BandwidthPoint,
+  type RequestPoint,
+  type StatusMixItem,
+} from '@/components/console/charts';
 import { PageHeader } from '@/components/console/page-header';
 import { Panel } from '@/components/console/panel';
 import { StatCard } from '@/components/console/stat-card';
 import { StatusBadge } from '@/components/console/status-badge';
 import { useLiveChannel } from '@/utils/useLiveChannel';
+
+const MAX_POINTS = 24;
 
 function formatUptime(secs: number) {
   const total = Math.max(0, Math.floor(Number.isFinite(secs) ? secs : 0));
@@ -25,6 +36,14 @@ function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function formatBytesPerSec(bytesPerSec: number) {
+  if (!Number.isFinite(bytesPerSec) || bytesPerSec <= 0) return '0 B/s';
+  if (bytesPerSec < 1024) return `${bytesPerSec.toFixed(0)} B/s`;
+  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
+  if (bytesPerSec < 1024 * 1024 * 1024) return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
+  return `${(bytesPerSec / (1024 * 1024 * 1024)).toFixed(2)} GB/s`;
 }
 
 function clampPercent(value: number) {
@@ -62,19 +81,6 @@ function filterIngressPods(pods: K8sPodRow[], info: ManagementInfo): K8sPodRow[]
     if (namespace && pod.namespace !== namespace) return false;
     return true;
   });
-}
-
-function prometheusUrls(metricsAddr: string | undefined, hostname: string | null | undefined) {
-  const addr = metricsAddr?.trim() || '0.0.0.0:9990';
-  const fallbackHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-  const displayHost = hostname?.trim() || fallbackHost;
-  const lastColon = addr.lastIndexOf(':');
-  const bindHost = lastColon > 0 ? addr.slice(0, lastColon) : '0.0.0.0';
-  const port = lastColon > 0 ? addr.slice(lastColon + 1) : '9990';
-  const host =
-    bindHost === '0.0.0.0' || bindHost === '[::]' || bindHost === '::' ? displayHost : bindHost.replace(/^\[|\]$/g, '');
-  const base = `http://${host.includes(':') ? `[${host}]` : host}:${port}`;
-  return { metrics: `${base}/metrics`, health: `${base}/health` };
 }
 
 function Meter({
@@ -116,6 +122,15 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function tickLabel(ts: number) {
+  return new Date(ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+function deltaRate(curr: number, prev: number, seconds: number): number {
+  if (seconds <= 0 || curr < prev) return 0;
+  return (curr - prev) / seconds;
+}
+
 export function Dashboard() {
   const [info, setInfo] = useState<ManagementInfo | null>(null);
   const [config, setConfig] = useState<ProxyConfig | null>(null);
@@ -123,6 +138,10 @@ export function Dashboard() {
   const [k8sPods, setK8sPods] = useState<K8sPodRow[]>([]);
   const [k8sLoading, setK8sLoading] = useState(false);
   const [error, setError] = useState('');
+  const [requestSeries, setRequestSeries] = useState<RequestPoint[]>([]);
+  const [bandwidthSeries, setBandwidthSeries] = useState<BandwidthPoint[]>([]);
+  const [rates, setRates] = useState({ sent: 0, recv: 0 });
+  const prevMetrics = useRef<{ m: Metrics; at: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -157,6 +176,38 @@ export function Dashboard() {
   useLiveChannel<Metrics>('metrics', {
     onData: (m) => setMetrics(m),
   });
+
+  useEffect(() => {
+    if (!metrics) return;
+    const now = Date.now();
+    const prev = prevMetrics.current;
+    prevMetrics.current = { m: metrics, at: now };
+    if (!prev) return;
+
+    const secs = (now - prev.at) / 1000;
+    const h2 = deltaRate(metrics.h2_requests_total, prev.m.h2_requests_total, secs);
+    const h3 = deltaRate(metrics.h3_requests_total, prev.m.h3_requests_total, secs);
+    const egress = deltaRate(metrics.bytes_sent_total, prev.m.bytes_sent_total, secs);
+    const ingress = deltaRate(metrics.bytes_received_total, prev.m.bytes_received_total, secs);
+    setRates({ sent: egress, recv: ingress });
+
+    const label = tickLabel(now);
+    setRequestSeries((series) => {
+      const next = [...series, { t: label, http2: Math.round(h2 * 10) / 10, http3: Math.round(h3 * 10) / 10 }];
+      return next.slice(-MAX_POINTS);
+    });
+    setBandwidthSeries((series) => {
+      const next = [
+        ...series,
+        {
+          t: label,
+          egress: Math.round((egress / (1024 * 1024)) * 100) / 100,
+          ingress: Math.round((ingress / (1024 * 1024)) * 100) / 100,
+        },
+      ];
+      return next.slice(-MAX_POINTS);
+    });
+  }, [metrics]);
 
   const podsLive = info?.mode === 'ingress';
   useEffect(() => {
@@ -196,6 +247,34 @@ export function Dashboard() {
     [k8sPods, info],
   );
 
+  const statusMix: StatusMixItem[] = useMemo(() => {
+    const h2 = metrics?.h2_requests_total ?? 0;
+    const h3 = metrics?.h3_requests_total ?? 0;
+    const total = h2 + h3;
+    const errors = metrics?.upstream_errors_total ?? 0;
+    const blocked =
+      (metrics?.waf_blocked_total ?? 0) +
+      (metrics?.bot_blocked_total ?? 0) +
+      (metrics?.geoip_blocked_total ?? 0);
+    if (total <= 0) {
+      return [
+        { name: '2xx', value: 100, color: 'var(--color-success)' },
+        { name: '3xx', value: 0, color: 'var(--color-info)' },
+        { name: '4xx', value: 0, color: 'var(--color-warning)' },
+        { name: '5xx', value: 0, color: 'var(--color-destructive)' },
+      ];
+    }
+    const errPct = clampPercent((Math.min(errors, total) / total) * 100);
+    const blockPct = clampPercent((Math.min(blocked, total) / total) * 100);
+    const successPct = clampPercent(100 - errPct - blockPct);
+    return [
+      { name: '2xx', value: Math.round(successPct * 10) / 10, color: 'var(--color-success)' },
+      { name: 'blocked', value: Math.round(blockPct * 10) / 10, color: 'var(--color-warning)' },
+      { name: '5xx', value: Math.round(errPct * 10) / 10, color: 'var(--color-destructive)' },
+      { name: 'other', value: Math.round(Math.max(0, 100 - successPct - blockPct - errPct) * 10) / 10, color: 'var(--color-info)' },
+    ].filter((s) => s.value > 0 || s.name === '2xx');
+  }, [metrics]);
+
   if (error) return <p className="text-destructive">{error}</p>;
   if (!info) return <p className="text-sm text-muted-foreground">Loading…</p>;
 
@@ -208,11 +287,6 @@ export function Dashboard() {
     info.disk_used_bytes != null && info.disk_total_bytes
       ? clampPercent((info.disk_used_bytes / info.disk_total_bytes) * 100)
       : null;
-  const processMemoryPercent =
-    info.process_memory_bytes != null && info.memory_total_bytes
-      ? clampPercent((info.process_memory_bytes / info.memory_total_bytes) * 100)
-      : null;
-  const processCpu = info.process_cpu_usage_percent ?? null;
 
   const activeConnections = metrics?.active_connections ?? 0;
   const siteH2Totals = metrics?.site_h2_requests_total ?? {};
@@ -231,11 +305,44 @@ export function Dashboard() {
   const h3Total = metrics?.h3_requests_total ?? 0;
   const httpTotal = h2Total + h3Total;
   const upstreamErrors = metrics?.upstream_errors_total ?? 0;
-  const successPct =
-    httpTotal > 0 ? ((httpTotal - Math.min(upstreamErrors, httpTotal)) / httpTotal) * 100 : null;
-
-  const promUrls = prometheusUrls(metrics?.metrics_addr, info.hostname);
+  const h3Share = httpTotal > 0 ? (h3Total / httpTotal) * 100 : null;
+  const successPct = statusMix.find((s) => s.name === '2xx')?.value ?? null;
   const sitesHref = isIngress ? '/sites/ingress' : '/sites';
+
+  const stats = [
+    { label: 'Sites', value: String(info.site_count), hint: `${info.route_count} routes` },
+    { label: 'Routes', value: String(info.route_count), hint: `${info.tls_count} TLS entries` },
+    {
+      label: 'Active connections',
+      value: activeConnections.toLocaleString(),
+      hint: `${formatBytes(metrics?.bytes_sent_total ?? 0)} sent`,
+    },
+    {
+      label: 'Requests',
+      value: httpTotal.toLocaleString(),
+      hint: `H2 ${h2Total.toLocaleString()} · H3 ${h3Total.toLocaleString()}`,
+    },
+    {
+      label: 'HTTP/3 share',
+      value: h3Share != null ? `${h3Share.toFixed(1)}%` : '—',
+      hint: `${h3Total.toLocaleString()} of ${httpTotal.toLocaleString()} reqs`,
+    },
+    {
+      label: 'Upstream errors',
+      value: upstreamErrors.toLocaleString(),
+      hint: config?.proxy_log === false ? 'proxy log off' : 'live counter',
+    },
+    {
+      label: 'Bytes sent',
+      value: formatBytesPerSec(rates.sent),
+      hint: 'egress rate',
+    },
+    {
+      label: 'Bytes received',
+      value: formatBytesPerSec(rates.recv),
+      hint: 'ingress rate',
+    },
+  ];
 
   return (
     <>
@@ -255,106 +362,56 @@ export function Dashboard() {
       />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard label="Version" value={info.version} hint={info.hostname ?? undefined} />
-        <StatCard label="Sites" value={String(info.site_count)} hint={`${info.route_count} routes`} />
-        <StatCard
-          label="Active connections"
-          value={activeConnections.toLocaleString()}
-          hint={`${(metrics?.bytes_sent_total ?? 0) > 0 ? formatBytes(metrics?.bytes_sent_total ?? 0) : '0 B'} sent`}
-        />
-        <StatCard
-          label="Requests"
-          value={(httpTotal || 0).toLocaleString()}
-          hint={`H2 ${(metrics?.h2_requests_total ?? 0).toLocaleString()} · H3 ${(metrics?.h3_requests_total ?? 0).toLocaleString()}`}
-        />
+        {stats.map((stat) => (
+          <StatCard key={stat.label} {...stat} />
+        ))}
       </div>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <Panel
-          title="Traffic"
-          description="Cumulative request and byte counters"
+          title="Request throughput"
+          description="HTTP/2 vs HTTP/3 requests per sample"
           className="xl:col-span-2"
+          actions={
+            <ChartLegend
+              items={[
+                { label: 'HTTP/3', color: 'var(--color-chart-1)' },
+                { label: 'HTTP/2', color: 'var(--color-chart-2)' },
+              ]}
+            />
+          }
         >
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            <div className="rounded-md border border-border px-3 py-2.5">
-              <p className="text-xs text-muted-foreground">HTTP/2</p>
-              <p className="mt-1 font-mono text-lg font-semibold tabular-nums">
-                {(metrics?.h2_requests_total ?? 0).toLocaleString()}
-              </p>
-            </div>
-            <div className="rounded-md border border-border px-3 py-2.5">
-              <p className="text-xs text-muted-foreground">HTTP/3</p>
-              <p className="mt-1 font-mono text-lg font-semibold tabular-nums">
-                {(metrics?.h3_requests_total ?? 0).toLocaleString()}
-              </p>
-            </div>
-            <div className="rounded-md border border-border px-3 py-2.5">
-              <p className="text-xs text-muted-foreground">H3/H2 ratio</p>
-              <p className="mt-1 font-mono text-lg font-semibold tabular-nums">
-                {metrics?.h3_vs_h2_ratio != null && Number.isFinite(metrics.h3_vs_h2_ratio)
-                  ? metrics.h3_vs_h2_ratio.toFixed(2)
-                  : '—'}
-              </p>
-            </div>
-            <div className="rounded-md border border-border px-3 py-2.5">
-              <p className="text-xs text-muted-foreground">Bytes sent</p>
-              <p className="mt-1 font-mono text-lg font-semibold tabular-nums">
-                {formatBytes(metrics?.bytes_sent_total ?? 0)}
-              </p>
-            </div>
-            <div className="rounded-md border border-border px-3 py-2.5">
-              <p className="text-xs text-muted-foreground">Bytes received</p>
-              <p className="mt-1 font-mono text-lg font-semibold tabular-nums">
-                {formatBytes(metrics?.bytes_received_total ?? 0)}
-              </p>
-            </div>
-            <div className="rounded-md border border-border px-3 py-2.5">
-              <p className="text-xs text-muted-foreground">Upstream errors</p>
-              <p className="mt-1 font-mono text-lg font-semibold tabular-nums">
-                {upstreamErrors.toLocaleString()}
-              </p>
-            </div>
-          </div>
-          {successPct != null ? (
-            <p className="mt-4 text-xs text-muted-foreground">
-              Approx. success rate from request totals vs upstream errors:{' '}
-              <span className="font-mono text-foreground">{successPct.toFixed(2)}%</span>
-            </p>
-          ) : null}
+          {requestSeries.length > 0 ? (
+            <RequestsChart data={requestSeries} />
+          ) : (
+            <p className="py-16 text-center text-sm text-muted-foreground">Collecting live samples…</p>
+          )}
         </Panel>
 
-        <Panel
-          title="Busiest sites"
-          description="By request volume"
-          actions={
-            <Link
-              to={sitesHref}
-              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-            >
-              All sites <ArrowUpRight className="size-3" />
-            </Link>
-          }
-          bodyClassName="p-0"
-        >
-          {busiestSites.length === 0 ? (
-            <p className="px-5 py-8 text-center text-sm text-muted-foreground">No traffic yet</p>
-          ) : (
-            <ul className="divide-y divide-border">
-              {busiestSites.map((site) => (
-                <li key={site.host} className="flex items-center justify-between gap-3 px-5 py-3">
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <StatusBadge tone="success" dot>
-                      {''}
-                    </StatusBadge>
-                    <span className="truncate font-mono text-sm">{site.host}</span>
-                  </div>
-                  <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                    {site.count.toLocaleString()}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
+        <Panel title="Response status mix" description="Share derived from request and error counters">
+          <div className="relative">
+            <StatusMixChart data={statusMix} />
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+              <span className="font-mono text-2xl font-semibold">
+                {successPct != null ? `${successPct.toFixed(2)}%` : '—'}
+              </span>
+              <span className="text-xs text-muted-foreground">success</span>
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            {statusMix.map((s) => (
+              <div
+                key={s.name}
+                className="flex items-center justify-between rounded-md border border-border px-2.5 py-1.5"
+              >
+                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span className="size-2 rounded-full" style={{ background: s.color }} />
+                  {s.name}
+                </span>
+                <span className="font-mono text-xs">{s.value}%</span>
+              </div>
+            ))}
+          </div>
         </Panel>
       </div>
 
@@ -397,7 +454,7 @@ export function Dashboard() {
               pct={diskPercent}
               icon={HardDrive}
             />
-            <dl className="mt-1 grid grid-cols-1 gap-1.5 border-t border-border pt-4">
+            <dl className="mt-1 grid grid-cols-1 gap-1.5 border-t border-border pt-4 text-xs">
               <InfoRow
                 label="IPv4"
                 value={info.ipv4_addrs?.length ? info.ipv4_addrs.join(', ') : '—'}
@@ -424,166 +481,85 @@ export function Dashboard() {
                   : 'n/a'
               }
             />
-          </Panel>
-        )}
-
-        {!isIngress ? (
-          <Panel title="App usage" description="pertisk-proxy process" bodyClassName="flex flex-col gap-4">
-            <Meter
-              label="CPU"
-              detail={processCpu != null ? `${processCpu.toFixed(1)}%` : '—'}
-              pct={processCpu}
-              icon={Cpu}
-            />
-            <Meter
-              label="Memory"
-              detail={
-                info.process_memory_bytes != null
-                  ? `${formatBytes(info.process_memory_bytes)}${
-                      processMemoryPercent != null ? ` · ${processMemoryPercent.toFixed(1)}% host` : ''
-                    }`
-                  : '—'
-              }
-              pct={processMemoryPercent}
-              icon={MemoryStick}
-            />
-          </Panel>
-        ) : (
-          <Panel
-            title="Ingress pods"
-            description={k8sLoading ? 'Loading…' : `${ingressPods.length} pod${ingressPods.length === 1 ? '' : 's'}`}
-            bodyClassName="p-0"
-          >
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-left text-sm">
-                <thead className="border-b border-border bg-muted/50 text-muted-foreground">
-                  <tr>
-                    <th className="px-5 py-2.5 font-medium">Name</th>
-                    <th className="px-5 py-2.5 font-medium">Ready</th>
-                    <th className="px-5 py-2.5 font-medium">CPU</th>
-                    <th className="px-5 py-2.5 font-medium">Mem</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ingressPods.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="px-5 py-8 text-center text-muted-foreground">
-                        {k8sLoading ? 'Loading pods…' : 'No ingress controller pods found'}
-                      </td>
-                    </tr>
-                  ) : (
-                    ingressPods.map((pod) => (
-                      <tr key={`${pod.namespace}/${pod.name}`} className="border-t border-border">
-                        <td className="max-w-[160px] truncate px-5 py-2.5 font-mono text-xs" title={pod.name}>
-                          {pod.name}
-                        </td>
-                        <td className="px-5 py-2.5">{pod.ready}</td>
-                        <td className="px-5 py-2.5 font-mono text-xs">
-                          {pod.cpu_usage_millicores != null ? formatMillicores(pod.cpu_usage_millicores) : 'n/a'}
-                        </td>
-                        <td className="px-5 py-2.5 font-mono text-xs">
-                          {pod.memory_usage_bytes != null ? formatPodMemory(pod.memory_usage_bytes) : 'n/a'}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+            <div className="mt-2 border-t border-border pt-3">
+              <p className="mb-2 text-xs text-muted-foreground">
+                {k8sLoading ? 'Loading pods…' : `${ingressPods.length} pod${ingressPods.length === 1 ? '' : 's'}`}
+              </p>
+              <ul className="divide-y divide-border rounded-md border border-border">
+                {ingressPods.length === 0 ? (
+                  <li className="px-3 py-4 text-center text-xs text-muted-foreground">
+                    {k8sLoading ? 'Loading…' : 'No ingress pods found'}
+                  </li>
+                ) : (
+                  ingressPods.slice(0, 4).map((pod) => (
+                    <li key={`${pod.namespace}/${pod.name}`} className="flex items-center justify-between gap-2 px-3 py-2">
+                      <span className="truncate font-mono text-xs" title={pod.name}>
+                        {pod.name}
+                      </span>
+                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                        {pod.ready}
+                        {pod.cpu_usage_millicores != null ? ` · ${formatMillicores(pod.cpu_usage_millicores)}` : ''}
+                        {pod.memory_usage_bytes != null ? ` · ${formatPodMemory(pod.memory_usage_bytes)}` : ''}
+                      </span>
+                    </li>
+                  ))
+                )}
+              </ul>
             </div>
           </Panel>
         )}
 
         <Panel
-          title="Configuration"
-          description="Listeners and loaded config"
+          title="Bandwidth"
+          description="Ingress vs egress rate (MB/s)"
           actions={
-            <Link to="/settings" className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
-              Settings <ArrowUpRight className="size-3" />
-            </Link>
+            <ChartLegend
+              items={[
+                { label: 'Egress', color: 'var(--color-chart-1)' },
+                { label: 'Ingress', color: 'var(--color-chart-2)' },
+              ]}
+            />
           }
-          bodyClassName="flex flex-col gap-1.5"
         >
-          <InfoRow label="HTTP" value={info.listeners.http} />
-          <InfoRow label="HTTPS" value={info.listeners.https} />
-          <InfoRow label="HTTP/3 UDP" value={info.listeners.h3_udp} />
-          <InfoRow label="Management" value={info.management_addr} />
-          <InfoRow label="HTTP/3" value={info.enable_h3 ? 'enabled' : 'disabled'} />
-          <InfoRow label="Auto HTTPS" value={info.auto_https ? 'enabled' : 'disabled'} />
-          <InfoRow label="Proxy log" value={config?.proxy_log === false ? 'disabled' : 'enabled'} />
-          <InfoRow label="TLS entries" value={String(info.tls_count)} />
+          {bandwidthSeries.length > 0 ? (
+            <BandwidthChart data={bandwidthSeries} unit="MB/s" />
+          ) : (
+            <p className="py-16 text-center text-sm text-muted-foreground">Collecting live samples…</p>
+          )}
         </Panel>
-      </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <Panel
-          title="Performance tuning"
-          description="Effective process and Linux network settings"
+          title="Busiest sites"
+          description="By request volume"
           actions={
             <Link
-              to="/settings#performance-tuning"
+              to={sitesHref}
               className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
             >
-              Guide <ArrowUpRight className="size-3" />
+              All sites <ArrowUpRight className="size-3" />
             </Link>
           }
+          bodyClassName="p-0"
         >
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-md border border-border px-3 py-2.5">
-              <p className="text-xs text-muted-foreground">Runtime mode</p>
-              <p className="mt-1 text-sm font-semibold capitalize">{info.tuning.resolved_mode}</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">Requested: {info.tuning.requested_mode}</p>
-            </div>
-            <div className="rounded-md border border-border px-3 py-2.5">
-              <p className="text-xs text-muted-foreground">Workers</p>
-              <p className="mt-1 text-sm font-semibold">{info.tuning.pingora_service_threads} Pingora</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                {info.tuning.h3_worker_threads} H3 · {info.tuning.tokio_worker_threads} Tokio
-              </p>
-            </div>
-            <div className="rounded-md border border-border px-3 py-2.5">
-              <p className="text-xs text-muted-foreground">HTTP/3 data plane</p>
-              <p className="mt-1 text-sm font-semibold">{info.tuning.h3_stack}</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">{info.tuning.udp_offload}</p>
-            </div>
-            <div className="rounded-md border border-border px-3 py-2.5">
-              <p className="text-xs text-muted-foreground">Linux TCP</p>
-              <p className="mt-1 text-sm font-semibold uppercase">
-                {info.tuning.kernel.tcp_congestion_control ?? 'n/a'}
-              </p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                qdisc {info.tuning.kernel.default_qdisc ?? 'n/a'} · backlog {info.tuning.tcp_listen_backlog}
-              </p>
-            </div>
-          </div>
-        </Panel>
-
-        <Panel
-          title="Prometheus metrics"
-          description="Scrape endpoints"
-          actions={
-            <Link to="/metrics" className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
-              Open metrics <ArrowUpRight className="size-3" />
-            </Link>
-          }
-          bodyClassName="flex flex-col gap-3"
-        >
-          <InfoRow label="Metrics" value={promUrls.metrics} />
-          <InfoRow label="Health" value={promUrls.health} />
-          <div className="flex flex-wrap gap-2 pt-1">
-            {[
-              'pertisk_h2_requests_total',
-              'pertisk_h3_requests_total',
-              'pertisk_active_connections',
-              'pertisk_bytes_sent_total',
-            ].map((name) => (
-              <span
-                key={name}
-                className="rounded border border-border bg-muted/40 px-2 py-1 font-mono text-[10px] text-muted-foreground"
-              >
-                {name}
-              </span>
-            ))}
-          </div>
+          {busiestSites.length === 0 ? (
+            <p className="px-5 py-8 text-center text-sm text-muted-foreground">No traffic yet</p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {busiestSites.map((site) => (
+                <li key={site.host} className="flex items-center justify-between gap-3 px-5 py-3">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <StatusBadge tone="success" dot>
+                      {''}
+                    </StatusBadge>
+                    <span className="truncate font-mono text-sm">{site.host}</span>
+                  </div>
+                  <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                    {site.count.toLocaleString()}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </Panel>
       </div>
     </>
