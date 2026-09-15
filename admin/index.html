@@ -15,6 +15,7 @@
         var bg = light ? '#f7f7f9' : '#1c1b22';
         document.documentElement.classList.toggle('dark', !light);
         document.documentElement.style.colorScheme = light ? 'light' : 'dark';
+        document.documentElement.style.backgroundColor = bg;
         var meta = document.getElementById('theme-color-meta');
         if (meta) meta.setAttribute('content', bg);
         var path = location.pathname.replace(/\/+$/, '') || '/';

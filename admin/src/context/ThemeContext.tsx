@@ -18,17 +18,15 @@ function getStoredTheme(): Theme {
 }
 
 function applyTheme(theme: Theme) {
-  document.documentElement.classList.remove('light', 'dark');
-  if (theme === 'dark') document.documentElement.classList.add('dark');
-  document.documentElement.style.colorScheme = theme;
-  document.documentElement.style.removeProperty('background-color');
+  const root = document.documentElement;
+  root.classList.remove('light', 'dark');
+  if (theme === 'dark') root.classList.add('dark');
+  root.style.colorScheme = theme;
+  // Hex only — Chrome rejects oklch/lab in <meta name="theme-color">.
+  const bg = theme === 'light' ? '#f7f7f9' : '#1c1b22';
+  root.style.backgroundColor = bg;
   const meta = document.getElementById('theme-color-meta');
-  if (meta) {
-    const bg = getComputedStyle(document.documentElement)
-      .getPropertyValue('--color-theme-meta')
-      .trim();
-    meta.setAttribute('content', bg || (theme === 'light' ? '#f7f7f9' : '#1c1b22'));
-  }
+  if (meta) meta.setAttribute('content', bg);
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
