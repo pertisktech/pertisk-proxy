@@ -1,4 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
+import { Logo } from '@/components/Logo';
 import { cn } from '@/lib/utils';
 import type { NavSection } from '@/lib/nav';
 import { StatusDot } from './status-dot';
@@ -26,9 +27,7 @@ export function Sidebar({
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       <div className="flex h-16 items-center gap-2.5 border-b border-sidebar-border px-5">
-        <div className="flex size-8 items-center justify-center rounded-md bg-primary/15 ring-1 ring-primary/30">
-          <span className="font-mono text-sm font-bold text-primary">pk</span>
-        </div>
+        <Logo className="size-8 shrink-0" alt="" />
         <div className="flex min-w-0 flex-col leading-none">
           <span className="truncate text-sm font-semibold tracking-tight">pertisk-proxy</span>
           {version ? (
