@@ -179,8 +179,8 @@
   font-size: 0.9375rem;
   font-weight: 600;
   font-family: inherit;
-  color: #fff;
-  background: linear-gradient(135deg, var(--color-primary) 0%, color-mix(in srgb, var(--color-primary) 78%, #000) 100%);
+  color: var(--primary-foreground, #fff);
+  background: var(--color-primary);
   border: none;
   border-radius: var(--radius-md);
   cursor: pointer;

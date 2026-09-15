@@ -7,6 +7,7 @@ type ThemeContextValue = {
   theme: Theme;
   isDark: boolean;
   toggleTheme: () => void;
+  setTheme: (theme: Theme) => void;
 };
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -18,7 +19,7 @@ function getStoredTheme(): Theme {
 
 function applyTheme(theme: Theme) {
   document.documentElement.classList.remove('light', 'dark');
-  document.documentElement.classList.add(theme);
+  if (theme === 'dark') document.documentElement.classList.add('dark');
   document.documentElement.style.colorScheme = theme;
   document.documentElement.style.removeProperty('background-color');
   const meta = document.getElementById('theme-color-meta');
@@ -26,7 +27,7 @@ function applyTheme(theme: Theme) {
     const bg = getComputedStyle(document.documentElement)
       .getPropertyValue('--color-theme-meta')
       .trim();
-    meta.setAttribute('content', bg || (theme === 'light' ? '#f4f5f7' : '#0c0d18'));
+    meta.setAttribute('content', bg || (theme === 'light' ? '#f7f7f9' : '#1c1b22'));
   }
 }
 
@@ -44,6 +45,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         theme,
         isDark: theme === 'dark',
         toggleTheme: () => setTheme((t) => (t === 'dark' ? 'light' : 'dark')),
+        setTheme,
       }}
     >
       {children}

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0c0d18" id="theme-color-meta" />
+    <meta name="theme-color" content="#1c1b22" id="theme-color-meta" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -12,8 +12,8 @@
       (function () {
         var t = localStorage.getItem('pertisk_theme');
         var light = t === 'light';
-        var bg = light ? '#f4f5f7' : '#0c0d18';
-        document.documentElement.classList.add(light ? 'light' : 'dark');
+        var bg = light ? '#f7f7f9' : '#1c1b22';
+        document.documentElement.classList.toggle('dark', !light);
         document.documentElement.style.colorScheme = light ? 'light' : 'dark';
         var meta = document.getElementById('theme-color-meta');
         if (meta) meta.setAttribute('content', bg);
