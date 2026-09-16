@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# Build signed release artifacts for HCP Terraform private registry.
+# Build signed release artifacts for Terraform Registry (public) and HCP private registry.
 # Output: terraform/dist/
+# Public registry also requires a GitHub repo named terraform-provider-pertisk-proxy.
+# See: https://developer.hashicorp.com/terraform/registry/providers/publishing
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 VERSION="${VERSION:-0.1.0}"
-BIN="terraform-provider-pertisk-proxy"
+NAME="pertisk-proxy"
+BIN="terraform-provider-${NAME}"
+# Public registry expects the binary inside the zip to include _vVERSION.
+BIN_RELEASE="${BIN}_v${VERSION}"
 DIST="$ROOT/dist"
 GPG_KEY_ID="${GPG_KEY_ID:-}"
 
@@ -21,7 +26,7 @@ platforms=(
   "darwin/arm64"
 )
 
-echo "building $BIN $VERSION"
+echo "building $BIN_RELEASE"
 for p in "${platforms[@]}"; do
   os="${p%/*}"
   arch="${p#*/}"
@@ -31,19 +36,30 @@ for p in "${platforms[@]}"; do
     cd "$ROOT"
     GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
       go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
-      -o "$outdir/$BIN" .
+      -o "$outdir/$BIN_RELEASE" .
   )
   (
     cd "$outdir"
-    zip -q "$DIST/${BIN}_${VERSION}_${os}_${arch}.zip" "$BIN"
+    zip -q "$DIST/${BIN}_${VERSION}_${os}_${arch}.zip" "$BIN_RELEASE"
   )
   rm -rf "$outdir"
   echo "  + ${BIN}_${VERSION}_${os}_${arch}.zip"
 done
 
+# Required by the public Terraform Registry.
+cat > "$DIST/${BIN}_${VERSION}_manifest.json" <<EOF
+{
+  "version": 1,
+  "metadata": {
+    "protocol_versions": ["5.0", "6.0"]
+  }
+}
+EOF
+cp "$DIST/${BIN}_${VERSION}_manifest.json" "$ROOT/terraform-registry-manifest.json"
+
 (
   cd "$DIST"
-  shasum -a 256 ${BIN}_${VERSION}_*.zip > "${BIN}_${VERSION}_SHA256SUMS"
+  shasum -a 256 ${BIN}_${VERSION}_*.zip ${BIN}_${VERSION}_manifest.json > "${BIN}_${VERSION}_SHA256SUMS"
 )
 
 if [[ -z "$GPG_KEY_ID" ]]; then
@@ -68,13 +84,11 @@ fi
 echo "signing with GPG key $GPG_KEY_ID"
 sums="$DIST/${BIN}_${VERSION}_SHA256SUMS"
 sign_ok=0
-# Unprotected keys / CI: empty or GPG_PASSPHRASE via loopback.
 if gpg --batch --yes --pinentry-mode loopback \
   --passphrase "${GPG_PASSPHRASE-}" \
   --detach-sign -u "$GPG_KEY_ID" "$sums" 2>/dev/null; then
   sign_ok=1
 fi
-# Interactive pinentry for passphrase-protected keys.
 if [[ "$sign_ok" -ne 1 ]]; then
   echo "loopback signing failed; trying interactive pinentry…"
   gpg --yes --detach-sign -u "$GPG_KEY_ID" "$sums"
@@ -85,3 +99,11 @@ echo "$GPG_KEY_ID" > "$DIST/gpg-key-id.txt"
 
 echo "artifacts in $DIST"
 ls -la "$DIST"
+echo
+echo "Public registry next steps:"
+echo "  1. Create public GitHub repo: https://github.com/pertisktech/terraform-provider-pertisk-proxy"
+echo "  2. Push this provider code there (repo name MUST match terraform-provider-pertisk-proxy)"
+echo "  3. Upload GPG public key at https://registry.terraform.io/ → User Settings → Signing Keys"
+echo "  4. GitHub Release tag v${VERSION} with all files from dist/"
+echo "  5. Publish → Provider at https://registry.terraform.io/"
+echo "Docs: https://developer.hashicorp.com/terraform/registry/providers/publishing"

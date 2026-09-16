@@ -2,16 +2,64 @@
 
 Manage sites, DNS providers, access lists, and WAF policies through the pertisk-proxy management API (**proxy mode**).
 
+## Private vs public
+
+| Target | Who can use it | Source |
+|---|---|---|
+| **HCP private** (already published) | Only members of org `pertisktech` on [app.terraform.io](https://app.terraform.io/) | `app.terraform.io/pertisktech/pertisk-proxy` |
+| **Public Terraform Registry** | Everyone | `pertisktech/pertisk-proxy` → `registry.terraform.io/pertisktech/pertisk-proxy` |
+
+The HCP upload is **not** public. To let everyone use it, publish to the [public Terraform Registry](https://developer.hashicorp.com/terraform/registry/providers/publishing).
+
+### Publish publicly (everyone)
+
+HashiCorp requires a **public** GitHub repo named exactly:
+
+`github.com/pertisktech/terraform-provider-pertisk-proxy`
+
+(not the monorepo `pertisk-proxy`).
+
+1. Create that public repo under the `pertisktech` GitHub org.
+2. Copy/push this `terraform/` provider tree into it (keep `main.go`, `internal/`, `go.mod`, `Makefile`, `docs/` …).
+3. Add your GPG public key at [registry.terraform.io](https://registry.terraform.io/) → **User Settings → Signing Keys** (org `pertisktech`).
+4. Build release assets:
+
+```bash
+cd terraform
+make release   # writes signed zips + manifest into dist/
+```
+
+5. Create GitHub Release **`v0.1.0`** on `terraform-provider-pertisk-proxy` and upload **all** files from `dist/` (zips, `_manifest.json`, `_SHA256SUMS`, `_SHA256SUMS.sig`).
+6. On [registry.terraform.io](https://registry.terraform.io/) → **Publish → Provider** → select org `pertisktech` → repo `terraform-provider-pertisk-proxy`.
+
+After that, anyone can use:
+
 ```hcl
 terraform {
   required_providers {
     pertisk-proxy = {
-      source  = "app.terraform.io/pertisktech/pertisk-proxy"
+      source  = "pertisktech/pertisk-proxy"
       version = "0.1.0"
     }
   }
 }
+```
 
+### HCP private (org only)
+
+```bash
+cd terraform
+make publish   # already done for 0.1.0 under org pertisktech
+```
+
+```hcl
+source  = "app.terraform.io/pertisktech/pertisk-proxy"
+version = "0.1.0"
+```
+
+## Example
+
+```hcl
 provider "pertisk-proxy" {
   endpoint = "http://127.0.0.1:9080"
   username = "admin"
@@ -37,49 +85,14 @@ resource "pertisk_proxy_site" "app" {
 }
 ```
 
-## Publish to HCP Terraform (org `pertisktech`)
-
-Requires [terraform login](https://app.terraform.io/) and a local GPG key used to sign releases ([private provider docs](https://developer.hashicorp.com/terraform/cloud-docs/registry/publish-providers)).
-
-```bash
-cd terraform
-
-# one-time GPG key (if you do not already have one)
-gpg --batch --passphrase '' --quick-generate-key 'pertisktech <devops@pertisk.com>' default default never
-
-make publish          # release artifacts + upload to app.terraform.io/pertisktech
-# or: make release && make publish
-
-# If signing picks the wrong key / needs a passphrase:
-#   GPG_KEY_ID=<your-key-id> make publish
-#   GPG_PASSPHRASE='…' make publish
-```
-
-Source for consumers:
-
-`app.terraform.io/pertisktech/pertisk-proxy`
-
-## Local install (without registry)
+## Local install (dev)
 
 ```bash
 cd terraform
 make install
 ```
 
-Installs under `~/.terraform.d/plugins/registry.terraform.io/pertisktech/pertisk-proxy/…`.
-
-For a quicker edit/test loop, use `dev_overrides` in `~/.terraformrc`:
-
-```hcl
-provider_installation {
-  dev_overrides {
-    "pertisktech/pertisk-proxy" = "/absolute/path/to/pertisk-proxy/terraform"
-  }
-  direct {}
-}
-```
-
-Credentials can also come from the environment: `PERTISK_ENDPOINT`, `PERTISK_USERNAME`, `PERTISK_PASSWORD`, `PERTISK_TOKEN`, `PERTISK_TLS_INSECURE`.
+Credentials env: `PERTISK_ENDPOINT`, `PERTISK_USERNAME`, `PERTISK_PASSWORD`, `PERTISK_TOKEN`, `PERTISK_TLS_INSECURE`.
 
 ## Resources
 
@@ -90,33 +103,11 @@ Credentials can also come from the environment: `PERTISK_ENDPOINT`, `PERTISK_USE
 | `pertisk_proxy_access_list` | CRUD `/api/access-lists` |
 | `pertisk_proxy_waf_policy` | CRUD `/api/waf-policies` |
 
-### `pertisk_proxy_site`
-
-Sites are not individual API resources. The provider reads the full config, merges the site (and optionally creates/updates a backend from `backend_upstream`), then PUTs the config back.
-
-- Import: `terraform import pertisk_proxy_site.app app.example.com`
-- Prefer a single Terraform workspace per proxy instance (no ETag / optimistic locking).
-- Ingress mode rejects config PUT — use Kubernetes resources there instead.
-
-### `pertisk_proxy_waf_policy`
-
-`security_json` is a JSON object matching the Admin API `security` field, for example:
-
-```hcl
-security_json = jsonencode({
-  waf = { enabled = true, use_builtin_rules = true }
-  bot = { enabled = false }
-})
-```
-
 ## Make targets
 
 | Target | Action |
 |---|---|
-| `make tidy` | `go mod tidy` |
-| `make build` | Build `bin/terraform-provider-pertisk-proxy` |
-| `make install` | Install into `~/.terraform.d/plugins/...` |
-| `make release` | Multi-platform zips + SHA256SUMS + GPG signature in `dist/` |
-| `make publish` | `release` then upload to HCP org `pertisktech` |
+| `make build` / `make install` | Local plugin binary |
+| `make release` | Multi-platform zips + manifest + GPG signature in `dist/` |
+| `make publish` | Upload `dist/` to HCP **private** registry (`pertisktech`) |
 | `make test` | `go test ./...` |
-| `make fmt` | `gofmt -w .` |
