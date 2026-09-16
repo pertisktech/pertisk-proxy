@@ -29,7 +29,7 @@ export function Sidebar({
       <div className="flex h-16 items-center gap-2.5 border-b border-sidebar-border px-5">
         <Logo className="size-8 shrink-0" alt="" />
         <div className="flex min-w-0 flex-col leading-none">
-          <span className="truncate text-sm font-semibold tracking-tight">pertisk-proxy</span>
+          <span className="truncate text-sm font-semibold tracking-tight">Pertisk Proxy</span>
           {version ? (
             <span className="font-mono text-[10px] text-muted-foreground">v{version}</span>
           ) : null}
