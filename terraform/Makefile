@@ -4,7 +4,7 @@ BIN := terraform-provider-pertisk-proxy
 ORG := pertisktech
 PLUGIN_DIR := $(HOME)/.terraform.d/plugins/registry.terraform.io/$(ORG)/pertisk-proxy/$(VERSION)/$(OS_ARCH)
 
-.PHONY: build install tidy test fmt release publish
+.PHONY: build install tidy test fmt release publish sync-provider-repo
 
 tidy:
 	go mod tidy
@@ -28,3 +28,7 @@ release:
 
 publish: release
 	VERSION=$(VERSION) ORG=$(ORG) bash scripts/publish-hcp.sh
+
+# Mirror terraform/ → github.com/pertisktech/terraform-provider-pertisk-proxy (public Registry).
+sync-provider-repo:
+	bash scripts/sync-provider-repo.sh

@@ -9,52 +9,30 @@ Manage sites, DNS providers, access lists, and WAF policies through the pertisk-
 | **HCP private** (already published) | Only members of org `pertisktech` on [app.terraform.io](https://app.terraform.io/) | `app.terraform.io/pertisktech/pertisk-proxy` |
 | **Public Terraform Registry** | Everyone | `pertisktech/pertisk-proxy` → `registry.terraform.io/pertisktech/pertisk-proxy` |
 
-The HCP upload is **not** public. To let everyone use it, publish to the [public Terraform Registry](https://developer.hashicorp.com/terraform/registry/providers/publishing).
+Develop in this monorepo ([pertisktech/pertisk-proxy](https://github.com/pertisktech/pertisk-proxy) → `terraform/`).  
+HashiCorp’s **public** Registry will **not** publish from a repo named `pertisk-proxy` — the GitHub repo must be named exactly `terraform-provider-pertisk-proxy` ([docs](https://developer.hashicorp.com/terraform/registry/providers/publishing)).
 
-### Publish publicly (everyone)
+### Reuse this public monorepo (recommended)
 
-HashiCorp requires a **public** GitHub repo named exactly:
-
-`github.com/pertisktech/terraform-provider-pertisk-proxy`
-
-(not the monorepo `pertisk-proxy`).
-
-1. Create that public repo under the `pertisktech` GitHub org.
-2. Copy/push this `terraform/` provider tree into it (keep `main.go`, `internal/`, `go.mod`, `Makefile`, `docs/` …).
-3. Add your GPG public key at [registry.terraform.io](https://registry.terraform.io/) → **User Settings → Signing Keys** (org `pertisktech`).
-4. Build release assets:
+1. Create empty public repo: `https://github.com/pertisktech/terraform-provider-pertisk-proxy`
+2. From this repo, sync the `terraform/` folder into it:
 
 ```bash
 cd terraform
-make release   # writes signed zips + manifest into dist/
+make sync-provider-repo
+# or:
+# PROVIDER_REPO=https://github.com/pertisktech/terraform-provider-pertisk-proxy.git make sync-provider-repo
 ```
 
-5. Create GitHub Release **`v0.1.0`** on `terraform-provider-pertisk-proxy` and upload **all** files from `dist/` (zips, `_manifest.json`, `_SHA256SUMS`, `_SHA256SUMS.sig`).
-6. On [registry.terraform.io](https://registry.terraform.io/) → **Publish → Provider** → select org `pertisktech` → repo `terraform-provider-pertisk-proxy`.
+3. In the **provider** repo: add GPG key on [registry.terraform.io](https://registry.terraform.io/) → Signing Keys, run `make release`, create GitHub Release `v0.1.0` with `dist/` assets, then **Publish → Provider**.
 
-After that, anyone can use:
+Keep coding here on branch `terraforms` / `main`; re-run `make sync-provider-repo` when you want a public release.
 
-```hcl
-terraform {
-  required_providers {
-    pertisk-proxy = {
-      source  = "pertisktech/pertisk-proxy"
-      version = "0.1.0"
-    }
-  }
-}
-```
-
-### HCP private (org only)
+### HCP private (org only — already works from this repo)
 
 ```bash
 cd terraform
-make publish   # already done for 0.1.0 under org pertisktech
-```
-
-```hcl
-source  = "app.terraform.io/pertisktech/pertisk-proxy"
-version = "0.1.0"
+make publish
 ```
 
 ## Example
@@ -110,4 +88,5 @@ Credentials env: `PERTISK_ENDPOINT`, `PERTISK_USERNAME`, `PERTISK_PASSWORD`, `PE
 | `make build` / `make install` | Local plugin binary |
 | `make release` | Multi-platform zips + manifest + GPG signature in `dist/` |
 | `make publish` | Upload `dist/` to HCP **private** registry (`pertisktech`) |
+| `make sync-provider-repo` | Mirror `terraform/` → `terraform-provider-pertisk-proxy` for public Registry |
 | `make test` | `go test ./...` |
