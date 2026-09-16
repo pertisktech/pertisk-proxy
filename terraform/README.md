@@ -5,29 +5,29 @@ Manage sites, DNS providers, access lists, and WAF policies through the pertisk-
 ```hcl
 terraform {
   required_providers {
-    pertisk = {
-      source = "pertisktech/pertisk"
+    pertisk-proxy = {
+      source = "pertisktech/pertisk-proxy"
     }
   }
 }
 
-provider "pertisk" {
+provider "pertisk-proxy" {
   endpoint = "http://127.0.0.1:9080"
   username = "admin"
   password = var.pertisk_password
 }
 
-resource "pertisk_access_list" "office" {
-  name              = "office"
-  enabled           = true
-  allow_countries   = ["TH", "SG"]
+resource "pertisk_proxy_access_list" "office" {
+  name            = "office"
+  enabled         = true
+  allow_countries = ["TH", "SG"]
 }
 
-resource "pertisk_site" "app" {
+resource "pertisk_proxy_site" "app" {
   host             = "app.example.com"
   backend          = "app"
   backend_upstream = "http://127.0.0.1:8080"
-  access_list_id   = pertisk_access_list.office.id
+  access_list_id   = pertisk_proxy_access_list.office.id
 
   routes {
     path      = "/"
@@ -45,20 +45,20 @@ cd terraform
 make install
 ```
 
-That places the binary under `~/.terraform.d/plugins/registry.terraform.io/pertisktech/pertisk/…`. Then run `terraform init` in your root module.
+That places the binary under `~/.terraform.d/plugins/registry.terraform.io/pertisktech/pertisk-proxy/…`. Then run `terraform init` in your root module.
 
 For a quicker edit/test loop, point Terraform at the directory that contains the binary with a CLI config `dev_overrides` block (`~/.terraformrc`):
 
 ```hcl
 provider_installation {
   dev_overrides {
-    "pertisktech/pertisk" = "/absolute/path/to/pertisk-proxy/terraform"
+    "pertisktech/pertisk-proxy" = "/absolute/path/to/pertisk-proxy/terraform"
   }
   direct {}
 }
 ```
 
-With `dev_overrides`, build with `make build` and put/run the binary from that directory (or symlink `bin/terraform-provider-pertisk`).
+With `dev_overrides`, build with `make build` and put/run the binary from that directory (or symlink `bin/terraform-provider-pertisk-proxy`).
 
 Credentials can also come from the environment: `PERTISK_ENDPOINT`, `PERTISK_USERNAME`, `PERTISK_PASSWORD`, `PERTISK_TOKEN`, `PERTISK_TLS_INSECURE`.
 
@@ -66,20 +66,20 @@ Credentials can also come from the environment: `PERTISK_ENDPOINT`, `PERTISK_USE
 
 | Name | API |
 |---|---|
-| `pertisk_site` | GET/PUT `/api/config` (upsert by `host`) |
-| `pertisk_dns_provider` | CRUD `/api/dns-providers` |
-| `pertisk_access_list` | CRUD `/api/access-lists` |
-| `pertisk_waf_policy` | CRUD `/api/waf-policies` |
+| `pertisk_proxy_site` | GET/PUT `/api/config` (upsert by `host`) |
+| `pertisk_proxy_dns_provider` | CRUD `/api/dns-providers` |
+| `pertisk_proxy_access_list` | CRUD `/api/access-lists` |
+| `pertisk_proxy_waf_policy` | CRUD `/api/waf-policies` |
 
-### `pertisk_site`
+### `pertisk_proxy_site`
 
 Sites are not individual API resources. The provider reads the full config, merges the site (and optionally creates/updates a backend from `backend_upstream`), then PUTs the config back.
 
-- Import: `terraform import pertisk_site.app app.example.com`
+- Import: `terraform import pertisk_proxy_site.app app.example.com`
 - Prefer a single Terraform workspace per proxy instance (no ETag / optimistic locking).
 - Ingress mode rejects config PUT — use Kubernetes resources there instead.
 
-### `pertisk_waf_policy`
+### `pertisk_proxy_waf_policy`
 
 `security_json` is a JSON object matching the Admin API `security` field, for example:
 
@@ -95,7 +95,7 @@ security_json = jsonencode({
 | Target | Action |
 |---|---|
 | `make tidy` | `go mod tidy` |
-| `make build` | Build `bin/terraform-provider-pertisk` |
+| `make build` | Build `bin/terraform-provider-pertisk-proxy` |
 | `make install` | Install into `~/.terraform.d/plugins/...` |
 | `make test` | `go test ./...` |
 | `make fmt` | `gofmt -w .` |
