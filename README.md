@@ -10,6 +10,14 @@ Web console for sites, TLS, access control, WAF, certificates, DNS, logs, metric
 
 Default management API listen: `[::]:9080` (IPv4 + IPv6 dual-stack).
 
+## Terraform provider
+
+Manage sites, DNS providers, access lists, and WAF policies as code (proxy mode). See [`terraform/README.md`](terraform/README.md).
+
+```bash
+cd terraform && make install
+```
+
 ## Binaries
 
 | Binary | Mode | Purpose |

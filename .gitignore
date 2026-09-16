@@ -20,6 +20,7 @@
 /data/
 /certs/
 /admin/dist/
+/terraform/bin/
 *..profraw
 *.deb
 *.rpm
