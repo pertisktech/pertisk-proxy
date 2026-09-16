@@ -6,7 +6,8 @@ Manage sites, DNS providers, access lists, and WAF policies through the pertisk-
 terraform {
   required_providers {
     pertisk-proxy = {
-      source = "pertisktech/pertisk-proxy"
+      source  = "app.terraform.io/pertisktech/pertisk-proxy"
+      version = "0.1.0"
     }
   }
 }
@@ -36,18 +37,38 @@ resource "pertisk_proxy_site" "app" {
 }
 ```
 
-## Build / install
+## Publish to HCP Terraform (org `pertisktech`)
 
-The provider is not on the Terraform Registry yet. Build and install a local plugin copy (same pattern as pertisk-vms):
+Requires [terraform login](https://app.terraform.io/) and a local GPG key used to sign releases ([private provider docs](https://developer.hashicorp.com/terraform/cloud-docs/registry/publish-providers)).
+
+```bash
+cd terraform
+
+# one-time GPG key (if you do not already have one)
+gpg --batch --passphrase '' --quick-generate-key 'pertisktech <devops@pertisk.com>' default default never
+
+make publish          # release artifacts + upload to app.terraform.io/pertisktech
+# or: make release && make publish
+
+# If signing picks the wrong key / needs a passphrase:
+#   GPG_KEY_ID=<your-key-id> make publish
+#   GPG_PASSPHRASE='…' make publish
+```
+
+Source for consumers:
+
+`app.terraform.io/pertisktech/pertisk-proxy`
+
+## Local install (without registry)
 
 ```bash
 cd terraform
 make install
 ```
 
-That places the binary under `~/.terraform.d/plugins/registry.terraform.io/pertisktech/pertisk-proxy/…`. Then run `terraform init` in your root module.
+Installs under `~/.terraform.d/plugins/registry.terraform.io/pertisktech/pertisk-proxy/…`.
 
-For a quicker edit/test loop, point Terraform at the directory that contains the binary with a CLI config `dev_overrides` block (`~/.terraformrc`):
+For a quicker edit/test loop, use `dev_overrides` in `~/.terraformrc`:
 
 ```hcl
 provider_installation {
@@ -57,8 +78,6 @@ provider_installation {
   direct {}
 }
 ```
-
-With `dev_overrides`, build with `make build` and put/run the binary from that directory (or symlink `bin/terraform-provider-pertisk-proxy`).
 
 Credentials can also come from the environment: `PERTISK_ENDPOINT`, `PERTISK_USERNAME`, `PERTISK_PASSWORD`, `PERTISK_TOKEN`, `PERTISK_TLS_INSECURE`.
 
@@ -97,5 +116,7 @@ security_json = jsonencode({
 | `make tidy` | `go mod tidy` |
 | `make build` | Build `bin/terraform-provider-pertisk-proxy` |
 | `make install` | Install into `~/.terraform.d/plugins/...` |
+| `make release` | Multi-platform zips + SHA256SUMS + GPG signature in `dist/` |
+| `make publish` | `release` then upload to HCP org `pertisktech` |
 | `make test` | `go test ./...` |
 | `make fmt` | `gofmt -w .` |

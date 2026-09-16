@@ -1,7 +1,8 @@
 terraform {
   required_providers {
     pertisk-proxy = {
-      source = "pertisktech/pertisk-proxy"
+      source  = "app.terraform.io/pertisktech/pertisk-proxy"
+      version = "0.1.0"
     }
   }
 }

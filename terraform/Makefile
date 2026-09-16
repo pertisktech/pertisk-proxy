@@ -1,9 +1,10 @@
 VERSION ?= 0.1.0
 OS_ARCH := $(shell go env GOOS)_$(shell go env GOARCH)
 BIN := terraform-provider-pertisk-proxy
-PLUGIN_DIR := $(HOME)/.terraform.d/plugins/registry.terraform.io/pertisktech/pertisk-proxy/$(VERSION)/$(OS_ARCH)
+ORG := pertisktech
+PLUGIN_DIR := $(HOME)/.terraform.d/plugins/registry.terraform.io/$(ORG)/pertisk-proxy/$(VERSION)/$(OS_ARCH)
 
-.PHONY: build install tidy test fmt
+.PHONY: build install tidy test fmt release publish
 
 tidy:
 	go mod tidy
@@ -21,3 +22,9 @@ fmt:
 
 test:
 	go test ./...
+
+release:
+	VERSION=$(VERSION) bash scripts/release.sh
+
+publish: release
+	VERSION=$(VERSION) ORG=$(ORG) bash scripts/publish-hcp.sh

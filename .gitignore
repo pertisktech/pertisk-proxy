@@ -21,6 +21,7 @@
 /certs/
 /admin/dist/
 /terraform/bin/
+/terraform/dist/
 *..profraw
 *.deb
 *.rpm
