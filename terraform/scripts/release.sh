@@ -94,8 +94,8 @@ sums="$DIST/${BIN}_${VERSION}_SHA256SUMS"
 rm -f "${sums}.sig"
 sign_ok=0
 
-# Prefer Debian GnuPG 2.2 in Docker — macOS Homebrew GnuPG 2.5 embeds
-# packets the public Terraform Registry often rejects ("Invalid signature").
+# Prefer GnuPG 1.4 in Docker — classic OpenPGP sigs (no issuer-fpr/manu
+# subpackets). Registry rejects many GnuPG 2.4/2.5 signatures as "Invalid signature".
 if command -v docker >/dev/null 2>&1; then
   sign_dir="$(mktemp -d "${TMPDIR:-/tmp}/gpg-registry-sign.XXXXXX")"
   cleanup_sign() { rm -rf "$sign_dir"; }
@@ -116,22 +116,22 @@ if command -v docker >/dev/null 2>&1; then
       debian:bookworm-slim bash -lc '
         set -euo pipefail
         apt-get update -qq
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gnupg >/dev/null
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gnupg1 >/dev/null
         export GNUPGHOME=/tmp/gnupg-home
         mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
         if [[ -n "${PASS:-}" ]]; then
-          printf "%s" "$PASS" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 --import secret.asc
-          printf "%s" "$PASS" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+          printf "%s" "$PASS" | gpg1 --batch --passphrase-fd 0 --import secret.asc
+          printf "%s" "$PASS" | gpg1 --batch --yes --passphrase-fd 0 \
             --digest-algo SHA512 --detach-sign -u "$KEY_ID" SHA256SUMS
         else
-          gpg --batch --import secret.asc
-          gpg --batch --yes --digest-algo SHA512 --detach-sign -u "$KEY_ID" SHA256SUMS
+          gpg1 --batch --import secret.asc
+          gpg1 --batch --yes --digest-algo SHA512 --detach-sign -u "$KEY_ID" SHA256SUMS
         fi
-        gpg --verify SHA256SUMS.sig SHA256SUMS
+        gpg1 --verify SHA256SUMS.sig SHA256SUMS
       '; then
     cp "$sign_dir/SHA256SUMS.sig" "${sums}.sig"
     sign_ok=1
-    echo "  signed with GnuPG 2.2 (docker/debian)"
+    echo "  signed with GnuPG 1.4 (docker/debian) — Registry-compatible"
   fi
   trap - EXIT
   cleanup_sign
