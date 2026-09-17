@@ -9,7 +9,7 @@ import (
 	"github.com/pertisktech/pertisk-proxy/terraform/internal/provider"
 )
 
-var version = "0.1.0"
+var version = "0.1.1"
 
 func main() {
 	var debug bool
