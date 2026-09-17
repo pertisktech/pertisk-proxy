@@ -96,19 +96,21 @@ sign_ok=0
 if [[ -n "${GPG_PASSPHRASE-}" ]]; then
   if printf '%s' "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
     --passphrase-fd 0 \
+    --compatibility-flags no-manu \
     --detach-sign -u "$GPG_KEY_ID" "$sums"; then
     sign_ok=1
   fi
 else
   if gpg --batch --yes --pinentry-mode loopback \
     --passphrase '' \
+    --compatibility-flags no-manu \
     --detach-sign -u "$GPG_KEY_ID" "$sums" 2>/dev/null; then
     sign_ok=1
   fi
 fi
 if [[ "$sign_ok" -ne 1 ]]; then
   echo "loopback signing failed; trying interactive pinentry…"
-  gpg --yes --detach-sign -u "$GPG_KEY_ID" "$sums"
+  gpg --yes --compatibility-flags no-manu --detach-sign -u "$GPG_KEY_ID" "$sums"
 fi
 
 gpg --armor --export "$GPG_KEY_ID" > "$DIST/gpg-public.asc"

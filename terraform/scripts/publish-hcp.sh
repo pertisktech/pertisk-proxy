@@ -89,6 +89,17 @@ EOF
 shasums_upload="$(printf '%s' "$ver_resp" | json_get 'data.links.shasums-upload')"
 shasums_sig_upload="$(printf '%s' "$ver_resp" | json_get 'data.links.shasums-sig-upload')"
 if [[ -z "$shasums_upload" || -z "$shasums_sig_upload" ]]; then
+  if printf '%s' "$ver_resp" | grep -q 'Version has already been taken'; then
+    echo "  version ${VERSION} already published — nothing to do"
+    echo
+    echo "published → https://${HOST}/app/${ORG}/registry/providers/private/${ORG}/${NAME}/${VERSION}"
+    echo "use in Terraform:"
+    echo "  source = \"${HOST}/${ORG}/${NAME}\""
+    echo "  version = \"${VERSION}\""
+    echo
+    echo "To publish a new build, bump VERSION (e.g. VERSION=0.1.1 make publish)."
+    exit 0
+  fi
   echo "create version failed:" >&2
   printf '%s\n' "$ver_resp" >&2
   exit 1
