@@ -93,19 +93,66 @@ echo "signing with GPG key $GPG_KEY_ID"
 sums="$DIST/${BIN}_${VERSION}_SHA256SUMS"
 rm -f "${sums}.sig"
 sign_ok=0
-if [[ -n "${GPG_PASSPHRASE-}" ]]; then
-  if printf '%s' "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
-    --passphrase-fd 0 \
-    --compatibility-flags no-manu \
-    --detach-sign -u "$GPG_KEY_ID" "$sums"; then
-    sign_ok=1
+
+# Prefer Debian GnuPG 2.2 in Docker — macOS Homebrew GnuPG 2.5 embeds
+# packets the public Terraform Registry often rejects ("Invalid signature").
+if command -v docker >/dev/null 2>&1; then
+  sign_dir="$(mktemp -d "${TMPDIR:-/tmp}/gpg-registry-sign.XXXXXX")"
+  cleanup_sign() { rm -rf "$sign_dir"; }
+  trap cleanup_sign EXIT
+  cp "$sums" "$sign_dir/SHA256SUMS"
+  if [[ -n "${GPG_PASSPHRASE-}" ]]; then
+    printf '%s' "$GPG_PASSPHRASE" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 \
+      --export-secret-keys --armor "$GPG_KEY_ID" > "$sign_dir/secret.asc"
+  else
+    gpg --batch --pinentry-mode loopback --passphrase '' \
+      --export-secret-keys --armor "$GPG_KEY_ID" > "$sign_dir/secret.asc" 2>/dev/null \
+      || gpg --export-secret-keys --armor "$GPG_KEY_ID" > "$sign_dir/secret.asc"
   fi
-else
-  if gpg --batch --yes --pinentry-mode loopback \
-    --passphrase '' \
-    --compatibility-flags no-manu \
-    --detach-sign -u "$GPG_KEY_ID" "$sums" 2>/dev/null; then
+  if docker run --rm \
+      -e PASS="${GPG_PASSPHRASE-}" \
+      -e KEY_ID="$GPG_KEY_ID" \
+      -v "$sign_dir:/work" -w /work \
+      debian:bookworm-slim bash -lc '
+        set -euo pipefail
+        apt-get update -qq
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gnupg >/dev/null
+        export GNUPGHOME=/tmp/gnupg-home
+        mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
+        if [[ -n "${PASS:-}" ]]; then
+          printf "%s" "$PASS" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 --import secret.asc
+          printf "%s" "$PASS" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+            --digest-algo SHA512 --detach-sign -u "$KEY_ID" SHA256SUMS
+        else
+          gpg --batch --import secret.asc
+          gpg --batch --yes --digest-algo SHA512 --detach-sign -u "$KEY_ID" SHA256SUMS
+        fi
+        gpg --verify SHA256SUMS.sig SHA256SUMS
+      '; then
+    cp "$sign_dir/SHA256SUMS.sig" "${sums}.sig"
     sign_ok=1
+    echo "  signed with GnuPG 2.2 (docker/debian)"
+  fi
+  trap - EXIT
+  cleanup_sign
+fi
+
+if [[ "$sign_ok" -ne 1 ]]; then
+  echo "docker signing unavailable; falling back to local gpg (may fail Registry verification on GnuPG 2.5)"
+  if [[ -n "${GPG_PASSPHRASE-}" ]]; then
+    if printf '%s' "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
+      --passphrase-fd 0 \
+      --compatibility-flags no-manu \
+      --detach-sign -u "$GPG_KEY_ID" "$sums"; then
+      sign_ok=1
+    fi
+  else
+    if gpg --batch --yes --pinentry-mode loopback \
+      --passphrase '' \
+      --compatibility-flags no-manu \
+      --detach-sign -u "$GPG_KEY_ID" "$sums" 2>/dev/null; then
+      sign_ok=1
+    fi
   fi
 fi
 if [[ "$sign_ok" -ne 1 ]]; then
@@ -120,9 +167,8 @@ echo "artifacts in $DIST"
 ls -la "$DIST"
 echo
 echo "Public registry next steps:"
-echo "  1. Create public GitHub repo: https://github.com/pertisktech/terraform-provider-pertisk-proxy"
-echo "  2. Push this provider code there (repo name MUST match terraform-provider-pertisk-proxy)"
-echo "  3. Upload GPG public key at https://registry.terraform.io/ → User Settings → Signing Keys"
-echo "  4. GitHub Release tag v${VERSION} with all files from dist/"
-echo "  5. Publish → Provider at https://registry.terraform.io/"
+echo "  1. Signing Keys (org pertisktech): paste $DIST/gpg-public.asc"
+echo "     fingerprint: $(gpg --with-colons --fingerprint \"$GPG_KEY_ID\" 2>/dev/null | awk -F: '/^fpr:/{print $10; exit}')"
+echo "  2. Resync provider at https://registry.terraform.io/providers/pertisktech/pertisk-proxy"
+echo "  3. Confirm: curl -s https://registry.terraform.io/v1/providers/pertisktech/pertisk-proxy/versions"
 echo "Docs: https://developer.hashicorp.com/terraform/registry/providers/publishing"
