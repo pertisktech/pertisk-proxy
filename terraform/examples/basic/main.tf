@@ -1,10 +1,9 @@
 terraform {
   required_providers {
     pertisk-proxy = {
-      # After public publish on registry.terraform.io:
       source  = "pertisktech/pertisk-proxy"
-      version = "0.1.0"
-      # Until then (org-only): source = "app.terraform.io/pertisktech/pertisk-proxy"
+      version = ">= 0.1.0"
+      # Org-only HCP private: source = "app.terraform.io/pertisktech/pertisk-proxy"
     }
   }
 }

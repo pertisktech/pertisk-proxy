@@ -63,7 +63,15 @@ cp "$DIST/${BIN}_${VERSION}_manifest.json" "$ROOT/terraform-registry-manifest.js
 )
 
 if [[ -z "$GPG_KEY_ID" ]]; then
-  # Prefer the pertisktech release key (often created without a passphrase).
+  # Prefer passphrase-free public-registry key, then legacy pertisktech key.
+  GPG_KEY_ID="$(
+    gpg --list-secret-keys --with-colons 2>/dev/null | awk -F: '
+      /^sec:/ { kid=$5; next }
+      /^uid:/ && tolower($10) ~ /pertisktech-registry/ { print kid; exit }
+    '
+  )"
+fi
+if [[ -z "$GPG_KEY_ID" ]]; then
   GPG_KEY_ID="$(
     gpg --list-secret-keys --with-colons 2>/dev/null | awk -F: '
       /^sec:/ { kid=$5; next }
@@ -83,11 +91,20 @@ fi
 
 echo "signing with GPG key $GPG_KEY_ID"
 sums="$DIST/${BIN}_${VERSION}_SHA256SUMS"
+rm -f "${sums}.sig"
 sign_ok=0
-if gpg --batch --yes --pinentry-mode loopback \
-  --passphrase "${GPG_PASSPHRASE-}" \
-  --detach-sign -u "$GPG_KEY_ID" "$sums" 2>/dev/null; then
-  sign_ok=1
+if [[ -n "${GPG_PASSPHRASE-}" ]]; then
+  if printf '%s' "$GPG_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
+    --passphrase-fd 0 \
+    --detach-sign -u "$GPG_KEY_ID" "$sums"; then
+    sign_ok=1
+  fi
+else
+  if gpg --batch --yes --pinentry-mode loopback \
+    --passphrase '' \
+    --detach-sign -u "$GPG_KEY_ID" "$sums" 2>/dev/null; then
+    sign_ok=1
+  fi
 fi
 if [[ "$sign_ok" -ne 1 ]]; then
   echo "loopback signing failed; trying interactive pinentry…"
