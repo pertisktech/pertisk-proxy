@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Award, ExternalLink, Globe, Lock, Pencil, Plus, Trash2, X, Zap } from 'lucide-react';
 import {
@@ -107,6 +107,8 @@ function resolveDnsProviderId(
 }
 
 export function Sites() {
+  const [searchParams] = useSearchParams();
+  const searchQuery = (searchParams.get('q') ?? '').trim().toLowerCase();
   const [config, setConfig] = useState<ProxyConfig>({ sites: [], backends: [], tls: [] });
   const [dnsProviders, setDnsProviders] = useState<DnsProviderRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -140,6 +142,21 @@ export function Sites() {
   const sites = config.sites;
   const backends = config.backends;
   const tlsList = config.tls;
+
+  const filteredSites = useMemo(() => {
+    if (!searchQuery) return sites;
+    return sites.filter((site) => {
+      const haystack = [
+        site.host,
+        site.backend,
+        ...(site.routes ?? []).flatMap((r) => [r.path, r.upstream, r.rewrite]),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(searchQuery);
+    });
+  }, [sites, searchQuery]);
 
   function applyConfig(c: ProxyConfig) {
     setConfig({
@@ -198,11 +215,15 @@ export function Sites() {
     if (resolved) setFormDnsProviderId(resolved);
   }, [siteModal, editingIndex, formSslMode, formAcmeChallenge, dnsProviders, sites, tlsList]);
 
-  const totalPages = Math.max(1, Math.ceil(sites.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(filteredSites.length / pageSize));
   const pagedSites = useMemo(() => {
     const start = (page - 1) * pageSize;
-    return sites.slice(start, start + pageSize);
-  }, [sites, page, pageSize]);
+    return filteredSites.slice(start, start + pageSize);
+  }, [filteredSites, page, pageSize]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery]);
 
   useEffect(() => {
     setPage((p) => Math.min(p, totalPages));
@@ -540,7 +561,11 @@ export function Sites() {
     <div className="space-y-4">
       <div className="mb-2 flex items-center justify-between">
         <h2 className="text-lg font-semibold">Sites</h2>
-        <span className="text-sm text-text-secondary">{sites.length} site(s)</span>
+        <span className="text-sm text-text-secondary">
+          {searchQuery
+            ? `${filteredSites.length} of ${sites.length} site(s)`
+            : `${sites.length} site(s)`}
+        </span>
       </div>
       <ListToolbar viewMode={viewMode} onViewModeChange={setViewMode} addLabel="Add site" onAdd={openAddSite} />
 
@@ -552,6 +577,12 @@ export function Sites() {
           <button type="button" onClick={openAddSite} className="mt-4 rounded-md bg-primary px-4 py-2 text-sm text-bg">
             Add site
           </button>
+        </div>
+      ) : filteredSites.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border py-16 text-center">
+          <Globe className="mx-auto text-muted" size={40} />
+          <h3 className="mt-3 font-semibold">No matching sites</h3>
+          <p className="mt-1 text-sm text-text-secondary">Nothing matches “{searchQuery}”.</p>
         </div>
       ) : viewMode === 'card' ? (
         <ResourceCardGrid>
@@ -720,7 +751,7 @@ export function Sites() {
           </table>
         </div>
       )}
-      <Pagination totalItems={sites.length} pageSize={pageSize} page={page} onPageChange={setPage} />
+      <Pagination totalItems={filteredSites.length} pageSize={pageSize} page={page} onPageChange={setPage} />
 
       <Modal open={siteModal} onClose={() => setSiteModal(false)} title={editingIndex !== null ? 'Edit site' : 'Add site'} wide>
         <form onSubmit={submitSite} noValidate className="space-y-5" autoComplete="off">

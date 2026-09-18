@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Globe, Pencil, Trash2 } from 'lucide-react';
 import {
@@ -71,6 +71,8 @@ function submitBody(
 
 export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const searchQuery = (searchParams.get('q') ?? '').trim().toLowerCase();
   const mode = useMode();
   const management = useManagementInfo();
   const pageSize = usePageSize();
@@ -159,10 +161,31 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
     setForm((current) => ({ ...current, service_port: ports[0].port }));
   }, [k8sServices, form.service_name, form.service_port]);
 
+  const filteredSites = useMemo(() => {
+    if (!searchQuery) return sites;
+    return sites.filter((site) => {
+      const haystack = [
+        site.host,
+        site.backend,
+        site.ingress_name,
+        site.ingress_namespace,
+        ...(site.routes ?? []).flatMap((r) => [r.path, r.upstream, r.rewrite]),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(searchQuery);
+    });
+  }, [sites, searchQuery]);
+
   const pageItems = useMemo(
-    () => sites.slice((page - 1) * pageSize, page * pageSize),
-    [sites, page, pageSize],
+    () => filteredSites.slice((page - 1) * pageSize, page * pageSize),
+    [filteredSites, page, pageSize],
   );
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery, k8sPageKind]);
 
   const filteredTlsSecrets = useMemo(() => {
     const ns = form.service_namespace.trim();
@@ -328,6 +351,10 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
         <div className="rounded-lg border border-border bg-surface p-8 text-center text-text-secondary">
           No {k8sPageKind === 'gateway' ? 'HTTPRoute' : 'Ingress'} sites yet.
         </div>
+      ) : filteredSites.length === 0 ? (
+        <div className="rounded-lg border border-border bg-surface p-8 text-center text-text-secondary">
+          No sites match “{searchQuery}”.
+        </div>
       ) : (
         <>
           <div className={cn(viewMode === 'list' ? 'overflow-x-auto rounded-lg border border-border' : 'grid gap-4 sm:grid-cols-2 xl:grid-cols-3')}>
@@ -398,7 +425,7 @@ export function K8sSites({ k8sPageKind }: { k8sPageKind: K8sPageKind }) {
               ))
             )}
           </div>
-          <Pagination page={page} pageSize={pageSize} totalItems={sites.length} onPageChange={setPage} />
+          <Pagination page={page} pageSize={pageSize} totalItems={filteredSites.length} onPageChange={setPage} />
         </>
       )}
 
