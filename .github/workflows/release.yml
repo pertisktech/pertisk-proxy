@@ -59,8 +59,31 @@ jobs:
       - name: Disable Docker keychain (macOS CI)
         run: |
           mkdir -p "$RUNNER_TEMP/.docker"
-          echo '{"credsStore":""}' > "$RUNNER_TEMP/.docker/config.json"
+          echo '{"auths":{},"credsStore":"","credHelpers":{}}' > "$RUNNER_TEMP/.docker/config.json"
           echo "DOCKER_CONFIG=$RUNNER_TEMP/.docker" >> $GITHUB_ENV
+
+      - name: Login to container registry
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
+          USERNAME="${{ secrets.HARBOR_USERNAME }}"
+          PASSWORD="${{ secrets.HARBOR_PASSWORD }}"
+          REGISTRY="${{ env.CONTAINER_REGISTRY }}"
+          test -n "$USERNAME" || { echo "::error::HARBOR_USERNAME secret is empty"; exit 1; }
+          test -n "$PASSWORD" || { echo "::error::HARBOR_PASSWORD secret is empty"; exit 1; }
+          echo "$PASSWORD" | docker login "$REGISTRY" -u "$USERNAME" --password-stdin
+          # Mirror auth under http/https keys — Harbor token endpoints sometimes advertise http://.
+          AUTH=$(printf '%s' "${USERNAME}:${PASSWORD}" | base64 | tr -d '\n')
+          python3 -c "
+          import json, os
+          path = os.path.join(os.environ['DOCKER_CONFIG'], 'config.json')
+          auth = '''${AUTH}'''
+          registry = '''${REGISTRY}'''
+          keys = {registry, f'https://{registry}', f'http://{registry}'}
+          cfg = {'auths': {k: {'auth': auth} for k in keys}, 'credsStore': '', 'credHelpers': {}}
+          open(path, 'w').write(json.dumps(cfg))
+          print('wrote docker auth for:', ', '.join(sorted(keys)))
+          "
 
       - name: Detect native build platform
         id: native_plat
@@ -356,11 +379,25 @@ jobs:
 
       - name: Login to container registry
         run: |
+          set -euo pipefail
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
-          AUTH=$(echo -n "${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_PASSWORD }}" | base64)
+          USERNAME="${{ secrets.HARBOR_USERNAME }}"
+          PASSWORD="${{ secrets.HARBOR_PASSWORD }}"
           REGISTRY="${{ env.CONTAINER_REGISTRY }}"
-          mkdir -p "$DOCKER_CONFIG"
-          echo "{\"auths\":{\"$REGISTRY\":{\"auth\":\"$AUTH\"}},\"credsStore\":\"\",\"credHelpers\":{}}" > "$DOCKER_CONFIG/config.json"
+          test -n "$USERNAME" || { echo "::error::HARBOR_USERNAME secret is empty"; exit 1; }
+          test -n "$PASSWORD" || { echo "::error::HARBOR_PASSWORD secret is empty"; exit 1; }
+          echo "$PASSWORD" | docker login "$REGISTRY" -u "$USERNAME" --password-stdin
+          AUTH=$(printf '%s' "${USERNAME}:${PASSWORD}" | base64 | tr -d '\n')
+          python3 -c "
+          import json, os
+          path = os.path.join(os.environ['DOCKER_CONFIG'], 'config.json')
+          auth = '''${AUTH}'''
+          registry = '''${REGISTRY}'''
+          keys = {registry, f'https://{registry}', f'http://{registry}'}
+          cfg = {'auths': {k: {'auth': auth} for k in keys}, 'credsStore': '', 'credHelpers': {}}
+          open(path, 'w').write(json.dumps(cfg))
+          print('wrote docker auth for:', ', '.join(sorted(keys)))
+          "
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
