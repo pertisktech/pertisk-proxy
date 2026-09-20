@@ -2,6 +2,10 @@
 # Build release Linux binaries on the runner host (no Docker apt).
 # Usage: ./build/ci-release-native-bins.sh <amd64|arm64> <VERSION> <proxy|ingress|all>
 #
+# Same-arch or cross: always cargo-zigbuild to a glibc 2.28 baseline (DEB/RPM).
+# Cross avoids a second QEMU Docker compile for the non-native matrix arch.
+# (Harbor ingress/proxy images are musl/alpine — not reusable for packages.)
+#
 # Tuned for multi-core CI hosts (e.g. 16C/32GB): one cargo invocation for
 # proxy+ingress so dependency crates compile once.
 set -euo pipefail
@@ -17,10 +21,10 @@ case "$(uname -m)" in
   aarch64|arm64) HOST=arm64 ;;
   *) echo "unsupported host arch: $(uname -m)" >&2; exit 1 ;;
 esac
-if [ "$ARCH" != "$HOST" ]; then
-  echo "native build only supports host arch ($HOST), got $ARCH" >&2
-  exit 1
-fi
+case "$ARCH" in
+  amd64|arm64) ;;
+  *) echo "unsupported target arch: $ARCH" >&2; exit 1 ;;
+esac
 
 chmod +x build/ci-install-deps.sh
 ./build/ci-install-deps.sh
@@ -55,8 +59,12 @@ export RUST_MIN_STACK="${RUST_MIN_STACK:-16777216}"
 # CI: no incremental cache across clean checkouts; slightly less disk/RAM churn.
 export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 
-echo "ci-release-native-bins: arch=${ARCH} jobs=${JOBS} target=${TARGET} rust_target=${RUST_TARGET} version=${pertisk_proxy_VERSION}"
-
+if [ "$ARCH" = "$HOST" ]; then
+  MODE=native
+else
+  MODE=cross
+fi
+echo "ci-release-native-bins: mode=${MODE} host=${HOST} arch=${ARCH} jobs=${JOBS} target=${TARGET} rust_target=${RUST_TARGET} version=${pertisk_proxy_VERSION}"
 copy_bin() {
   local bin="$1"
   cp "target/${RUST_TARGET_DIR}/release/${bin}" "./${bin}-linux-${ARCH}"

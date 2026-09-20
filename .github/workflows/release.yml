@@ -132,16 +132,15 @@ jobs:
         env:
           CI: true
 
-      - name: Try native build deps (same-arch only)
+      - name: Try host build deps (native + zig-cross)
         id: native_deps
-        if: matrix.goarch == steps.native_plat.outputs.arch
         run: |
           set -euo pipefail
           chmod +x build/ci-install-deps.sh build/ci-release-native-bins.sh
           if ./build/ci-install-deps.sh; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::Native deps unavailable; will use Docker for ${{ matrix.goarch }}"
+            echo "::warning::Host deps unavailable; will use Docker for ${{ matrix.goarch }}"
             echo "ok=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -149,15 +148,17 @@ jobs:
         with:
           targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
 
-      - name: Build proxy + ingress binaries (native)
+      - name: Build proxy + ingress binaries (host zig)
         if: steps.native_deps.outputs.ok == 'true'
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           set -euo pipefail
+          # Same-arch or cross via cargo-zigbuild (glibc 2.28). Skips QEMU Docker
+          # rebuild for the non-native arch; alpine Harbor images are musl-only.
           ./build/ci-release-native-bins.sh ${{ matrix.goarch }} "$VERSION" all
 
-      - name: Build proxy binary (Docker)
+      - name: Build proxy binary (Docker fallback)
         if: steps.native_deps.outputs.ok != 'true'
         run: |
           set -euo pipefail
@@ -173,7 +174,7 @@ jobs:
           chmod +x ./${{ env.BINARY_NAME }}-linux-${{ matrix.goarch }}
           echo "Built proxy binary for linux/${{ matrix.goarch }}"
 
-      - name: Build ingress binary (Docker)
+      - name: Build ingress binary (Docker fallback)
         if: steps.native_deps.outputs.ok != 'true'
         run: |
           set -euo pipefail
@@ -188,7 +189,6 @@ jobs:
           cp "$OUT/pertisk-proxy-ingress" ./pertisk-proxy-ingress-linux-${{ matrix.goarch }}
           chmod +x ./pertisk-proxy-ingress-linux-${{ matrix.goarch }}
           echo "Built ingress binary for linux/${{ matrix.goarch }}"
-
       - name: Create package directories
         run: |
           mkdir -p pkg/usr/bin
@@ -441,7 +441,9 @@ jobs:
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
           VERSION="${{ steps.version.outputs.VERSION }}"
           INGRESS="${{ env.HARBOR_INGRESS_IMAGE }}"
+          CACHE="${INGRESS}:buildcache"
           # Matches: docker buildx build -f Dockerfile --platform linux/amd64,linux/arm64 --push
+          # Registry cache keeps Rust builder layers warm across releases (mode=max).
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --provenance=false \
@@ -452,6 +454,8 @@ jobs:
             --build-arg "VERSION=${VERSION}" \
             --build-arg SKIP_BUILD_DEPS=1 \
             --build-arg SKIP_RUNTIME_APK=1 \
+            --cache-from "type=registry,ref=${CACHE}" \
+            --cache-to "type=registry,ref=${CACHE},mode=max" \
             -t "${INGRESS}:${VERSION}" \
             -t "${INGRESS}:v${VERSION}" \
             -t "${INGRESS}:latest" \
@@ -464,6 +468,7 @@ jobs:
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
           VERSION="${{ steps.version.outputs.VERSION }}"
           PROXY="${{ env.HARBOR_PROXY_IMAGE }}"
+          CACHE="${PROXY}:buildcache"
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --provenance=false \
@@ -474,18 +479,20 @@ jobs:
             --build-arg "VERSION=${VERSION}" \
             --build-arg SKIP_BUILD_DEPS=1 \
             --build-arg SKIP_RUNTIME_APK=1 \
+            --cache-from "type=registry,ref=${CACHE}" \
+            --cache-to "type=registry,ref=${CACHE},mode=max" \
             -t "${PROXY}:${VERSION}" \
             -t "${PROXY}:v${VERSION}" \
             -t "${PROXY}:latest" \
             --push \
             .
-
       - name: Summary
         run: |
           echo "## Docker Images Built and Pushed" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** v${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Same path as local \`Dockerfile\` multi-arch musl/alpine build (Harbor builder + runtime:alpine)." >> $GITHUB_STEP_SUMMARY
+          echo "BuildKit registry cache: \`…/ingress:buildcache\`, \`…/proxy:buildcache\` (mode=max)." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Ingress" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
