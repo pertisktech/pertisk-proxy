@@ -1,6 +1,7 @@
 # Release on push tag — build binaries (amd64 + arm64) and create GitHub Release.
 # Packages: proxy DEB/RPM/tarball, tunnel-server + tunnel-client DEB/RPM per arch.
-# Docker: multi-arch push via registry.tools.thaidevops.co bases. Helm.
+# Docker: COPY-only bookworm images from package binaries (ci-docker-images-from-bins.sh).
+# Helm: chart push after docker-build.
 
 name: Release Packages
 
@@ -358,6 +359,7 @@ jobs:
 
   docker-build:
     name: Docker multi-arch images
+    needs: build
     runs-on: [self-hosted, linux]
     steps:
       - name: Checkout code
@@ -369,6 +371,20 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/}"
           VERSION="${VERSION#v}"
           echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          echo "=== disk before cleanup ==="
+          df -h
+          docker system df || true
+          # Drop stale buildx/container layers from prior cargo fetches (main disk hog).
+          docker buildx prune -af || true
+          docker builder prune -af || true
+          docker system prune -af --volumes || true
+          rm -rf "${RUNNER_TEMP:-/tmp}/.buildx-cache" .buildx-cache .docker-out-* 2>/dev/null || true
+          echo "=== disk after cleanup ==="
+          df -h
 
       - name: Configure Docker
         run: |
@@ -405,94 +421,74 @@ jobs:
           driver: docker-container
           driver-opts: network=host
 
-      - name: Setup Node (admin UI)
-        uses: actions/setup-node@v4
+      - name: Download package binaries + admin
+        uses: actions/download-artifact@v4
         with:
-          node-version: '20'
+          pattern: release-linux-*
+          path: packages
+          merge-multiple: true
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - name: Build admin UI
-        run: |
-          cd admin && pnpm install --frozen-lockfile && pnpm run build
-        env:
-          CI: true
-
-      - name: Verify registry builder + alpine runtime
+      - name: Stage binaries for image build
         run: |
           set -euo pipefail
-          export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
-          for img in "${{ env.HARBOR_BUILDER_IMAGE }}" "${{ env.HARBOR_ALPINE_RUNTIME }}"; do
-            if ! docker buildx imagetools inspect "$img" >/dev/null 2>&1; then
-              echo "::error::Missing $img — from a networked machine run:"
-              echo "  ./build/ci-push-builder-image.sh"
-              echo "  ./build/ci-push-alpine-runtime.sh"
-              exit 1
-            fi
-            echo "OK $img"
+          # Artifacts land flat under packages/ (merge-multiple).
+          for f in \
+            pertisk-proxy-linux-amd64 \
+            pertisk-proxy-linux-arm64 \
+            pertisk-proxy-ingress-linux-amd64 \
+            pertisk-proxy-ingress-linux-arm64
+          do
+            test -f "packages/$f" || { echo "::error::missing packages/$f"; ls -la packages; exit 1; }
+            cp "packages/$f" "./$f"
+            chmod +x "./$f"
           done
+          mkdir -p admin
+          if [ -d packages/admin/dist ]; then
+            rm -rf admin/dist
+            cp -a packages/admin/dist admin/dist
+          elif [ -d packages/dist ]; then
+            rm -rf admin/dist
+            mkdir -p admin
+            cp -a packages/dist admin/dist
+          else
+            echo "::error::admin/dist missing in artifacts"
+            find packages -maxdepth 3 -type d | head -50
+            exit 1
+          fi
+          test -f admin/dist/index.html
+          ls -la pertisk-proxy-linux-* pertisk-proxy-ingress-linux-*
+          du -sh admin/dist
 
-      - name: Build and push ingress (same as local Dockerfile)
+      - name: Verify Harbor runtime base
         run: |
           set -euo pipefail
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          INGRESS="${{ env.HARBOR_INGRESS_IMAGE }}"
-          CACHE="${INGRESS}:buildcache"
-          # Matches: docker buildx build -f Dockerfile --platform linux/amd64,linux/arm64 --push
-          # Registry cache keeps Rust builder layers warm across releases (mode=max).
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --provenance=false \
-            --network=host \
-            -f Dockerfile \
-            --build-arg "RUST_IMAGE=${{ env.HARBOR_BUILDER_IMAGE }}" \
-            --build-arg "ALPINE_IMAGE=${{ env.HARBOR_ALPINE_RUNTIME }}" \
-            --build-arg "VERSION=${VERSION}" \
-            --build-arg SKIP_BUILD_DEPS=1 \
-            --build-arg SKIP_RUNTIME_APK=1 \
-            --cache-from "type=registry,ref=${CACHE}" \
-            --cache-to "type=registry,ref=${CACHE},mode=max" \
-            -t "${INGRESS}:${VERSION}" \
-            -t "${INGRESS}:v${VERSION}" \
-            -t "${INGRESS}:latest" \
-            --push \
-            .
+          img="${{ env.HARBOR_RUNTIME_IMAGE }}"
+          if ! docker buildx imagetools inspect "$img" >/dev/null 2>&1; then
+            echo "::error::Missing $img — run ./build/ci-push-runtime-base.sh"
+            exit 1
+          fi
+          echo "OK $img"
 
-      - name: Build and push proxy (Dockerfile.proxy)
+      - name: Build and push images from CI binaries
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          HARBOR_PROXY_IMAGE: ${{ env.HARBOR_PROXY_IMAGE }}
+          HARBOR_INGRESS_IMAGE: ${{ env.HARBOR_INGRESS_IMAGE }}
+          DEBIAN_IMAGE: ${{ env.HARBOR_RUNTIME_IMAGE }}
         run: |
           set -euo pipefail
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          PROXY="${{ env.HARBOR_PROXY_IMAGE }}"
-          CACHE="${PROXY}:buildcache"
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --provenance=false \
-            --network=host \
-            -f Dockerfile.proxy \
-            --build-arg "RUST_IMAGE=${{ env.HARBOR_BUILDER_IMAGE }}" \
-            --build-arg "ALPINE_IMAGE=${{ env.HARBOR_ALPINE_RUNTIME }}" \
-            --build-arg "VERSION=${VERSION}" \
-            --build-arg SKIP_BUILD_DEPS=1 \
-            --build-arg SKIP_RUNTIME_APK=1 \
-            --cache-from "type=registry,ref=${CACHE}" \
-            --cache-to "type=registry,ref=${CACHE},mode=max" \
-            -t "${PROXY}:${VERSION}" \
-            -t "${PROXY}:v${VERSION}" \
-            -t "${PROXY}:latest" \
-            --push \
-            .
+          chmod +x build/ci-docker-images-from-bins.sh
+          # COPY-only bookworm images — no cargo fetch / QEMU unpack (avoids ENOSPC).
+          ./build/ci-docker-images-from-bins.sh
+
       - name: Summary
         run: |
           echo "## Docker Images Built and Pushed" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** v${{ steps.version.outputs.VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Same path as local \`Dockerfile\` multi-arch musl/alpine build (Harbor builder + runtime:alpine)." >> $GITHUB_STEP_SUMMARY
-          echo "BuildKit registry cache: \`…/ingress:buildcache\`, \`…/proxy:buildcache\` (mode=max)." >> $GITHUB_STEP_SUMMARY
+          echo "Assembled from package-job glibc binaries + \`${{ env.HARBOR_RUNTIME_IMAGE }}\` (no in-image cargo fetch)." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Ingress" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.HARBOR_INGRESS_IMAGE }}:${{ steps.version.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
