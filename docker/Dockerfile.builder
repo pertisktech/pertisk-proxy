@@ -5,7 +5,7 @@
 #
 # Used as RUST_IMAGE / BUILDER_IMAGE so Dockerfile RUN never needs Alpine CDN.
 
-ARG RUST_SRC=harbor.tools.pertisk.com/pertisk-proxy/rust:1-alpine3.21
+ARG RUST_SRC=registry.tools.thaidevops.co/pertisk-proxy/rust:1-alpine3.21
 FROM ${RUST_SRC}
 
 COPY docker/alpine-apk-setup.sh /usr/local/sbin/alpine-apk-setup.sh

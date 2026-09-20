@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-REGISTRY="${CONTAINER_REGISTRY:-harbor.tools.pertisk.com}"
+REGISTRY="${CONTAINER_REGISTRY:-registry.tools.thaidevops.co}"
 RUNTIME_IMAGE="${HARBOR_RUNTIME_IMAGE:-${REGISTRY}/pertisk-proxy/runtime}"
 TAG="${RUNTIME_TAG:-bookworm}"
 DEBIAN_SRC="${DEBIAN_SRC:-public.ecr.aws/docker/library/debian:bookworm-slim}"

@@ -18,9 +18,9 @@ cd "$REPO_ROOT"
 
 : "${VERSION:?VERSION required}"
 
-PROXY="${HARBOR_PROXY_IMAGE:-harbor.tools.pertisk.com/pertisk-proxy/proxy}"
-INGRESS="${HARBOR_INGRESS_IMAGE:-harbor.tools.pertisk.com/pertisk-proxy/ingress}"
-DEBIAN_IMAGE="${DEBIAN_IMAGE:-harbor.tools.pertisk.com/pertisk-proxy/runtime:bookworm}"
+PROXY="${HARBOR_PROXY_IMAGE:-registry.tools.thaidevops.co/pertisk-proxy/proxy}"
+INGRESS="${HARBOR_INGRESS_IMAGE:-registry.tools.thaidevops.co/pertisk-proxy/ingress}"
+DEBIAN_IMAGE="${DEBIAN_IMAGE:-registry.tools.thaidevops.co/pertisk-proxy/runtime:bookworm}"
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 PROVENANCE="${PROVENANCE:-false}"
 

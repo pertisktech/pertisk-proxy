@@ -15,15 +15,15 @@ permissions:
 env:
   BINARY_NAME: pertisk-proxy
   # Override in repo Variables if paths differ in Harbor.
-  CONTAINER_REGISTRY: ${{ vars.CONTAINER_REGISTRY || 'harbor.tools.pertisk.com' }}
-  HARBOR_BUILD_IMAGE: ${{ vars.HARBOR_BUILD_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/build' }}
-  HARBOR_PROXY_IMAGE: ${{ vars.HARBOR_PROXY_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/proxy' }}
-  HARBOR_INGRESS_IMAGE: ${{ vars.HARBOR_INGRESS_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/ingress' }}
+  CONTAINER_REGISTRY: ${{ vars.CONTAINER_REGISTRY || 'registry.tools.thaidevops.co' }}
+  HARBOR_BUILD_IMAGE: ${{ vars.HARBOR_BUILD_IMAGE || 'registry.tools.thaidevops.co/pertisk-proxy/build' }}
+  HARBOR_PROXY_IMAGE: ${{ vars.HARBOR_PROXY_IMAGE || 'registry.tools.thaidevops.co/pertisk-proxy/proxy' }}
+  HARBOR_INGRESS_IMAGE: ${{ vars.HARBOR_INGRESS_IMAGE || 'registry.tools.thaidevops.co/pertisk-proxy/ingress' }}
   # Pre-pushed COPY-only runtime base (./build/ci-push-runtime-base.sh). Override via repo Variable.
-  HARBOR_RUNTIME_IMAGE: ${{ vars.HARBOR_RUNTIME_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/runtime:bookworm' }}
+  HARBOR_RUNTIME_IMAGE: ${{ vars.HARBOR_RUNTIME_IMAGE || 'registry.tools.thaidevops.co/pertisk-proxy/runtime:bookworm' }}
   # Musl Dockerfile CI bases (./build/ci-push-builder-image.sh + ./build/ci-push-alpine-runtime.sh).
-  HARBOR_BUILDER_IMAGE: ${{ vars.HARBOR_BUILDER_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/builder:alpine-rust' }}
-  HARBOR_ALPINE_RUNTIME: ${{ vars.HARBOR_ALPINE_RUNTIME || 'harbor.tools.pertisk.com/pertisk-proxy/runtime:alpine' }}
+  HARBOR_BUILDER_IMAGE: ${{ vars.HARBOR_BUILDER_IMAGE || 'registry.tools.thaidevops.co/pertisk-proxy/builder:alpine-rust' }}
+  HARBOR_ALPINE_RUNTIME: ${{ vars.HARBOR_ALPINE_RUNTIME || 'registry.tools.thaidevops.co/pertisk-proxy/runtime:alpine' }}
   HELM_CHART_REPO_URL: ${{ vars.HELM_CHART_REPO_URL || 'https://charts.tools.thaidevops.co' }}
   # Self-hosted runner ~16C/32GB: cargo/cmake parallelism (native path reads these).
   CARGO_BUILD_JOBS: "14"
@@ -145,7 +145,7 @@ jobs:
             --build-arg PACKAGE_TARGET=proxy \
             --build-arg VERSION=${{ steps.version.outputs.VERSION }} \
             --build-arg CARGO_BUILD_JOBS=${{ env.CARGO_BUILD_JOBS }} \
-            --build-arg RUST_IMAGE=${{ vars.HARBOR_RUST_BOOKWORM_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/rust:1-bookworm' }}
+            --build-arg RUST_IMAGE=${{ vars.HARBOR_RUST_BOOKWORM_IMAGE || 'registry.tools.thaidevops.co/pertisk-proxy/rust:1-bookworm' }}
           cp "$OUT/pertisk-proxy" ./${{ env.BINARY_NAME }}-linux-${{ matrix.goarch }}
           chmod +x ./${{ env.BINARY_NAME }}-linux-${{ matrix.goarch }}
           echo "Built proxy binary for linux/${{ matrix.goarch }}"
@@ -161,7 +161,7 @@ jobs:
             --build-arg PACKAGE_TARGET=ingress \
             --build-arg VERSION=${{ steps.version.outputs.VERSION }} \
             --build-arg CARGO_BUILD_JOBS=${{ env.CARGO_BUILD_JOBS }} \
-            --build-arg RUST_IMAGE=${{ vars.HARBOR_RUST_BOOKWORM_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/rust:1-bookworm' }}
+            --build-arg RUST_IMAGE=${{ vars.HARBOR_RUST_BOOKWORM_IMAGE || 'registry.tools.thaidevops.co/pertisk-proxy/rust:1-bookworm' }}
           cp "$OUT/pertisk-proxy-ingress" ./pertisk-proxy-ingress-linux-${{ matrix.goarch }}
           chmod +x ./pertisk-proxy-ingress-linux-${{ matrix.goarch }}
           echo "Built ingress binary for linux/${{ matrix.goarch }}"

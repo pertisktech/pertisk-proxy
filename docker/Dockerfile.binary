@@ -6,7 +6,7 @@
 
 # syntax=docker/dockerfile:1.7
 
-ARG DEBIAN_IMAGE=harbor.tools.pertisk.com/pertisk-proxy/runtime:bookworm
+ARG DEBIAN_IMAGE=registry.tools.thaidevops.co/pertisk-proxy/runtime:bookworm
 
 FROM ${DEBIAN_IMAGE}
 

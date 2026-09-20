@@ -7,7 +7,7 @@
 #   ./build/ci-push-runtime-base.sh   # Debian+openssl runtime (apt baked in)
 set -euo pipefail
 
-REGISTRY="${CONTAINER_REGISTRY:-harbor.tools.pertisk.com}"
+REGISTRY="${CONTAINER_REGISTRY:-registry.tools.thaidevops.co}"
 PROJECT="${HARBOR_PROJECT:-pertisk-proxy}"
 SRC_PREFIX="${BASE_SRC_PREFIX:-public.ecr.aws/docker/library}"
 

@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-REGISTRY="${CONTAINER_REGISTRY:-harbor.tools.pertisk.com}"
+REGISTRY="${CONTAINER_REGISTRY:-registry.tools.thaidevops.co}"
 IMAGE="${HARBOR_ALPINE_RUNTIME:-${REGISTRY}/pertisk-proxy/runtime}"
 TAG="${ALPINE_RUNTIME_TAG:-alpine}"
 ALPINE_SRC="${ALPINE_SRC:-${REGISTRY}/pertisk-proxy/alpine:3.21}"

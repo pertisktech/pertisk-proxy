@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-REGISTRY="${CONTAINER_REGISTRY:-harbor.tools.pertisk.com}"
+REGISTRY="${CONTAINER_REGISTRY:-registry.tools.thaidevops.co}"
 BUILDER="${HARBOR_BUILDER_IMAGE:-${REGISTRY}/pertisk-proxy/builder}"
 TAG="${BUILDER_TAG:-alpine-rust}"
 RUST_SRC="${RUST_SRC:-${REGISTRY}/pertisk-proxy/rust:1-alpine3.21}"

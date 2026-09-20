@@ -24,7 +24,7 @@ autoscaling:
 
 # -- Controller image (override registry for your environment)
 image:
-  registry: harbor.tools.pertisk.com
+  registry: registry.tools.thaidevops.co
   repository: pertisk-proxy/ingress
   tag: "" # defaults to Chart appVersion when empty
   pullPolicy: IfNotPresent # IfNotPresent, Always, Never

@@ -2,7 +2,7 @@
 # Push once: ./build/ci-push-alpine-runtime.sh
 # Used as ALPINE_IMAGE in CI so the final Dockerfile stage needs no apk CDN.
 
-ARG ALPINE_SRC=harbor.tools.pertisk.com/pertisk-proxy/alpine:3.21
+ARG ALPINE_SRC=registry.tools.thaidevops.co/pertisk-proxy/alpine:3.21
 FROM ${ALPINE_SRC}
 
 COPY docker/alpine-apk-setup.sh /usr/local/sbin/alpine-apk-setup.sh
