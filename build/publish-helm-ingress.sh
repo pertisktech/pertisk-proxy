@@ -33,7 +33,7 @@ if [ -z "$VERSION" ]; then
 fi
 
 if [ "$PACKAGE_ONLY" != "1" ] && [ -z "$HELM_CHART_REPO_URL" ]; then
-  echo "Set HELM_CHART_REPO_URL (e.g. https://chart.tools.pertisk.com)" >&2
+  echo "Set HELM_CHART_REPO_URL (e.g. https://charts.tools.thaidevops.co)" >&2
   exit 1
 fi
 

@@ -73,7 +73,7 @@ export function Layout({ onLogout, loading = false }: { onLogout: () => void; lo
           sections={sections}
           version={management?.version}
           hostname={management?.hostname}
-          mode={mode}
+          mode={mode ?? 'proxy'}
           modeLabel={modeLabel}
           username={username}
           createItems={createItems}

@@ -24,7 +24,7 @@ env:
   # Musl Dockerfile CI bases (./build/ci-push-builder-image.sh + ./build/ci-push-alpine-runtime.sh).
   HARBOR_BUILDER_IMAGE: ${{ vars.HARBOR_BUILDER_IMAGE || 'harbor.tools.pertisk.com/pertisk-proxy/builder:alpine-rust' }}
   HARBOR_ALPINE_RUNTIME: ${{ vars.HARBOR_ALPINE_RUNTIME || 'harbor.tools.pertisk.com/pertisk-proxy/runtime:alpine' }}
-  HELM_CHART_REPO_URL: ${{ vars.HELM_CHART_REPO_URL || 'https://chart.tools.pertisk.com' }}
+  HELM_CHART_REPO_URL: ${{ vars.HELM_CHART_REPO_URL || 'https://charts.tools.thaidevops.co' }}
   # Self-hosted runner ~16C/32GB: cargo/cmake parallelism (native path reads these).
   CARGO_BUILD_JOBS: "14"
   CMAKE_BUILD_PARALLEL_LEVEL: "14"

@@ -267,7 +267,7 @@ docker pull ${HARBOR_INGRESS_IMAGE:-harbor.tools.pertisk.com/pertisk-proxy/ingre
 
 ### Helm (pertisk-ingress)
 \`\`\`bash
-helm repo add pertisk ${HELM_CHART_REPO_URL:-https://chart.tools.pertisk.com}
+helm repo add pertisk ${HELM_CHART_REPO_URL:-https://charts.tools.thaidevops.co}
 helm repo update
 helm upgrade --install pertisk-proxy-ingress pertisk/pertisk-ingress \\
   --version ${VERSION} -n pertisk-proxy --create-namespace

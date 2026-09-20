@@ -267,7 +267,7 @@ release-ingress:
 # make package-helm VERSION=0.1.74   — helm package → release/pertisk-ingress-*.tgz
 # make release-helm VERSION=0.1.74   — package + upload to chart repo
 # Auth for release-helm: HELM_CHART_TOKEN=...  or  HELM_USER=... HELM_PASSWORD=...
-HELM_CHART_REPO_URL ?= https://chart.tools.pertisk.com
+HELM_CHART_REPO_URL ?= https://charts.tools.thaidevops.co
 HELM_CHART_DIR ?= deploy/helm/pertisk-ingress
 HELM_CHART_TOKEN ?=
 HELM_USER ?=
