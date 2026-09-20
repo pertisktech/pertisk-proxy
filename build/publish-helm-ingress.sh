@@ -11,7 +11,7 @@
 #   HELM_USER + HELM_PASSWORD — login via /api/auth/login (username + password)
 #
 # Env:
-#   HELM_CHART_REPO_URL — chart repo base URL (required unless PACKAGE_ONLY=1)
+#   HELM_CHART_REPO_URL — chart repo base URL (default: https://charts.tools.thaidevops.co)
 #   HELM_CHART_DIR      — default deploy/helm/pertisk-ingress
 #   RELEASE_DIR         — default release (local .tgz output)
 #   PACKAGE_ONLY        — 1 = skip upload (write .tgz to RELEASE_DIR)
@@ -22,7 +22,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 VERSION="${VERSION:-}"
-HELM_CHART_REPO_URL="${HELM_CHART_REPO_URL:-}"
+HELM_CHART_REPO_URL="${HELM_CHART_REPO_URL:-https://charts.tools.thaidevops.co}"
 HELM_CHART_DIR="${HELM_CHART_DIR:-deploy/helm/pertisk-ingress}"
 RELEASE_DIR="${RELEASE_DIR:-release}"
 PACKAGE_ONLY="${PACKAGE_ONLY:-0}"
@@ -36,6 +36,9 @@ if [ "$PACKAGE_ONLY" != "1" ] && [ -z "$HELM_CHART_REPO_URL" ]; then
   echo "Set HELM_CHART_REPO_URL (e.g. https://charts.tools.thaidevops.co)" >&2
   exit 1
 fi
+
+# Normalize (no trailing slash) for API paths and helm repo add.
+HELM_CHART_REPO_URL="${HELM_CHART_REPO_URL%/}"
 
 if ! command -v helm >/dev/null 2>&1; then
   echo "helm CLI not found" >&2

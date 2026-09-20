@@ -16,12 +16,21 @@ make package-helm VERSION=0.1.0
 # alias: make helm-package VERSION=0.1.0
 ```
 
-**Publish chart** to the Pertisk chart repo:
+**Publish chart** to [charts.tools.thaidevops.co](https://charts.tools.thaidevops.co/):
 
 ```bash
 HELM_CHART_TOKEN=<jwt> make release-helm VERSION=0.1.0
 # or: HELM_USER=... HELM_PASSWORD=... make release-helm VERSION=0.1.0
 # alias: make publish-helm VERSION=0.1.0
+```
+
+**Install from the chart repo:**
+
+```bash
+helm repo add pertisk https://charts.tools.thaidevops.co
+helm repo update
+helm upgrade --install pertisk-proxy-ingress pertisk/pertisk-ingress \
+  --version 0.1.0 -n pertisk-proxy --create-namespace
 ```
 
 **Helm only** (image must already exist in registry):

@@ -1,6 +1,6 @@
 # Release on push tag — build binaries (amd64 + arm64) and create GitHub Release.
 # Packages: proxy DEB/RPM/tarball, tunnel-server + tunnel-client DEB/RPM per arch.
-# Docker: same as local Dockerfile multi-arch push (musl/alpine) via Harbor bases. Helm.
+# Docker: multi-arch push via registry.tools.thaidevops.co bases. Helm.
 
 name: Release Packages
 
@@ -14,7 +14,7 @@ permissions:
 
 env:
   BINARY_NAME: pertisk-proxy
-  # Override in repo Variables if paths differ in Harbor.
+  # Override in repo Variables if paths differ in the container registry.
   CONTAINER_REGISTRY: ${{ vars.CONTAINER_REGISTRY || 'registry.tools.thaidevops.co' }}
   HARBOR_BUILD_IMAGE: ${{ vars.HARBOR_BUILD_IMAGE || 'registry.tools.thaidevops.co/pertisk-proxy/build' }}
   HARBOR_PROXY_IMAGE: ${{ vars.HARBOR_PROXY_IMAGE || 'registry.tools.thaidevops.co/pertisk-proxy/proxy' }}
@@ -384,7 +384,7 @@ jobs:
         env:
           CI: true
 
-      - name: Verify Harbor builder + alpine runtime
+      - name: Verify registry builder + alpine runtime
         run: |
           set -euo pipefail
           export DOCKER_CONFIG="${{ env.DOCKER_CONFIG }}"
