@@ -36,6 +36,7 @@ use axum::{
     Json, Router,
 };
 use dashmap::DashMap;
+use hmac::Mac;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -320,6 +321,71 @@ fn session_ttl_secs() -> u64 {
         .unwrap_or(SESSION_TTL_SECS)
 }
 
+fn session_signing_secret(state: &AdminState) -> Option<Vec<u8>> {
+    if let Ok(raw) = std::env::var("PERTISK_AUTH_SIGNING_SECRET") {
+        let t = raw.trim();
+        if !t.is_empty() {
+            return Some(t.as_bytes().to_vec());
+        }
+    }
+    if let Some(ref pw) = state.env_password {
+        let t = pw.trim();
+        if !t.is_empty() {
+            return Some(t.as_bytes().to_vec());
+        }
+    }
+    if let Ok(raw) = std::env::var("PERTISK_API_TOKEN") {
+        let t = raw.trim();
+        if !t.is_empty() {
+            return Some(t.as_bytes().to_vec());
+        }
+    }
+    None
+}
+
+fn api_static_token() -> Option<String> {
+    std::env::var("PERTISK_API_TOKEN")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Portable session token verified on any replica: `pp1.{username}.{exp_unix}.{hmac_hex}`.
+fn mint_signed_session_token(secret: &[u8], username: &str, ttl_secs: u64) -> Option<String> {
+    if username.is_empty() || username.contains('.') {
+        return None;
+    }
+    let exp = chrono::Utc::now().timestamp() + ttl_secs as i64;
+    let payload = format!("pp1|{username}|{exp}");
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(secret).ok()?;
+    mac.update(payload.as_bytes());
+    let sig = hex::encode(mac.finalize().into_bytes());
+    Some(format!("pp1.{username}.{exp}.{sig}"))
+}
+
+fn verify_signed_session_token(secret: &[u8], token: &str) -> Option<String> {
+    let mut parts = token.split('.');
+    let ver = parts.next()?;
+    let username = parts.next()?;
+    let exp_s = parts.next()?;
+    let sig = parts.next()?;
+    if parts.next().is_some() || ver != "pp1" || username.is_empty() {
+        return None;
+    }
+    let exp: i64 = exp_s.parse().ok()?;
+    if chrono::Utc::now().timestamp() > exp {
+        return None;
+    }
+    let payload = format!("pp1|{username}|{exp}");
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(secret).ok()?;
+    mac.update(payload.as_bytes());
+    let expected = hex::encode(mac.finalize().into_bytes());
+    if !expected.eq_ignore_ascii_case(sig.trim()) {
+        return None;
+    }
+    Some(username.to_string())
+}
+
 fn session_username(sessions: &DashMap<String, SessionEntry>, token: &str) -> Option<String> {
     let now = Instant::now();
     let entry = sessions.get(token)?;
@@ -352,6 +418,11 @@ async fn resolve_username(state: &AdminState, headers: &HeaderMap) -> Option<Str
 }
 
 async fn resolve_username_from_token(state: &AdminState, token: &str) -> Option<String> {
+    if let Some(api) = api_static_token() {
+        if token == api {
+            return Some(DEFAULT_ADMIN_USERNAME.to_string());
+        }
+    }
     if let Some(ref sessions) = state.sessions {
         if let Some(username) = session_username(sessions, token) {
             return Some(username);
@@ -368,6 +439,11 @@ async fn resolve_username_from_token(state: &AdminState, token: &str) -> Option<
                 );
                 return Some(username);
             }
+        }
+    }
+    if let Some(secret) = session_signing_secret(state) {
+        if let Some(username) = verify_signed_session_token(&secret, token) {
+            return Some(username);
         }
     }
     None
@@ -504,7 +580,13 @@ async fn auth_login(
     }
 
     let ttl_secs = session_ttl_secs();
-    let token = uuid::Uuid::new_v4().to_string();
+    let token = if let Some(secret) = session_signing_secret(&state) {
+        mint_signed_session_token(&secret, username, ttl_secs).unwrap_or_else(|| {
+            uuid::Uuid::new_v4().to_string()
+        })
+    } else {
+        uuid::Uuid::new_v4().to_string()
+    };
     let expires_at = Instant::now() + Duration::from_secs(ttl_secs);
     sessions.insert(
         token.clone(),
