@@ -6,8 +6,6 @@ use pingora_core::listeners::TcpSocketOptions;
 use pingora_core::listeners::TlsAcceptCallbacks;
 use pingora_core::server::configuration::Opt;
 use pingora_core::server::Server;
-#[cfg(feature = "prometheus")]
-use pingora_core::services::listening::Service as ListeningService;
 use pingora_proxy::http_proxy_service;
 use tracing::info;
 
@@ -147,7 +145,7 @@ pub fn run(
     #[cfg(feature = "prometheus")]
     if pingora_prometheus_enabled() {
         if let Some(addr) = pingora_prometheus_listen_addr() {
-            let mut prom = ListeningService::prometheus_http_service();
+            let mut prom = pingora_prometheus::prometheus_http_service();
             prom.add_tcp(&addr);
             server.add_service(prom);
             info!(addr = %addr, "Pingora Prometheus metrics listener started");
