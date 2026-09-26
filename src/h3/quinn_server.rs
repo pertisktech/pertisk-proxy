@@ -351,7 +351,7 @@ async fn handle_request_inner(
 
     if grpc::is_h3_incompatible_request(req.headers(), req.method(), req.uri().path()) {
         // H3 upstream hop buffers the full body — SSE / gRPC streams never flush.
-        send_h3_response(
+        drain_and_send_h3_response(
             stream,
             plain_response(
                 http::StatusCode::MISDIRECTED_REQUEST,
@@ -373,7 +373,7 @@ async fn handle_request_inner(
         .unwrap_or(0);
 
     if deny::enabled() && !host.is_empty() && !router.snapshot().has_host(&host) {
-        send_h3_response(
+        drain_and_send_h3_response(
             stream,
             plain_response(http::StatusCode::NOT_FOUND, b"unknown host"),
             Bytes::from_static(b"unknown host"),
@@ -391,7 +391,7 @@ async fn handle_request_inner(
     let plan = match resolve_forward(router.snapshot().as_ref(), &host, path_q) {
         Ok(plan) => plan,
         Err(_) => {
-            send_h3_response(
+            drain_and_send_h3_response(
                 stream,
                 plain_response(http::StatusCode::NOT_FOUND, b"no route"),
                 Bytes::from_static(b"no route"),
@@ -432,7 +432,7 @@ async fn handle_request_inner(
                 if let Ok(v) = http::HeaderValue::from_str(reason) {
                     resp.headers_mut().insert("x-pertisk-block", v);
                 }
-                send_h3_response(stream, resp, body).await?;
+                drain_and_send_h3_response(stream, resp, body).await?;
                 return Ok(());
             }
         }
@@ -487,7 +487,7 @@ async fn handle_request_inner(
                     if let Ok(v) = http::HeaderValue::from_str(&set_cookie) {
                         resp.headers_mut().insert(http::header::SET_COOKIE, v);
                     }
-                    send_h3_response(stream, resp, Bytes::new()).await?;
+                    drain_and_send_h3_response(stream, resp, Bytes::new()).await?;
                 }
                 Err(_) => {
                     metrics.inc_captcha_failed();
@@ -502,7 +502,7 @@ async fn handle_request_inner(
                         http::header::CONTENT_TYPE,
                         http::HeaderValue::from_static("text/html; charset=utf-8"),
                     );
-                    send_h3_response(stream, resp, bytes).await?;
+                    drain_and_send_h3_response(stream, resp, bytes).await?;
                 }
             }
             return Ok(());
@@ -515,7 +515,7 @@ async fn handle_request_inner(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("text/html; charset=utf-8"),
         );
-        send_h3_response(stream, resp, bytes).await?;
+        drain_and_send_h3_response(stream, resp, bytes).await?;
         return Ok(());
     }
 
@@ -556,7 +556,7 @@ async fn handle_request_inner(
                 if let Ok(v) = http::HeaderValue::from_str(decision.reason) {
                     resp.headers_mut().insert("x-pertisk-block", v);
                 }
-                send_h3_response(stream, resp, bytes).await?;
+                drain_and_send_h3_response(stream, resp, bytes).await?;
                 return Ok(());
             }
             crate::security::SecurityAction::Block => {
@@ -570,7 +570,7 @@ async fn handle_request_inner(
                 if let Ok(v) = http::HeaderValue::from_str(decision.reason) {
                     resp.headers_mut().insert("x-pertisk-block", v);
                 }
-                send_h3_response(stream, resp, body).await?;
+                drain_and_send_h3_response(stream, resp, body).await?;
                 return Ok(());
             }
         }
@@ -775,7 +775,9 @@ async fn try_serve_health(
                 .insert(http::header::CONTENT_LENGTH, v);
         }
     }
-    send_h3_response(stream, h3_resp, body).await?;
+    // Consume request DATA/FIN before finishing the response. Skipping this made
+    // h2load report 2xx + almost all requests "errored" (curl still looked fine).
+    drain_and_send_h3_response(stream, h3_resp, body).await?;
     // Record k6 / probe traffic so Dashboard + Metrics match load-test RPS.
     let host = request_host(req);
     record_h3_request(metrics, &host, 0, bytes_sent, false, false);
@@ -806,6 +808,17 @@ fn h3_query_param(query: &str, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+async fn drain_and_send_h3_response(
+    stream: &mut h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
+    h3_resp: http::Response<()>,
+    body: Bytes,
+) -> Result<()> {
+    // Read request body to FIN before sending response so the stream closes
+    // cleanly (required by strict clients like h2load; curl often masks this).
+    let _ = read_h3_request_body(stream, false).await?;
+    send_h3_response(stream, h3_resp, body).await
 }
 
 async fn send_h3_response(
