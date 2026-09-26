@@ -3,8 +3,7 @@
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hmac::{Hmac, Mac};
-use rand::Rng;
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
@@ -63,7 +62,7 @@ static SECRET: LazyLock<Vec<u8>> = LazyLock::new(|| {
         }
     }
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill(&mut bytes);
+    rand::fill(&mut bytes);
     tracing::warn!(
         "PERTISK_CAPTCHA_SECRET unset; using ephemeral captcha secret (cookies reset on restart)"
     );
@@ -169,9 +168,8 @@ struct Challenge {
 }
 
 fn mint_challenge() -> Challenge {
-    let mut rng = rand::thread_rng();
-    let a = rng.gen_range(1..20);
-    let b = rng.gen_range(1..20);
+    let a = rand::random_range(1..20);
+    let b = rand::random_range(1..20);
     let exp = now_secs().saturating_add(CHALLENGE_TTL_SECS);
     let payload = format!("c1.{a}.{b}.{exp}");
     let sig = sign(&payload);

@@ -322,7 +322,7 @@ fn make_endpoint(bind: SocketAddr) -> Result<Endpoint> {
     let cert = rcgen::generate_simple_self_signed(vec!["pertisk-tunnel".into()])
         .context("generate self-signed cert")?;
     let cert_der = CertificateDer::from(cert.cert);
-    let key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der()));
+    let key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der()));
 
     let mut tls = rustls::ServerConfig::builder()
         .with_no_client_auth()

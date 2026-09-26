@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
@@ -20,17 +19,20 @@ use tokio_quiche::ServerH3Driver;
 use tracing::{error, info, warn};
 
 use crate::deny;
+use crate::h3::config::H3Config;
 use crate::h3::headers::{
     error_response, h3_to_request, pseudo_authority, request_host, response_to_h3,
 };
 use crate::h3::health;
 use crate::h3::settings::{listener_count, quic_settings};
+use crate::metrics::ProxyMetrics;
 use crate::proxy::forward::{
     client_ip_from_http_headers, forwarded_client_ip_header_pairs, resolve_client_ip,
     resolve_forward,
 };
 use crate::router::Router;
 use crate::runtime::RuntimeConfig;
+use crate::tls::CertStore;
 
 const UDP_BUFFER_BYTES: usize = 7 * 1024 * 1024;
 
@@ -81,9 +83,25 @@ async fn bind_udp_sockets(listen: &str, count: usize) -> Result<Vec<UdpSocket>> 
     Ok(sockets)
 }
 
-pub async fn run(router: Arc<Router>, config: H3Config, runtime_cfg: &RuntimeConfig) -> Result<()> {
-    let cert = &config.tls_cert_path;
-    let key = &config.tls_key_path;
+pub async fn run(
+    router: Arc<Router>,
+    config: H3Config,
+    cert_store: Arc<CertStore>,
+    runtime_cfg: &RuntimeConfig,
+    _metrics: ProxyMetrics,
+) -> Result<()> {
+    while cert_store.default_paths().is_none() {
+        tracing::info!(
+            udp = %config.udp_listen,
+            "HTTP/3 (quiche) waiting for default TLS certificate file paths"
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+    let paths = cert_store
+        .default_paths()
+        .context("HTTP/3 (quiche) requires default TLS cert/key file paths")?;
+    let cert = paths.cert.to_string_lossy().into_owned();
+    let key = paths.key.to_string_lossy().into_owned();
     let http3_opts = router.http3_options();
     let quic = quic_settings(runtime_cfg, http3_opts.as_ref());
     let listeners_n = listener_count(runtime_cfg, http3_opts.as_ref());
@@ -111,8 +129,8 @@ pub async fn run(router: Arc<Router>, config: H3Config, runtime_cfg: &RuntimeCon
         ConnectionParams::new_server(
             quic,
             TlsCertificatePaths {
-                cert,
-                private_key: key,
+                cert: &cert,
+                private_key: &key,
                 kind: CertificateKind::X509,
             },
             Hooks::default(),

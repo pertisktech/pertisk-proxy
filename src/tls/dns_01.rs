@@ -944,7 +944,7 @@ impl NamecheapSolver {
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
-                    if e.name().as_ref() == b"host" {
+                    if e.name().as_ref() == "host" {
                         let mut name = String::new();
                         let mut record_type = String::new();
                         let mut address = String::new();
@@ -952,13 +952,16 @@ impl NamecheapSolver {
                         let mut mx_pref = "10".to_string();
                         for attr in e.attributes().flatten() {
                             let key = attr.key.as_ref();
-                            let value = attr.unescape_value().unwrap_or_default().to_string();
+                            let value = attr
+                                .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                                .unwrap_or_default()
+                                .to_string();
                             match key {
-                                b"Name" => name = value,
-                                b"Type" => record_type = value,
-                                b"Address" => address = value,
-                                b"TTL" => ttl = value,
-                                b"MXPref" => mx_pref = value,
+                                "Name" => name = value,
+                                "Type" => record_type = value,
+                                "Address" => address = value,
+                                "TTL" => ttl = value,
+                                "MXPref" => mx_pref = value,
                                 _ => {}
                             }
                         }

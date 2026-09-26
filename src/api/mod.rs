@@ -36,7 +36,7 @@ use axum::{
     Json, Router,
 };
 use dashmap::DashMap;
-use hmac::Mac;
+use hmac::{KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -1356,7 +1356,7 @@ fn gather_system_info() -> (
         let mut sys = sysinfo::System::new_all();
         sys.refresh_memory();
         sys.refresh_cpu_all();
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         hostname = sysinfo::System::host_name();
         cpu_count = Some(sys.cpus().len() as u32);
         cpu_usage_percent = Some(sys.global_cpu_usage());
