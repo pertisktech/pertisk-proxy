@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Award, ExternalLink, Globe, Lock, Pencil, Plus, Trash2, X, Zap } from 'lucide-react';
+import { Award, ExternalLink, Globe, Lock, Pencil, Plus, Shield, Trash2, X, Zap } from 'lucide-react';
 import {
   api,
   type AccessList,
@@ -9,6 +9,7 @@ import {
   type NamedWafPolicy,
   type PathRewrite,
   type ProxyConfig,
+  type RouteAuth,
   type Site,
   type TlsConfig,
   type TlsSource,
@@ -50,6 +51,7 @@ const PATH_TYPES = ['Exact', 'Prefix', 'ImplementationSpecific'];
 function normalizeUpstream(url: string): string {
   let s = url.trim();
   if (!s) return s;
+  if (/^(file|consul|auto):\/\//i.test(s)) return s;
 
   // Peel repeated / typo schemes (http://http://…, htttp://…) then add one clean prefix.
   let secure = false;
@@ -61,6 +63,55 @@ function normalizeUpstream(url: string): string {
   }
   if (!s) return '';
   return `${secure ? 'https' : 'http'}://${s}`;
+}
+
+type UpstreamKind = 'http' | 'https' | 'auto' | 'file' | 'consul';
+
+function upstreamKind(url: string): UpstreamKind {
+  const s = url.trim().toLowerCase();
+  if (s.startsWith('file:')) return 'file';
+  if (s.startsWith('consul:')) return 'consul';
+  if (s.startsWith('auto:')) return 'auto';
+  if (s.startsWith('https:')) return 'https';
+  return 'http';
+}
+
+function upstreamBody(url: string): string {
+  return url.trim().replace(/^(https?|file|consul|auto):\/\//i, '');
+}
+
+function joinUpstream(kind: UpstreamKind, body: string): string {
+  const rest = body.trim();
+  if (kind === 'file') {
+    if (!rest) return 'file://';
+    const path = rest.startsWith('/') ? rest : `/${rest}`;
+    return `file://${path}`;
+  }
+  if (kind === 'consul') return rest ? `consul://${rest.replace(/^\/+/, '')}` : 'consul://';
+  if (!rest) return kind === 'http' ? '' : `${kind}://`;
+  return `${kind}://${rest.replace(/^\/+/, '')}`;
+}
+
+function emptyRoute(): PathRewrite {
+  return { path: '/', path_type: 'Prefix', rewrite: '/', upstream: '' };
+}
+
+function authForSave(auth: RouteAuth | undefined): RouteAuth | undefined {
+  if (!auth) return undefined;
+  if (auth.type === 'basic') {
+    if (!auth.username.trim() || !auth.password) return undefined;
+    return { type: 'basic', username: auth.username.trim(), password: auth.password };
+  }
+  if (auth.type === 'api_key') {
+    if (!auth.key.trim()) return undefined;
+    return { type: 'api_key', key: auth.key.trim() };
+  }
+  if (auth.type === 'jwt') {
+    if (!auth.secret.trim()) return undefined;
+    return { type: 'jwt', secret: auth.secret.trim() };
+  }
+  if (!auth.url.trim()) return undefined;
+  return { type: 'forward', url: auth.url.trim() };
 }
 
 /** Public site URL for deep link; null for wildcard / empty hosts. */
@@ -75,9 +126,18 @@ function siteProtocol(hasTls: boolean): 'HTTPS' | 'HTTP' {
   return hasTls ? 'HTTPS' : 'HTTP';
 }
 
+function authKindLabel(auth: RouteAuth | undefined): string {
+  if (auth?.type === 'basic') return 'Basic';
+  if (auth?.type === 'api_key') return 'API key';
+  if (auth?.type === 'jwt') return 'JWT';
+  if (auth?.type === 'forward') return 'Forward auth';
+  return '';
+}
+
 function routeLabel(route: PathRewrite): string {
   const dest = route.upstream?.trim() || route.rewrite?.trim();
-  return `${route.path_type || 'Prefix'} ${route.path}${dest ? ` → ${dest}` : ''}`;
+  const auth = authKindLabel(route.auth);
+  return `${route.path_type || 'Prefix'} ${route.path}${dest ? ` → ${dest}` : ''}${auth ? ` · ${auth}` : ''}`;
 }
 
 type SiteSslStatus = { label: string; tone: string; badge: 'neutral' | 'success' | 'warning' | 'danger' | 'info' };
@@ -160,6 +220,7 @@ export function Sites() {
 
   function applyConfig(c: ProxyConfig) {
     setConfig({
+      ...c,
       sites: c.sites || [],
       backends: c.backends || [],
       tls: c.tls || [],
@@ -238,7 +299,7 @@ export function Sites() {
     setEditingIndex(null);
     setFormHost('');
     setFormUpstream('');
-    setFormRoutes([{ path: '/', path_type: 'Prefix', rewrite: '/', upstream: '' }]);
+    setFormRoutes([emptyRoute()]);
     setFormSslMode('none');
     setFormTlsIndex(0);
     setFormAcmeEmail(config.acme_email?.trim() ?? '');
@@ -282,8 +343,12 @@ export function Sites() {
             path_type: r.path_type ?? 'Prefix',
             rewrite: r.rewrite ?? '',
             upstream: r.upstream ?? '',
+            auth: r.auth,
+            rate_limit_rps: r.rate_limit_rps,
+            x4xx_limit_rps: r.x4xx_limit_rps,
+            cache: r.cache,
           }))
-        : [{ path: '/', path_type: 'Prefix', rewrite: '/', upstream: '' }],
+        : [emptyRoute()],
     );
     setFormSslMode(sslMode);
     setFormTlsIndex(tlsIdx >= 0 ? tlsIdx : 0);
@@ -311,27 +376,40 @@ export function Sites() {
     setFormRoutes((r) => (r.length > 1 ? r.filter((_, idx) => idx !== i) : r));
   }
 
-  function updateRoute(i: number, field: keyof PathRewrite, value: string) {
+  function updateRoute(i: number, patch: Partial<PathRewrite>) {
     setFormRoutes((routes) => {
       const next = [...routes];
-      const cur = { ...next[i] };
-      if (field === 'path') cur.path = value;
-      else if (field === 'path_type') cur.path_type = value;
-      else if (field === 'rewrite') cur.rewrite = value;
-      else if (field === 'upstream') cur.upstream = value;
-      next[i] = cur;
+      next[i] = { ...next[i], ...patch };
       return next;
     });
   }
 
+  function setUpstreamKind(i: number, kind: UpstreamKind) {
+    const current = formRoutes[i]?.upstream ?? '';
+    updateRoute(i, { upstream: joinUpstream(kind, upstreamBody(current)) });
+  }
+
   function buildRoutes(): PathRewrite[] {
     return formRoutes
-      .map((r) => ({
-        path: r.path.trim(),
-        path_type: r.path_type || 'Prefix',
-        rewrite: r.rewrite?.trim() || undefined,
-        upstream: r.upstream?.trim() ? normalizeUpstream(r.upstream.trim()) : undefined,
-      }))
+      .map((r) => {
+        const rawUpstream = r.upstream?.trim() ?? '';
+        const upstream =
+          rawUpstream && !/^(https?|file|consul|auto):\/\/$/i.test(rawUpstream)
+            ? normalizeUpstream(rawUpstream)
+            : undefined;
+        const rate = Number(r.rate_limit_rps) || 0;
+        const x4xx = Number(r.x4xx_limit_rps) || 0;
+        return {
+          path: r.path.trim(),
+          path_type: r.path_type || 'Prefix',
+          rewrite: r.rewrite?.trim() || undefined,
+          upstream,
+          auth: authForSave(r.auth),
+          rate_limit_rps: rate > 0 ? rate : undefined,
+          x4xx_limit_rps: x4xx > 0 ? x4xx : undefined,
+          cache: r.cache,
+        };
+      })
       .filter((r) => r.path);
   }
 
@@ -797,12 +875,114 @@ export function Sites() {
                       className={inputCls}
                       value={formUpstream}
                       onChange={(e) => setFormUpstream(e.target.value)}
-                      placeholder="http://localhost:8080 or 127.0.0.1:3000"
+                      placeholder="http://127.0.0.1:8080, auto://host:443, file:///var/www, consul://web"
                       required
                       autoComplete="off"
                       name="pertisk-upstream"
                     />
                   </label>
+                </div>
+              </div>
+
+              <div className={sectionCls}>
+                <h3 className={cn(sectionTitleCls, 'flex items-center gap-2')}>
+                  <Shield size={14} /> Route authentication
+                </h3>
+                <p className="text-xs text-text-secondary">
+                  Require a credential before a path is proxied. Applies to each route below.
+                </p>
+                <div className="space-y-3">
+                  {formRoutes.map((r, i) => (
+                    <div key={i} className="space-y-2 rounded-md border border-border p-3">
+                      <p className="text-xs font-medium text-text">
+                        {r.path_type || 'Prefix'} {r.path || '/'}
+                      </p>
+                      <div className="grid gap-2 sm:grid-cols-4">
+                        <label className="text-xs text-text-secondary">
+                          Auth
+                          <select
+                            className="mt-1 w-full rounded-md border border-border bg-bg px-2 py-2 text-sm text-text"
+                            value={r.auth?.type ?? ''}
+                            onChange={(e) => {
+                              const type = e.target.value;
+                              if (!type) updateRoute(i, { auth: undefined });
+                              else if (type === 'basic') updateRoute(i, { auth: { type: 'basic', username: '', password: '' } });
+                              else if (type === 'api_key') updateRoute(i, { auth: { type: 'api_key', key: '' } });
+                              else if (type === 'jwt') updateRoute(i, { auth: { type: 'jwt', secret: '' } });
+                              else updateRoute(i, { auth: { type: 'forward', url: '' } });
+                            }}
+                          >
+                            <option value="">None</option>
+                            <option value="basic">Basic</option>
+                            <option value="api_key">API key</option>
+                            <option value="jwt">JWT</option>
+                            <option value="forward">Forward auth</option>
+                          </select>
+                        </label>
+                        <label className="text-xs text-text-secondary">
+                          Req/s
+                          <input
+                            type="number"
+                            min={0}
+                            className="mt-1 w-full rounded-md border border-border bg-bg px-2 py-2 text-sm text-text"
+                            value={r.rate_limit_rps ?? ''}
+                            placeholder="off"
+                            onChange={(e) =>
+                              updateRoute(i, {
+                                rate_limit_rps: e.target.value === '' ? undefined : Number(e.target.value),
+                              })
+                            }
+                          />
+                        </label>
+                        <label className="text-xs text-text-secondary">
+                          4xx/s
+                          <input
+                            type="number"
+                            min={0}
+                            className="mt-1 w-full rounded-md border border-border bg-bg px-2 py-2 text-sm text-text"
+                            value={r.x4xx_limit_rps ?? ''}
+                            placeholder="off"
+                            onChange={(e) =>
+                              updateRoute(i, {
+                                x4xx_limit_rps: e.target.value === '' ? undefined : Number(e.target.value),
+                              })
+                            }
+                          />
+                        </label>
+                        <label className="text-xs text-text-secondary">
+                          Cache
+                          <select
+                            className="mt-1 w-full rounded-md border border-border bg-bg px-2 py-2 text-sm text-text"
+                            value={r.cache === undefined ? '' : r.cache ? 'on' : 'off'}
+                            onChange={(e) =>
+                              updateRoute(i, {
+                                cache: e.target.value === '' ? undefined : e.target.value === 'on',
+                              })
+                            }
+                          >
+                            <option value="">Default</option>
+                            <option value="on">On</option>
+                            <option value="off">Off</option>
+                          </select>
+                        </label>
+                      </div>
+                      {r.auth?.type === 'basic' ? (
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <input className="rounded-md border border-border bg-bg px-3 py-2 text-sm" placeholder="Username" value={r.auth.username} onChange={(e) => updateRoute(i, { auth: { type: 'basic', username: e.target.value, password: r.auth?.type === 'basic' ? r.auth.password : '' } })} />
+                          <input className="rounded-md border border-border bg-bg px-3 py-2 text-sm" placeholder="Password" type="password" value={r.auth.password} onChange={(e) => updateRoute(i, { auth: { type: 'basic', username: r.auth?.type === 'basic' ? r.auth.username : '', password: e.target.value } })} />
+                        </div>
+                      ) : null}
+                      {r.auth?.type === 'api_key' ? (
+                        <input className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" placeholder="x-api-key value" value={r.auth.key} onChange={(e) => updateRoute(i, { auth: { type: 'api_key', key: e.target.value } })} />
+                      ) : null}
+                      {r.auth?.type === 'jwt' ? (
+                        <input className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" placeholder="JWT HMAC secret" type="password" value={r.auth.secret} onChange={(e) => updateRoute(i, { auth: { type: 'jwt', secret: e.target.value } })} />
+                      ) : null}
+                      {r.auth?.type === 'forward' ? (
+                        <input className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" placeholder="https://auth.example/verify" value={r.auth.url} onChange={(e) => updateRoute(i, { auth: { type: 'forward', url: e.target.value } })} />
+                      ) : null}
+                    </div>
+                  ))}
                 </div>
               </div>
 
@@ -932,42 +1112,66 @@ export function Sites() {
                   </button>
                 </div>
                 <p className="text-xs text-text-secondary">
-                  Default upstream is used unless a route sets its own Upstream (e.g. /api → :7780).
+                  Default upstream is used unless a route sets its own. Use Auto TLS, File, or Consul for those upstream kinds.
                 </p>
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {formRoutes.map((r, i) => (
-                    <div key={i} className="flex flex-wrap items-center gap-2">
-                      <select
-                        className="rounded-md border border-border bg-bg px-2 py-2 text-sm"
-                        value={r.path_type ?? 'Prefix'}
-                        onChange={(e) => updateRoute(i, 'path_type', e.target.value)}
-                      >
-                        {PATH_TYPES.map((t) => (
-                          <option key={t} value={t}>{t}</option>
-                        ))}
-                      </select>
-                      <input
-                        className="min-w-[6rem] flex-1 rounded-md border border-border bg-bg px-3 py-2 text-sm"
-                        value={r.path}
-                        onChange={(e) => updateRoute(i, 'path', e.target.value)}
-                        placeholder="/api"
-                      />
-                      <input
-                        className="min-w-[10rem] flex-[1.5] rounded-md border border-border bg-bg px-3 py-2 text-sm"
-                        value={r.upstream ?? ''}
-                        onChange={(e) => updateRoute(i, 'upstream', e.target.value)}
-                        placeholder="upstream override (optional)"
-                        autoComplete="off"
-                      />
-                      <input
-                        className="min-w-[6rem] flex-1 rounded-md border border-border bg-bg px-3 py-2 text-sm"
-                        value={r.rewrite ?? ''}
-                        onChange={(e) => updateRoute(i, 'rewrite', e.target.value)}
-                        placeholder="path rewrite (optional)"
-                      />
-                      <button type="button" onClick={() => removeRoute(i)} className="rounded-md border border-border p-2 text-red-r1 hover:bg-hover" title="Remove route">
-                        <X size={14} />
-                      </button>
+                    <div key={i} className="space-y-2 rounded-md border border-border p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <select
+                          className="rounded-md border border-border bg-bg px-2 py-2 text-sm"
+                          value={r.path_type ?? 'Prefix'}
+                          onChange={(e) => updateRoute(i, { path_type: e.target.value })}
+                        >
+                          {PATH_TYPES.map((t) => (
+                            <option key={t} value={t}>{t}</option>
+                          ))}
+                        </select>
+                        <input
+                          className="min-w-[6rem] flex-1 rounded-md border border-border bg-bg px-3 py-2 text-sm"
+                          value={r.path}
+                          onChange={(e) => updateRoute(i, { path: e.target.value })}
+                          placeholder="/api"
+                        />
+                        <select
+                          className="rounded-md border border-border bg-bg px-2 py-2 text-sm"
+                          value={upstreamKind(r.upstream ?? '')}
+                          onChange={(e) => setUpstreamKind(i, e.target.value as UpstreamKind)}
+                          title="Upstream kind"
+                        >
+                          <option value="http">HTTP</option>
+                          <option value="https">HTTPS</option>
+                          <option value="auto">Auto TLS</option>
+                          <option value="file">Files</option>
+                          <option value="consul">Consul</option>
+                        </select>
+                        <input
+                          className="min-w-[10rem] flex-[1.5] rounded-md border border-border bg-bg px-3 py-2 text-sm"
+                          value={upstreamBody(r.upstream ?? '')}
+                          onChange={(e) =>
+                            updateRoute(i, {
+                              upstream: joinUpstream(upstreamKind(r.upstream ?? ''), e.target.value),
+                            })
+                          }
+                          placeholder={
+                            upstreamKind(r.upstream ?? '') === 'file'
+                              ? '/var/www'
+                              : upstreamKind(r.upstream ?? '') === 'consul'
+                                ? 'service-name'
+                                : 'host:port'
+                          }
+                          autoComplete="off"
+                        />
+                        <input
+                          className="min-w-[6rem] flex-1 rounded-md border border-border bg-bg px-3 py-2 text-sm"
+                          value={r.rewrite ?? ''}
+                          onChange={(e) => updateRoute(i, { rewrite: e.target.value })}
+                          placeholder="path rewrite (optional)"
+                        />
+                        <button type="button" onClick={() => removeRoute(i)} className="rounded-md border border-border p-2 text-red-r1 hover:bg-hover" title="Remove route">
+                          <X size={14} />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>

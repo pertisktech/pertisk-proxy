@@ -321,12 +321,31 @@ export type Backend = {
   upstreams: Upstream[];
 };
 
+export type RouteAuth =
+  | { type: 'basic'; username: string; password: string }
+  | { type: 'api_key'; key: string }
+  | { type: 'jwt'; secret: string }
+  | { type: 'forward'; url: string };
+
 export type PathRewrite = {
   path: string;
   path_type?: string;
   rewrite?: string;
   /** Optional per-route upstream URL; overrides site default upstream. */
   upstream?: string;
+  auth?: RouteAuth;
+  /** Requests per second for one client IP. 0 or omitted disables. */
+  rate_limit_rps?: number;
+  /** Block after this many 4xx responses per second. 0 or omitted disables. */
+  x4xx_limit_rps?: number;
+  /** Omit to follow the global cache switch. */
+  cache?: boolean;
+};
+
+export type ConsulConfig = {
+  address: string;
+  token?: string | null;
+  datacenter?: string | null;
 };
 
 export type TlsSource =
@@ -355,6 +374,11 @@ export type ProxyConfig = {
   proxy_log?: boolean;
   /** Default Let's Encrypt contact email; sites can override when generating TLS. */
   acme_email?: string | null;
+  tls_grade?: 'high' | 'medium' | 'unsafe';
+  cache_size_mb?: number;
+  cache_ttl_secs?: number;
+  consul?: ConsulConfig | null;
+  jwt_secret?: string | null;
 };
 
 export type CertificateRow = {

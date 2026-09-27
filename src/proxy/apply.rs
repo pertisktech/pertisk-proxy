@@ -79,7 +79,41 @@ pub fn config_to_route_table(config: &Config) -> Result<RouteTable> {
         by_host.entry(host).or_default().extend(routes);
     }
 
-    Ok(RouteTable::from_routes(by_host))
+    let mut table = RouteTable::from_routes(by_host);
+    for site in &config.sites {
+        let host = site.host.trim().to_lowercase();
+        if host.is_empty() {
+            continue;
+        }
+        let routes = if site.routes.is_empty() {
+            vec![crate::proxy_config::PathRewrite {
+                path: "/".into(),
+                ..Default::default()
+            }]
+        } else {
+            site.routes.clone()
+        };
+        for route in routes {
+            table.insert_edge(
+                &host,
+                &route.path,
+                crate::edge::EdgePolicy {
+                    auth: route.auth,
+                    rate_limit_rps: route.rate_limit_rps,
+                    x4xx_limit_rps: route.x4xx_limit_rps,
+                    cache: route.cache,
+                },
+            );
+        }
+    }
+    table.set_globals(crate::edge::EdgeGlobals {
+        tls_grade: config.tls_grade,
+        cache_size_mb: config.cache_size_mb,
+        cache_ttl_secs: config.cache_ttl_secs,
+        consul: config.consul.clone(),
+        jwt_secret: config.jwt_secret.clone(),
+    });
+    Ok(table)
 }
 
 /// Per-route upstream, with a compat path for URLs mistakenly stored in `rewrite`.
@@ -196,6 +230,7 @@ pub fn migrate_from_routes_yaml(yaml: &str) -> Result<Config> {
                 path: route.path.clone(),
                 rewrite: None,
                 upstream: None,
+                ..Default::default()
             }],
             backend: backend_name,
             security_headers: None,
@@ -298,12 +333,14 @@ mod tests {
                         path: "/".into(),
                         rewrite: Some("/".into()),
                         upstream: None,
+                        ..Default::default()
                     },
                     PathRewrite {
                         path_type: ConfigPathMatchType::Prefix,
                         path: "/api".into(),
                         rewrite: None,
                         upstream: Some("http://127.0.0.1:7780".into()),
+                        ..Default::default()
                     },
                 ],
                 security_headers: None,
@@ -383,6 +420,7 @@ mod tests {
                         path: "/".into(),
                         rewrite: None,
                         upstream: None,
+                        ..Default::default()
                     }],
                     security_headers: None,
                     ingress_namespace: None,
@@ -403,6 +441,7 @@ mod tests {
                         path: "/api".into(),
                         rewrite: None,
                         upstream: None,
+                        ..Default::default()
                     }],
                     security_headers: None,
                     ingress_namespace: None,

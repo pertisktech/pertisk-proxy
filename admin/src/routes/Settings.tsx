@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Info, Lock, Mail, Cloud, Shield, Zap } from 'lucide-react';
+import { Info, Lock, Mail, Cloud, Shield, Zap, Gauge } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, type ManagementInfo, type ProxyConfig } from '@/api/client';
 import { Card } from '@/components/Card';
@@ -10,7 +10,7 @@ import { useManagementInfo } from '@/context/ManagementContext';
 import { useMode } from '@/context/ModeContext';
 import { cn } from '@/utils';
 
-type SettingsTab = 'general' | 'certificates' | 'notifications' | 'storage' | 'performance';
+type SettingsTab = 'general' | 'certificates' | 'edge' | 'notifications' | 'storage' | 'performance';
 
 function formatBytes(bytes: number | null | undefined) {
   if (bytes == null) return 'Unavailable';
@@ -132,6 +132,7 @@ function tabFromHash(hash: string, proxyOnly: boolean): SettingsTab {
   const id = hash.replace(/^#/, '').toLowerCase();
   if (id === 'performance' || id === 'performance-tuning') return 'performance';
   if (proxyOnly && (id === 'certificates' || id === 'tls' || id === 'acme')) return 'certificates';
+  if (proxyOnly && id === 'edge') return 'edge';
   if (proxyOnly && (id === 'notifications' || id === 'email' || id === 'smtp')) {
     return 'notifications';
   }
@@ -152,6 +153,14 @@ export function Settings() {
   const [acmeEmail, setAcmeEmail] = useState('');
   const [acmeSaving, setAcmeSaving] = useState(false);
   const [configError, setConfigError] = useState('');
+  const [cacheMb, setCacheMb] = useState('0');
+  const [cacheTtl, setCacheTtl] = useState('60');
+  const [tlsGrade, setTlsGrade] = useState<'high' | 'medium' | 'unsafe'>('medium');
+  const [consulAddress, setConsulAddress] = useState('');
+  const [consulToken, setConsulToken] = useState('');
+  const [consulDc, setConsulDc] = useState('');
+  const [jwtSecret, setJwtSecret] = useState('');
+  const [edgeSaving, setEdgeSaving] = useState(false);
 
   useEffect(() => {
     Promise.all([api.version(), api.authConfig(), api.management()])
@@ -173,6 +182,13 @@ export function Settings() {
         if (cancelled) return;
         setConfig(cfg);
         setAcmeEmail(cfg.acme_email?.trim() ?? '');
+        setCacheMb(String(cfg.cache_size_mb ?? 0));
+        setCacheTtl(String(cfg.cache_ttl_secs ?? 60));
+        setTlsGrade(cfg.tls_grade ?? 'medium');
+        setConsulAddress(cfg.consul?.address ?? '');
+        setConsulToken(cfg.consul?.token ?? '');
+        setConsulDc(cfg.consul?.datacenter ?? '');
+        setJwtSecret(cfg.jwt_secret ?? '');
       })
       .catch((e) => {
         if (cancelled) return;
@@ -204,6 +220,39 @@ export function Settings() {
       toast.error(msg);
     } finally {
       setAcmeSaving(false);
+    }
+  }
+
+  async function saveEdge(e: FormEvent) {
+    e.preventDefault();
+    setEdgeSaving(true);
+    setConfigError('');
+    try {
+      const latest = await api.config();
+      const address = consulAddress.trim();
+      const next = {
+        ...latest,
+        cache_size_mb: Math.max(0, Number(cacheMb) || 0),
+        cache_ttl_secs: Math.max(1, Number(cacheTtl) || 60),
+        tls_grade: tlsGrade,
+        consul: address
+          ? {
+              address,
+              token: consulToken.trim() || undefined,
+              datacenter: consulDc.trim() || undefined,
+            }
+          : null,
+        jwt_secret: jwtSecret.trim() || null,
+      };
+      await api.saveConfig(next);
+      setConfig(next);
+      toast.success('Edge settings saved. TLS grade applies on the next process start.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to save';
+      setConfigError(msg);
+      toast.error(msg);
+    } finally {
+      setEdgeSaving(false);
     }
   }
 
@@ -240,6 +289,7 @@ export function Settings() {
     ...(showProxyConfig
       ? [
           { id: 'certificates' as const, label: 'Certificates', icon: Lock },
+          { id: 'edge' as const, label: 'Edge', icon: Gauge },
           { id: 'notifications' as const, label: 'Notifications', icon: Mail },
           { id: 'storage' as const, label: 'Storage', icon: Cloud },
         ]
@@ -361,6 +411,102 @@ export function Settings() {
           ) : (
             <p className="mt-3 text-xs text-muted">No default saved yet.</p>
           )}
+        </Card>
+      ) : null}
+
+      {tab === 'edge' && showProxyConfig ? (
+        <Card>
+          <h2 className="mb-1 text-lg font-semibold">Edge</h2>
+          <p className="mb-4 text-sm text-text-secondary">
+            Shared cache, TLS cipher grade, Consul discovery, and the secret used by{' '}
+            <code className="font-mono">POST /api/jwt</code>. Per-site auth, rate limits, file and
+            auto-TLS upstreams are set on each site.
+          </p>
+          {configError ? <p className="mb-3 text-sm text-red-r1">{configError}</p> : null}
+          <form onSubmit={saveEdge} className="grid gap-4 sm:grid-cols-2">
+            <label className="text-sm text-text-secondary">
+              Cache size (MB)
+              <input
+                type="number"
+                min={0}
+                className="mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-text"
+                value={cacheMb}
+                onChange={(e) => setCacheMb(e.target.value)}
+              />
+              <span className="mt-1 block text-xs">0 disables the response cache.</span>
+            </label>
+            <label className="text-sm text-text-secondary">
+              Cache TTL (seconds)
+              <input
+                type="number"
+                min={1}
+                className="mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-text"
+                value={cacheTtl}
+                onChange={(e) => setCacheTtl(e.target.value)}
+              />
+            </label>
+            <label className="text-sm text-text-secondary">
+              TLS grade
+              <select
+                className="mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-text"
+                value={tlsGrade}
+                onChange={(e) => setTlsGrade(e.target.value as 'high' | 'medium' | 'unsafe')}
+              >
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="unsafe">Unsafe</option>
+              </select>
+              <span className="mt-1 block text-xs">Takes effect after pertisk-proxy restarts.</span>
+            </label>
+            <label className="text-sm text-text-secondary">
+              JWT secret
+              <input
+                type="password"
+                className="mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-text"
+                value={jwtSecret}
+                onChange={(e) => setJwtSecret(e.target.value)}
+                autoComplete="new-password"
+                placeholder="optional master secret"
+              />
+            </label>
+            <label className="text-sm text-text-secondary sm:col-span-2">
+              Consul address
+              <input
+                className="mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-text"
+                value={consulAddress}
+                onChange={(e) => setConsulAddress(e.target.value)}
+                placeholder="http://127.0.0.1:8500"
+              />
+            </label>
+            <label className="text-sm text-text-secondary">
+              Consul token
+              <input
+                type="password"
+                className="mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-text"
+                value={consulToken}
+                onChange={(e) => setConsulToken(e.target.value)}
+                autoComplete="new-password"
+              />
+            </label>
+            <label className="text-sm text-text-secondary">
+              Consul datacenter
+              <input
+                className="mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-text"
+                value={consulDc}
+                onChange={(e) => setConsulDc(e.target.value)}
+                placeholder="optional"
+              />
+            </label>
+            <div className="sm:col-span-2">
+              <button
+                type="submit"
+                disabled={edgeSaving}
+                className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-bg hover:opacity-90 disabled:opacity-50"
+              >
+                {edgeSaving ? 'Saving…' : 'Save edge settings'}
+              </button>
+            </div>
+          </form>
         </Card>
       ) : null}
 

@@ -64,6 +64,18 @@ pub struct PathRewrite {
     /// When set, overrides the site's default backend for this path only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
+    /// Route authentication. Omit to leave the route open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<crate::edge::RouteAuth>,
+    /// Requests per second for one client IP on this path. `0` disables.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub rate_limit_rps: u32,
+    /// Block the client IP after this many 4xx responses in one second. `0` disables.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub x4xx_limit_rps: u32,
+    /// `None` follows the global cache. `Some(false)` skips caching this path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<bool>,
 }
 
 /// Named Access Control List (reusable GeoIP profile).
@@ -135,8 +147,23 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
-fn is_false(value: &bool) -> bool {
-    !*value
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
+impl Default for PathRewrite {
+    fn default() -> Self {
+        Self {
+            path_type: PathMatchType::Prefix,
+            path: "/".into(),
+            rewrite: None,
+            upstream: None,
+            auth: None,
+            rate_limit_rps: 0,
+            x4xx_limit_rps: 0,
+            cache: None,
+        }
+    }
 }
 
 /// TLS certificate source.
@@ -359,6 +386,21 @@ pub struct Config {
     /// HTTP/3 / QUIC tuning (optional).
     #[serde(default)]
     pub http3: crate::http3_options::Http3Options,
+    /// Downstream TLS cipher profile: `high`, `medium` (default), or `unsafe`.
+    #[serde(default)]
+    pub tls_grade: crate::edge::TlsGrade,
+    /// In-memory response cache size. `0` disables caching.
+    #[serde(default)]
+    pub cache_size_mb: u64,
+    /// Default TTL for cached responses, in seconds.
+    #[serde(default = "default_cache_ttl")]
+    pub cache_ttl_secs: u64,
+    /// Consul agent used by `consul://service` upstreams.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consul: Option<crate::edge::ConsulConfig>,
+    /// Extra secret accepted by `POST /api/jwt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jwt_secret: Option<String>,
 }
 
 fn default_http_addr() -> SocketAddr {
@@ -374,6 +416,10 @@ fn default_management_addr() -> SocketAddr {
 }
 fn default_true() -> bool {
     true
+}
+
+fn default_cache_ttl() -> u64 {
+    60
 }
 
 fn default_security_headers() -> HashMap<String, String> {
@@ -416,6 +462,11 @@ impl Default for Config {
             proxy_log: true,
             acme_email: None,
             http3: crate::http3_options::Http3Options::default(),
+            tls_grade: crate::edge::TlsGrade::Medium,
+            cache_size_mb: 0,
+            cache_ttl_secs: default_cache_ttl(),
+            consul: None,
+            jwt_secret: None,
         }
     }
 }

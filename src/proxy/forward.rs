@@ -15,6 +15,9 @@ pub struct MiddlewareAction {
     pub forward_client_ip: bool,
     pub geoip: crate::geoip::GeoIpPolicy,
     pub security: crate::security::SecurityPolicy,
+    pub edge: crate::edge::EdgePolicy,
+    /// Set when the backend is `file://...`.
+    pub file_root: Option<String>,
 }
 
 impl Default for MiddlewareAction {
@@ -26,6 +29,8 @@ impl Default for MiddlewareAction {
             forward_client_ip: true,
             geoip: Default::default(),
             security: Default::default(),
+            edge: Default::default(),
+            file_root: None,
         }
     }
 }
@@ -210,11 +215,60 @@ pub fn resolve_forward(
     middleware.forward_client_ip = route.forward_client_ip;
     middleware.geoip = route.geoip.clone();
     middleware.security = route.security.clone();
+    middleware.edge = table.edge_for(host, &route.path);
     let upstream_path = if let Some(ref prefix) = middleware.strip_prefix {
         strip_path_prefix(path_and_query, prefix)
     } else {
         path_and_query.to_string()
     };
+
+    if let Some(root) = route.backend.address.strip_prefix("file:") {
+        middleware.file_root = Some(root.to_string());
+        return Ok(ForwardPlan {
+            peer_host: "127.0.0.1".into(),
+            peer_port: 9,
+            upstream_url: format!("file:{root}{upstream_path}"),
+            use_tls: false,
+            middleware,
+        });
+    }
+
+    if let Some(service) = route.backend.address.strip_prefix("consul:") {
+        let (peer_host, peer_port) = crate::edge::consul_pick(service).ok_or_else(|| {
+            pingora_error::Error::explain(
+                HTTPStatus(503),
+                format!("no healthy consul endpoints for {service}"),
+            )
+        })?;
+        let mut backend = route.backend.clone();
+        backend.address = format!("{peer_host}:{peer_port}");
+        backend.port = peer_port;
+        let upstream_url = build_upstream_url(&backend, &upstream_path);
+        return Ok(ForwardPlan {
+            peer_host,
+            peer_port,
+            upstream_url,
+            use_tls: backend.use_tls,
+            middleware,
+        });
+    }
+
+    if let Some(rest) = route.backend.address.strip_prefix("auto:") {
+        let (peer_host, peer_port) = parse_backend_peer(rest, route.backend.port)?;
+        let use_tls = crate::edge::probe_upstream_tls(&peer_host, peer_port);
+        let mut backend = route.backend.clone();
+        backend.address = format!("{peer_host}:{peer_port}");
+        backend.port = peer_port;
+        backend.use_tls = use_tls;
+        let upstream_url = build_upstream_url(&backend, &upstream_path);
+        return Ok(ForwardPlan {
+            peer_host,
+            peer_port,
+            upstream_url,
+            use_tls,
+            middleware,
+        });
+    }
 
     let (peer_host, peer_port) = parse_backend_peer(&route.backend.address, route.backend.port)?;
     let upstream_url = build_upstream_url(&route.backend, &upstream_path);

@@ -50,6 +50,9 @@ pub struct Route {
 pub struct RouteTable {
     /// Host (lowercase) -> ordered routes (longest prefix first).
     routes: HashMap<String, Vec<Route>>,
+    /// Host -> route path pattern -> edge policy.
+    edge: HashMap<String, HashMap<String, crate::edge::EdgePolicy>>,
+    globals: crate::edge::EdgeGlobals,
 }
 
 impl RouteTable {
@@ -109,7 +112,83 @@ impl RouteTable {
         for routes in by_host.values_mut() {
             routes.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
         }
-        Self { routes: by_host }
+        Self {
+            routes: by_host,
+            edge: HashMap::new(),
+            globals: crate::edge::EdgeGlobals::default(),
+        }
+    }
+
+    pub fn globals(&self) -> &crate::edge::EdgeGlobals {
+        &self.globals
+    }
+
+    pub fn set_globals(&mut self, globals: crate::edge::EdgeGlobals) {
+        self.globals = globals;
+    }
+
+    pub fn insert_edge(&mut self, host: &str, path: &str, policy: crate::edge::EdgePolicy) {
+        self.edge
+            .entry(normalize_host(host))
+            .or_default()
+            .insert(path.to_string(), policy);
+    }
+
+    pub fn edge_for(&self, host: &str, route_path: &str) -> crate::edge::EdgePolicy {
+        let host = self.matched_host_key(host);
+        self.edge
+            .get(&host)
+            .and_then(|paths| paths.get(route_path))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn consul_services(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for routes in self.routes.values() {
+            for route in routes {
+                if let Some(name) = route.backend.address.strip_prefix("consul:") {
+                    if !name.is_empty() && !out.iter().any(|s| s == name) {
+                        out.push(name.to_string());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    pub fn accepts_jwt_secret(&self, secret: &str) -> bool {
+        if self.globals.jwt_secret.as_deref() == Some(secret) {
+            return true;
+        }
+        self.edge.values().any(|paths| {
+            paths.values().any(|policy| {
+                matches!(&policy.auth, Some(crate::edge::RouteAuth::Jwt { secret: configured }) if configured == secret)
+            })
+        })
+    }
+
+    fn matched_host_key(&self, host: &str) -> String {
+        let host = normalize_host(host);
+        if self.routes.contains_key(&host) || self.edge.contains_key(&host) {
+            return host;
+        }
+        let mut best: Option<(usize, &str)> = None;
+        for key in self.routes.keys().chain(self.edge.keys()) {
+            if key.starts_with("*.") && crate::proxy_config::wildcard_covers_host(key, &host) {
+                let score = key.len();
+                if best.as_ref().map(|(s, _)| *s).unwrap_or(0) < score {
+                    best = Some((score, key.as_str()));
+                }
+            }
+        }
+        if let Some((_, key)) = best {
+            return key.to_string();
+        }
+        if self.routes.contains_key("*") {
+            return "*".into();
+        }
+        host
     }
 }
 
@@ -122,15 +201,54 @@ pub fn parse_upstream(raw: &str) -> Option<Backend> {
 
     if trimmed.contains("://") {
         if let Ok(url) = url::Url::parse(trimmed) {
-            let host = normalize_upstream_host(url.host_str()?);
-            let use_tls = url.scheme() == "https";
-            let default_port = if use_tls { 443 } else { 80 };
-            let port = url.port_or_known_default().unwrap_or(default_port);
-            return Some(Backend {
-                address: format!("{host}:{port}"),
-                port,
-                use_tls,
-            });
+            match url.scheme() {
+                "file" => {
+                    let path = url.path();
+                    if path.is_empty() {
+                        return None;
+                    }
+                    return Some(Backend {
+                        address: format!("file:{path}"),
+                        port: 0,
+                        use_tls: false,
+                    });
+                }
+                "consul" => {
+                    let name = url
+                        .host_str()
+                        .map(|s| s.to_string())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| url.path().trim_matches('/').to_string());
+                    if name.is_empty() {
+                        return None;
+                    }
+                    return Some(Backend {
+                        address: format!("consul:{name}"),
+                        port: 0,
+                        use_tls: false,
+                    });
+                }
+                "auto" => {
+                    let host = normalize_upstream_host(url.host_str()?);
+                    let port = url.port().unwrap_or(443);
+                    return Some(Backend {
+                        address: format!("auto:{host}:{port}"),
+                        port,
+                        use_tls: false,
+                    });
+                }
+                _ => {
+                    let host = normalize_upstream_host(url.host_str()?);
+                    let use_tls = url.scheme() == "https";
+                    let default_port = if use_tls { 443 } else { 80 };
+                    let port = url.port_or_known_default().unwrap_or(default_port);
+                    return Some(Backend {
+                        address: format!("{host}:{port}"),
+                        port,
+                        use_tls,
+                    });
+                }
+            }
         }
     }
 
@@ -267,7 +385,10 @@ pub fn build_route_table_from_ingresses(
         routes.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
     }
 
-    RouteTable { routes: by_host }
+    RouteTable {
+        routes: by_host,
+        ..Default::default()
+    }
 }
 
 fn add_ingress_to_table(by_host: &mut HashMap<String, Vec<Route>>, ingress: &Ingress) {
@@ -407,6 +528,7 @@ mod tests {
                     security: Default::default(),
                 }],
             )]),
+            ..Default::default()
         };
 
         assert!(table.match_route("app.example.com", "/api/v1").is_some());
@@ -450,6 +572,7 @@ mod tests {
                     }],
                 ),
             ]),
+            ..Default::default()
         };
 
         assert!(table.has_host("app.example.com"));
@@ -624,6 +747,12 @@ mod tests {
         assert_eq!(b.address, "example.com:80");
         let b = parse_upstream("10.0.0.1:8080").unwrap();
         assert_eq!(b.port, 8080);
+        let b = parse_upstream("file:///var/www").unwrap();
+        assert_eq!(b.address, "file:/var/www");
+        let b = parse_upstream("consul://web").unwrap();
+        assert_eq!(b.address, "consul:web");
+        let b = parse_upstream("auto://10.0.0.8:8443").unwrap();
+        assert_eq!(b.address, "auto:10.0.0.8:8443");
     }
 
     #[test]

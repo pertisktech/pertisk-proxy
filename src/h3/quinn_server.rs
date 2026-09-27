@@ -401,6 +401,81 @@ async fn handle_request_inner(
         }
     };
 
+    let client_ip = remote_addr.ip().to_string();
+    let edge = &plan.middleware.edge;
+    if edge.x4xx_limit_rps > 0
+        && crate::edge::x4xx_blocked(&client_ip, &host, edge.x4xx_limit_rps)
+    {
+        drain_and_send_h3_response(
+            stream,
+            plain_response(http::StatusCode::TOO_MANY_REQUESTS, b"too many errors"),
+            Bytes::from_static(b"too many errors"),
+        )
+        .await?;
+        return Ok(());
+    }
+    if edge.rate_limit_rps > 0
+        && crate::edge::rate_limited(
+            &format!("rps|{client_ip}|{host}"),
+            edge.rate_limit_rps,
+        )
+    {
+        drain_and_send_h3_response(
+            stream,
+            plain_response(http::StatusCode::TOO_MANY_REQUESTS, b"too many requests"),
+            Bytes::from_static(b"too many requests"),
+        )
+        .await?;
+        return Ok(());
+    }
+    if let Some(auth) = edge.auth.clone() {
+        let query = req.uri().query().unwrap_or("");
+        let ok = match &auth {
+            crate::edge::RouteAuth::Forward { url } => {
+                crate::edge::forward_auth_ok(url, &host, req.uri().path(), req.headers()).await
+            }
+            other => crate::edge::auth_header_ok(other, req.headers(), query),
+        };
+        if !ok {
+            drain_and_send_h3_response(
+                stream,
+                plain_response(http::StatusCode::UNAUTHORIZED, b"unauthorized"),
+                Bytes::from_static(b"unauthorized"),
+            )
+            .await?;
+            return Ok(());
+        }
+    }
+    if let Some(root) = plan.middleware.file_root.clone() {
+        match crate::edge::safe_file(&root, req.uri().path())
+            .and_then(|path| std::fs::read(&path).ok().map(|body| (path, body)))
+        {
+            Some((path, body)) => {
+                let mime = crate::edge::guess_mime(&path);
+                let bytes = Bytes::from(body);
+                let mut resp = plain_response(http::StatusCode::OK, bytes.as_ref());
+                resp.headers_mut().insert(
+                    http::header::CONTENT_TYPE,
+                    http::HeaderValue::from_static("application/octet-stream"),
+                );
+                if let Ok(value) = http::HeaderValue::from_str(mime) {
+                    resp.headers_mut()
+                        .insert(http::header::CONTENT_TYPE, value);
+                }
+                drain_and_send_h3_response(stream, resp, bytes).await?;
+            }
+            None => {
+                drain_and_send_h3_response(
+                    stream,
+                    plain_response(http::StatusCode::NOT_FOUND, b"not found"),
+                    Bytes::from_static(b"not found"),
+                )
+                .await?;
+            }
+        }
+        return Ok(());
+    }
+
     if plan.middleware.geoip.is_active() {
         let socket_ip = remote_addr.ip().to_string();
         let xff = req

@@ -167,6 +167,7 @@ pub fn router(state: AdminState) -> Router {
         .route("/api/version", get(api_version))
         .route("/api/auth/config", get(auth_config))
         .route("/api/auth/login", post(auth_login))
+        .route("/api/jwt", post(issue_route_jwt))
         .route("/api/auth/check", get(auth_check))
         .route("/api/ws", get(ws::ws_handler))
         .route("/api/live", get(ws::live_sse_handler))
@@ -454,6 +455,41 @@ const DEFAULT_ADMIN_USERNAME: &str = crate::db::DEFAULT_ADMIN_USERNAME;
 pub(crate) fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     value.strip_prefix("Bearer ").map(str::trim)
+}
+
+#[derive(Deserialize)]
+struct JwtIssueRequest {
+    secret: String,
+    #[serde(default)]
+    owner: String,
+    #[serde(default = "default_jwt_minutes")]
+    valid: u64,
+}
+
+fn default_jwt_minutes() -> u64 {
+    10
+}
+
+#[derive(Serialize)]
+struct JwtIssueResponse {
+    token: String,
+}
+
+async fn issue_route_jwt(
+    State(state): State<AdminState>,
+    Json(body): Json<JwtIssueRequest>,
+) -> Result<Json<JwtIssueResponse>, StatusCode> {
+    if body.secret.trim().is_empty() || !state.router.snapshot().accepts_jwt_secret(&body.secret) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let owner = if body.owner.is_empty() {
+        "pertisk".to_string()
+    } else {
+        body.owner
+    };
+    Ok(Json(JwtIssueResponse {
+        token: crate::edge::issue_jwt(&body.secret, &owner, body.valid),
+    }))
 }
 
 #[derive(Serialize)]

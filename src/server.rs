@@ -122,6 +122,7 @@ pub fn run(
                 .with_context(|| format!("HTTPS listener cannot load cert={cert} key={key}"))?;
         }
 
+        let tls_grade = effective_tls_grade(router.snapshot().globals().tls_grade);
         for addr in tcp_bind_addrs(&server_config.https_listen) {
             let tls_settings = build_tls_settings(
                 server_config,
@@ -129,6 +130,7 @@ pub fn run(
                 server_config.enable_h2,
                 acme_tls_pending,
                 https_sni_always,
+                tls_grade,
             )?;
             proxy.add_tls_with_settings(&addr, tcp_listener_options(&addr), tls_settings);
             info!(
@@ -191,6 +193,7 @@ pub fn run(
         }
     }
 
+    crate::edge::spawn_consul_poller(Arc::clone(&router));
     server.run_forever();
 }
 
@@ -237,6 +240,7 @@ fn build_tls_settings(
     enable_h2: bool,
     acme_tls_pending: bool,
     https_sni_always: bool,
+    tls_grade: crate::edge::TlsGrade,
 ) -> Result<TlsSettings> {
     let mut tls_settings = if cert_store.host_count() > 0 || acme_tls_pending || https_sni_always {
         let callbacks: TlsAcceptCallbacks = Box::new(CertStoreSniCallback {
@@ -257,7 +261,21 @@ fn build_tls_settings(
     if enable_h2 {
         tls_settings.enable_h2();
     }
+    crate::edge::apply_tls_grade(&mut tls_settings, tls_grade);
     Ok(tls_settings)
+}
+
+fn effective_tls_grade(from_config: crate::edge::TlsGrade) -> crate::edge::TlsGrade {
+    match std::env::var("PERTISK_TLS_GRADE")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("high") => crate::edge::TlsGrade::High,
+        Some("unsafe") => crate::edge::TlsGrade::Unsafe,
+        Some("medium") => crate::edge::TlsGrade::Medium,
+        _ => from_config,
+    }
 }
 
 #[cfg(feature = "prometheus")]

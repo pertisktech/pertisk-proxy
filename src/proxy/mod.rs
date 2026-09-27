@@ -32,11 +32,20 @@ pub struct RequestCtx {
     pub forward_client_ip: bool,
     pub geoip: crate::geoip::GeoIpPolicy,
     pub security: crate::security::SecurityPolicy,
+    pub edge: crate::edge::EdgePolicy,
+    pub file_root: Option<String>,
     pub is_grpc: bool,
     pub is_grpc_web: bool,
     pub is_long_lived_stream: bool,
     pub is_websocket: bool,
     pub is_registry: bool,
+    pub cache_body: Vec<u8>,
+    pub cache_status: u16,
+    pub cache_collect: bool,
+    pub cache_key: Option<String>,
+    pub cache_type: String,
+    pub rate_client: Option<String>,
+    pub rate_host: Option<String>,
     pub log_started: Option<Instant>,
     pub log_upstream: Option<String>,
     pub metrics_counted: bool,
@@ -51,11 +60,20 @@ impl From<crate::proxy::forward::MiddlewareAction> for RequestCtx {
             forward_client_ip: mw.forward_client_ip,
             geoip: mw.geoip,
             security: mw.security,
+            edge: mw.edge,
+            file_root: mw.file_root,
             is_grpc: false,
             is_grpc_web: false,
             is_long_lived_stream: false,
             is_websocket: false,
             is_registry: false,
+            cache_body: Vec::new(),
+            cache_status: 0,
+            cache_collect: false,
+            cache_key: None,
+            cache_type: String::new(),
+            rate_client: None,
+            rate_host: None,
             log_started: None,
             log_upstream: None,
             metrics_counted: false,
@@ -331,6 +349,146 @@ impl ProxyHttp for Gateway {
             ctx.is_long_lived_stream = is_long_lived_stream;
             ctx.is_websocket = is_websocket;
             ctx.is_registry = is_registry;
+        }
+
+        let client_ip = session_client_ip(session);
+        let host_for_edge = request_host(session.req_header());
+        if ctx.edge.x4xx_limit_rps > 0
+            && crate::edge::x4xx_blocked(
+                client_ip.as_deref().unwrap_or("-"),
+                &host_for_edge,
+                ctx.edge.x4xx_limit_rps,
+            )
+        {
+            deny::respond_html(
+                session,
+                &format!("pertisk-proxy/{protocol}"),
+                http::StatusCode::TOO_MANY_REQUESTS,
+                "text/plain",
+                "too many errors",
+                &[("Retry-After", "1".into())],
+            )
+            .await?;
+            return Ok(true);
+        }
+        if ctx.edge.rate_limit_rps > 0
+            && crate::edge::rate_limited(
+                &format!(
+                    "rps|{}|{host_for_edge}",
+                    client_ip.as_deref().unwrap_or("-")
+                ),
+                ctx.edge.rate_limit_rps,
+            )
+        {
+            deny::respond_html(
+                session,
+                &format!("pertisk-proxy/{protocol}"),
+                http::StatusCode::TOO_MANY_REQUESTS,
+                "text/plain",
+                "too many requests",
+                &[("Retry-After", "1".into())],
+            )
+            .await?;
+            return Ok(true);
+        }
+        ctx.rate_client = client_ip.clone();
+        ctx.rate_host = Some(host_for_edge.clone());
+
+        if let Some(auth) = ctx.edge.auth.clone() {
+            let query = session.req_header().uri.query().unwrap_or("");
+            let ok = match &auth {
+                crate::edge::RouteAuth::Forward { url } => {
+                    crate::edge::forward_auth_ok(url, &host_for_edge, &path, &session.req_header().headers)
+                        .await
+                }
+                other => crate::edge::auth_header_ok(other, &session.req_header().headers, query),
+            };
+            if !ok {
+                let mut extra = vec![("X-Pertisk-Block", "auth".into())];
+                if matches!(auth, crate::edge::RouteAuth::Basic { .. }) {
+                    extra.push(("WWW-Authenticate", "Basic realm=\"pertisk\"".into()));
+                }
+                deny::respond_html(
+                    session,
+                    &format!("pertisk-proxy/{protocol}"),
+                    http::StatusCode::UNAUTHORIZED,
+                    "text/plain",
+                    "unauthorized",
+                    &extra,
+                )
+                .await?;
+                return Ok(true);
+            }
+        }
+
+        if let Some(root) = ctx.file_root.clone() {
+            let req_path = session.req_header().uri.path();
+            let server = format!("pertisk-proxy/{protocol}");
+            match crate::edge::safe_file(&root, req_path).and_then(|p| {
+                std::fs::read(&p).ok().map(|body| (p, body))
+            }) {
+                Some((file_path, body)) => {
+                    let mime = crate::edge::guess_mime(&file_path);
+                    let mut resp = ResponseHeader::build(http::StatusCode::OK, Some(4))?;
+                    resp.insert_header("Content-Type", mime)?;
+                    resp.insert_header("Content-Length", body.len().to_string())?;
+                    resp.insert_header("Server", &server)?;
+                    resp.insert_header("X-App-Name", crate::app_name())?;
+                    session.write_response_header(Box::new(resp), false).await?;
+                    session
+                        .write_response_body(Some(bytes::Bytes::from(body)), true)
+                        .await?;
+                }
+                None => {
+                    deny::respond_html(
+                        session,
+                        &server,
+                        http::StatusCode::NOT_FOUND,
+                        "text/plain",
+                        "not found",
+                        &[],
+                    )
+                    .await?;
+                }
+            }
+            return Ok(true);
+        }
+
+        let globals = self.router.snapshot().globals().clone();
+        if !ctx.is_grpc
+            && !ctx.is_websocket
+            && !ctx.is_long_lived_stream
+            && session.req_header().method.as_str() == "GET"
+            && ctx.edge.auth.is_none()
+            && crate::edge::cache_enabled(&globals, &ctx.edge)
+        {
+            let key = format!(
+                "GET {host_for_edge}{}",
+                session
+                    .req_header()
+                    .uri
+                    .path_and_query()
+                    .map(|pq| pq.as_str())
+                    .unwrap_or(session.req_header().uri.path())
+            );
+            if let Some(hit) = crate::edge::cache_get(&key) {
+                let mut resp = ResponseHeader::build(
+                    http::StatusCode::from_u16(hit.status).unwrap_or(http::StatusCode::OK),
+                    Some(hit.headers.len() + 2),
+                )?;
+                for (name, value) in &hit.headers {
+                    resp.insert_header(name.clone(), value.as_str()).ok();
+                }
+                resp.insert_header("X-Cache", "HIT")?;
+                resp.insert_header("X-App-Name", crate::app_name())?;
+                session.write_response_header(Box::new(resp), false).await?;
+                session
+                    .write_response_body(Some(hit.body), true)
+                    .await?;
+                return Ok(true);
+            }
+            ctx.cache_collect = true;
+            ctx.cache_key = Some(key);
         }
 
         if ctx.geoip.is_active() {
@@ -661,6 +819,34 @@ impl ProxyHttp for Gateway {
         } else if ctx.is_grpc || ctx.is_long_lived_stream || session.as_downstream().is_http2() {
             grpc::strip_hop_by_hop_response_headers(upstream_response);
         }
+        ctx.cache_status = upstream_response.status.as_u16();
+        if ctx.cache_collect {
+            let cacheable = (200..300).contains(&ctx.cache_status)
+                && upstream_response
+                    .headers
+                    .get("cache-control")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|v| {
+                        let v = v.to_ascii_lowercase();
+                        !v.contains("no-store") && !v.contains("private")
+                    })
+                    .unwrap_or(true);
+            ctx.cache_collect = cacheable;
+            if cacheable {
+                ctx.cache_type = upstream_response
+                    .headers
+                    .get(http::header::CONTENT_TYPE.as_str())
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+            }
+        }
+        if (400..500).contains(&ctx.cache_status) {
+            if let (Some(ip), Some(host)) = (ctx.rate_client.as_deref(), ctx.rate_host.as_deref())
+            {
+                crate::edge::note_4xx(ip, host);
+            }
+        }
         Ok(())
     }
 
@@ -704,6 +890,46 @@ impl ProxyHttp for Gateway {
         }
 
         Ok(())
+    }
+
+    fn response_body_filter(
+        &self,
+        _session: &mut Session,
+        body: &mut Option<bytes::Bytes>,
+        end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> Result<Option<std::time::Duration>> {
+        if ctx.cache_collect {
+            if let Some(chunk) = body {
+                if ctx.cache_body.len() + chunk.len() <= 1024 * 1024 {
+                    ctx.cache_body.extend_from_slice(chunk);
+                } else {
+                    ctx.cache_collect = false;
+                    ctx.cache_body.clear();
+                }
+            }
+            if end_of_stream && ctx.cache_collect {
+                if let Some(key) = ctx.cache_key.clone() {
+                    let globals = self.router.snapshot().globals().clone();
+                    let ttl = std::time::Duration::from_secs(globals.cache_ttl_secs.max(1));
+                    let max_bytes = (globals.cache_size_mb as usize).saturating_mul(1024 * 1024);
+                    crate::edge::cache_put(
+                        key,
+                        crate::edge::CachedResponse {
+                            status: ctx.cache_status,
+                            headers: vec![
+                                ("content-type".into(), ctx.cache_type.clone()),
+                                ("content-length".into(), ctx.cache_body.len().to_string()),
+                            ],
+                            body: bytes::Bytes::from(std::mem::take(&mut ctx.cache_body)),
+                        },
+                        ttl,
+                        max_bytes,
+                    );
+                }
+            }
+        }
+        Ok(None)
     }
 
     fn suppress_error_log(&self, session: &Session, ctx: &Self::CTX, error: &Error) -> bool {

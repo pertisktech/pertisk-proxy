@@ -227,6 +227,25 @@ routes:
 | `PERTISK_GEOIP_COUNTRY_DB` | Country MMDB path |
 | `PERTISK_GEOIP_ASN_DB` | ASN MMDB or `ip2asn-combined.tsv` path |
 | `PERTISK_CAPTCHA_SECRET` | Captcha cookie signing secret |
+| `PERTISK_TLS_GRADE` | Downstream TLS profile: `high`, `medium` (default), `unsafe` |
+
+### Edge (cache, auth, limits, discovery)
+
+Set these on the proxy config (admin JSON or the routes document). `0` / omitted leaves the feature off.
+
+| Field | Where | Meaning |
+|-------|--------|---------|
+| `cache_size_mb`, `cache_ttl_secs` | config root | In-memory GET cache. Size `0` disables it. |
+| `tls_grade` | config root | `high`, `medium`, or `unsafe` cipher profile (restart to apply). |
+| `consul.address` | config root | Consul HTTP API for `consul://service` upstreams. |
+| `jwt_secret` | config root | Secret accepted by `POST /api/jwt`. |
+| `auth` | path route | `basic`, `api_key`, `jwt`, or `forward`. |
+| `rate_limit_rps`, `x4xx_limit_rps` | path route | Per client IP + host. |
+| upstream `file:///var/www` | backend | Serve that directory. |
+| upstream `auto://host:port` | backend | Probe whether the backend speaks TLS. |
+| upstream `consul://service` | backend | Healthy Consul instances, round-robin. |
+
+`POST /api/jwt` with `{"secret","owner","valid"}` returns an HS256 token when `secret` matches `jwt_secret` or a route JWT secret. Clients send `Authorization: Bearer` or `?pertisk_token=`.
 
 Health: `/healthz`, `/readyz`
 

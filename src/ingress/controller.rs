@@ -219,6 +219,7 @@ impl IngressController {
                             path: path.path.clone().unwrap_or_else(|| "/".to_string()),
                             rewrite: None,
                             upstream: None,
+                            ..Default::default()
                         }],
                         backend: backend_name,
                         security_headers: None,
@@ -667,6 +668,7 @@ impl IngressController {
                                     path: path.clone(),
                                     rewrite: None,
                                     upstream: None,
+                                    ..Default::default()
                                 }],
                                 backend: backend_name,
                                 security_headers: None,
