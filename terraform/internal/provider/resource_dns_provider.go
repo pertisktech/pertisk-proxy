@@ -53,7 +53,7 @@ func (r *dnsProviderResource) Schema(_ context.Context, _ resource.SchemaRequest
 			},
 			"provider_type": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "`cloudflare`, `digitalocean`, `route53`, `duckdns`, or `hetzner`.",
+				MarkdownDescription: "`cloudflare`, `digitalocean`, `route53`, `godaddy`, `duckdns`, or `hetzner`.",
 			},
 			"credentials": schema.MapAttribute{
 				Optional:            true,

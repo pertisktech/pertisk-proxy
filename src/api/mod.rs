@@ -1912,6 +1912,48 @@ fn supported_dns_providers() -> Vec<SupportedDnsProvider> {
                     field_type: "password".into(),
                     required: true,
                 },
+                SupportedDnsProviderField {
+                    key: "session_token".into(),
+                    label: "Session Token (optional)".into(),
+                    field_type: "password".into(),
+                    required: false,
+                },
+                SupportedDnsProviderField {
+                    key: "region".into(),
+                    label: "Region (optional, default us-east-1)".into(),
+                    field_type: "text".into(),
+                    required: false,
+                },
+                SupportedDnsProviderField {
+                    key: "zone_id".into(),
+                    label: "Hosted Zone ID (optional)".into(),
+                    field_type: "text".into(),
+                    required: false,
+                },
+                SupportedDnsProviderField {
+                    key: "zone_name".into(),
+                    label: "Hosted Zone Name (optional)".into(),
+                    field_type: "text".into(),
+                    required: false,
+                },
+            ],
+        },
+        SupportedDnsProvider {
+            id: "godaddy".into(),
+            name: "GoDaddy".into(),
+            fields: vec![
+                SupportedDnsProviderField {
+                    key: "api_key".into(),
+                    label: "API Key".into(),
+                    field_type: "password".into(),
+                    required: true,
+                },
+                SupportedDnsProviderField {
+                    key: "api_secret".into(),
+                    label: "API Secret".into(),
+                    field_type: "password".into(),
+                    required: true,
+                },
             ],
         },
         SupportedDnsProvider {
