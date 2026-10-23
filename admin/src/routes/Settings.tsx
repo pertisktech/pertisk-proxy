@@ -335,15 +335,15 @@ export function Settings() {
               Management API auth: {authRequired ? 'enabled (username/password)' : 'disabled'}
             </p>
             {isIngress ? (
-              <p className="mt-2 text-sm text-muted">
+              <p className="mt-2 text-sm text-text-secondary">
                 Credentials come from the Helm auth Secret (
-                <code className="rounded bg-bg px-1">PERTISK_ADMIN</code> /{' '}
-                <code className="rounded bg-bg px-1">PERTISK_PASSWORD</code>).
+                <code className="rounded bg-bg px-1 text-text">PERTISK_ADMIN</code> /{' '}
+                <code className="rounded bg-bg px-1 text-text">PERTISK_PASSWORD</code>).
               </p>
             ) : (
-              <p className="mt-2 text-sm text-muted">
-                Default credentials on first start: <code className="rounded bg-bg px-1">admin</code> /{' '}
-                <code className="rounded bg-bg px-1">admin</code> (stored in SQLite). Change the
+              <p className="mt-2 text-sm text-text-secondary">
+                Default credentials on first start: <code className="rounded bg-bg px-1 text-text">admin</code> /{' '}
+                <code className="rounded bg-bg px-1 text-text">admin</code> (stored in SQLite). Change the
                 password after first login from{' '}
                 <Link to="/profile" className="text-primary underline-offset-2 hover:underline">
                   Profile
