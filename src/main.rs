@@ -30,6 +30,30 @@ fn main() -> Result<()> {
 
     let proxy_log = Arc::new(ProxyLog::new(10_000));
     logging::init(Some(Arc::clone(&proxy_log)));
+
+    // Apply DB-backed runtime env overrides before building the Tokio runtime.
+    // Process environment always wins over stored overrides.
+    let db_path_early = pertisk_proxy::config::resolve_db_path();
+    match pertisk_proxy::runtime_env::load_overrides_from_db_path(&db_path_early) {
+        Ok(overrides) => {
+            let applied = pertisk_proxy::runtime_env::apply_overrides(&overrides);
+            if applied > 0 {
+                info!(
+                    applied,
+                    total = overrides.len(),
+                    "applied runtime env overrides from SQLite"
+                );
+            }
+        }
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                db = %db_path_early.display(),
+                "failed to load runtime env overrides; continuing with process env only"
+            );
+        }
+    }
+
     let runtime_cfg = runtime::runtime_config_from_env(&runtime::proxy_runtime_env())?;
     let tokio_runtime = runtime::build_runtime(&runtime_cfg, "pertisk-proxy-worker")?;
 

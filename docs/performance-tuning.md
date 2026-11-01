@@ -1,8 +1,10 @@
 # Performance tuning
 
-The admin UI shows the running values under **Dashboard → Performance tuning**
-and **Settings → Performance tuning**. Treat those values as authoritative:
-configuration files only show what was requested, while the dashboard shows
+The admin UI shows the running values under **Settings → Performance**.
+In proxy mode, **Settings → Environment** can store SQLite overrides for
+allowlisted `PERTISK_*` variables (applied on the next restart; process
+environment / systemd always wins when set). Helm/systemd reference for
+ingress also lives there. Treat the Performance tab as authoritative for
 what the process and Linux kernel are actually using.
 
 ## Recommended production baseline

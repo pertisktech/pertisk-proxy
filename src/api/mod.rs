@@ -186,6 +186,10 @@ pub fn router(state: AdminState) -> Router {
         .route("/api/tunnel/status", get(get_tunnel_status))
         .route("/api/logs", get(get_logs))
         .route("/api/config", get(get_config).put(put_config))
+        .route(
+            "/api/runtime-env",
+            get(runtime_env_get).put(runtime_env_put),
+        )
         .route("/api/reload", post(reload_config))
         .route("/api/tls", get(get_tls))
         .route("/api/routes", get(get_routes))
@@ -1575,6 +1579,104 @@ async fn get_config(State(state): State<AdminState>) -> Result<Json<Config>, (St
     Ok(Json(build_config(&state).await))
 }
 
+async fn runtime_env_get(
+    State(state): State<AdminState>,
+) -> Result<Json<crate::runtime_env::RuntimeEnvSettings>, (StatusCode, Json<ApiError>)> {
+    let editable = !state.viewer_mode && state.db.is_some();
+    let overrides = if let Some(db) = &state.db {
+        db.get_runtime_env_overrides().await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            )
+        })?
+    } else {
+        std::collections::HashMap::new()
+    };
+    Ok(Json(crate::runtime_env::build_settings(
+        editable, &overrides,
+    )))
+}
+
+#[derive(Deserialize)]
+struct PutRuntimeEnvBody {
+    #[serde(default)]
+    overrides: std::collections::HashMap<String, String>,
+}
+
+#[derive(Serialize)]
+struct PutRuntimeEnvResponse {
+    ok: bool,
+    restart_required: bool,
+    settings: crate::runtime_env::RuntimeEnvSettings,
+}
+
+async fn runtime_env_put(
+    State(state): State<AdminState>,
+    Json(body): Json<PutRuntimeEnvBody>,
+) -> Result<Json<PutRuntimeEnvResponse>, (StatusCode, Json<ApiError>)> {
+    if state.viewer_mode {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "runtime env is read-only in ingress mode; manage via Helm / process env"
+                    .into(),
+            }),
+        ));
+    }
+    let Some(db) = &state.db else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "database not configured".into(),
+            }),
+        ));
+    };
+
+    // Validate all submitted keys before writing.
+    for (key, value) in &body.overrides {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if let Err(msg) = crate::runtime_env::validate_override(key, value) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError { error: msg }),
+            ));
+        }
+    }
+
+    let sanitized = crate::runtime_env::sanitize_overrides(body.overrides);
+    db.save_runtime_env_overrides(&sanitized)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
+    state
+        .proxy_log
+        .push(ProxyLogEntry::config_reload(format!(
+            "runtime env overrides saved ({} keys); restart required",
+            sanitized.len()
+        )))
+        .await;
+
+    let settings = crate::runtime_env::build_settings(true, &sanitized);
+    Ok(Json(PutRuntimeEnvResponse {
+        ok: true,
+        restart_required: true,
+        settings,
+    }))
+}
+
 async fn enrich_tls_expiries(cfg: &mut Config, db: &Database) {
     if let Ok(rows) = db.list_certificates().await {
         for tls in &mut cfg.tls {
@@ -2188,8 +2290,19 @@ async fn admin_spa_fallback(
     State(state): State<AdminState>,
     req: Request,
 ) -> Response {
+    let path = req.uri().path();
+    // Never serve the SPA HTML for API routes — clients expect JSON.
+    if path == "/api" || path.starts_with("/api/") {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: format!("API route not found: {path}"),
+            }),
+        )
+            .into_response();
+    }
+
     if let Some(origin) = state.dev_origin.as_ref() {
-        let path = req.uri().path();
         let query = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
         let location = format!("{origin}{path}{query}");
         return Redirect::temporary(&location).into_response();
@@ -2201,11 +2314,11 @@ async fn admin_spa_fallback(
         return build_stub_page(dist).into_response();
     }
 
-    let path = req.uri().path().trim_start_matches('/');
-    let file_path = if path.is_empty() {
+    let rel = path.trim_start_matches('/');
+    let file_path = if rel.is_empty() {
         index.clone()
     } else {
-        let candidate = dist.join(path);
+        let candidate = dist.join(rel);
         if candidate.is_file() {
             candidate
         } else {

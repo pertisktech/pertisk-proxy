@@ -303,6 +303,26 @@ impl Database {
         Ok(())
     }
 
+    pub async fn get_runtime_env_overrides(&self) -> Result<HashMap<String, String>> {
+        let Some(json) = self
+            .get_config_json(crate::runtime_env::RUNTIME_ENV_KEY)
+            .await?
+        else {
+            return Ok(HashMap::new());
+        };
+        crate::runtime_env::parse_overrides_json(&json)
+    }
+
+    pub async fn save_runtime_env_overrides(
+        &self,
+        overrides: &HashMap<String, String>,
+    ) -> Result<()> {
+        let sanitized = crate::runtime_env::sanitize_overrides(overrides.clone());
+        let json = serde_json::to_string(&sanitized)?;
+        self.save_config_json(crate::runtime_env::RUNTIME_ENV_KEY, &json)
+            .await
+    }
+
     pub async fn list_dns_providers(&self) -> Result<Vec<DnsProviderRow>> {
         let path = self.path.clone();
         spawn_blocking(move || {

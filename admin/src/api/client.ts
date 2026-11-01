@@ -2,6 +2,25 @@ import { getToken, clearToken } from '@/auth';
 
 const API = '/api';
 
+async function parseJsonBody<T>(r: Response): Promise<T> {
+  const text = await r.text();
+  const trimmed = text.trimStart();
+  if (!trimmed) {
+    return {} as T;
+  }
+  if (trimmed.startsWith('<!') || trimmed.startsWith('<html') || trimmed.startsWith('<HTML')) {
+    throw new Error(
+      `API returned HTML instead of JSON for ${r.url || 'request'} (${r.status}). ` +
+        'Rebuild and restart pertisk-proxy so the backend matches this admin UI.',
+    );
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`Invalid JSON response (${r.status}): ${trimmed.slice(0, 120)}`);
+  }
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
@@ -20,10 +39,10 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     throw new Error('Unauthorized');
   }
   if (!r.ok) {
-    const body = (await r.json().catch(() => ({}))) as { error?: string };
+    const body = await parseJsonBody<{ error?: string }>(r).catch(() => ({} as { error?: string }));
     throw new Error(body.error || `${r.status} ${r.statusText}`);
   }
-  return r.json();
+  return parseJsonBody<T>(r);
 }
 
 export type ManagementInfo = {
@@ -381,6 +400,24 @@ export type ProxyConfig = {
   jwt_secret?: string | null;
 };
 
+export type RuntimeEnvField = {
+  key: string;
+  label: string;
+  description: string;
+  field_type: 'text' | 'number' | 'select' | string;
+  options: string[];
+  override_value?: string | null;
+  effective_value?: string | null;
+  source: 'override' | 'pending' | 'env' | 'default' | string;
+};
+
+export type RuntimeEnvSettings = {
+  editable: boolean;
+  restart_required: boolean;
+  overrides: Record<string, string>;
+  fields: RuntimeEnvField[];
+};
+
 export type CertificateRow = {
   id: string;
   hosts: string[];
@@ -490,6 +527,17 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(config),
     }),
+  runtimeEnv: {
+    get: () => request<RuntimeEnvSettings>('/runtime-env'),
+    save: (body: { overrides: Record<string, string> }) =>
+      request<{ ok: boolean; restart_required: boolean; settings: RuntimeEnvSettings }>(
+        '/runtime-env',
+        {
+          method: 'PUT',
+          body: JSON.stringify(body),
+        },
+      ),
+  },
   reload: () => request<{ ok: boolean }>('/reload', { method: 'POST' }),
   tls: () => request<{ entries: { hosts: string[]; cert: string; key: string }[]; host_count: number }>('/tls'),
   certificates: {
