@@ -283,7 +283,7 @@ pub(crate) async fn smtp_preview(
     };
     let (_subject, content) = templates::sample_content(kind);
     Ok(Json(PreviewResponse {
-        html: templates::render_html(from_name, &content),
+        html: templates::render_html_preview(from_name, &content),
     }))
 }
 

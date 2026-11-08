@@ -3,13 +3,15 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
-use lettre::message::{header::ContentType, Mailbox, Message, MultiPart, SinglePart};
+use lettre::message::{
+    header::ContentType, Attachment, Mailbox, Message, MultiPart, SinglePart,
+};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
 
 use crate::db::SmtpSettingsRow;
 
-use super::templates::{self, EmailContent};
+use super::templates::{self, EmailContent, LOGO_CONTENT_ID, LOGO_PNG};
 
 /// Cap SMTP connect/handshake/send so the management API never hangs indefinitely.
 const SMTP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -42,6 +44,8 @@ pub async fn send_email(
     };
     let plain = templates::render_plain(&from_name, &content);
     let html = templates::render_html(&from_name, &content);
+    let logo = Attachment::new_inline(LOGO_CONTENT_ID.to_string())
+        .body(LOGO_PNG.to_vec(), ContentType::parse("image/png").unwrap());
 
     let from_mailbox = Mailbox::new(
         if settings.from_name.trim().is_empty() {
@@ -69,10 +73,14 @@ pub async fn send_email(
                         .header(ContentType::TEXT_PLAIN)
                         .body(plain),
                 )
-                .singlepart(
-                    SinglePart::builder()
-                        .header(ContentType::TEXT_HTML)
-                        .body(html),
+                .multipart(
+                    MultiPart::related()
+                        .singlepart(
+                            SinglePart::builder()
+                                .header(ContentType::TEXT_HTML)
+                                .body(html),
+                        )
+                        .singlepart(logo),
                 ),
         )?;
 

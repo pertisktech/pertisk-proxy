@@ -2,6 +2,53 @@
 
 use std::fmt::Write;
 
+/// Content-ID used when embedding the brand logo in multipart/related emails.
+pub const LOGO_CONTENT_ID: &str = "pertisk-logo";
+
+/// Compact brand mark for email headers (`admin/public/logo.png`, resized).
+pub const LOGO_PNG: &[u8] = include_bytes!("assets/logo.png");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogoSrc {
+    /// `cid:…` for SMTP multipart/related messages.
+    Cid,
+    /// Data URI for admin UI HTML previews (no MIME parts).
+    DataUri,
+}
+
+impl LogoSrc {
+    fn as_img_src(self) -> String {
+        match self {
+            Self::Cid => format!("cid:{LOGO_CONTENT_ID}"),
+            Self::DataUri => format!("data:image/png;base64,{}", base64_encode(LOGO_PNG)),
+        }
+    }
+}
+
+fn base64_encode(data: &[u8]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let a = u32::from(chunk[0]);
+        let b = u32::from(chunk.get(1).copied().unwrap_or(0));
+        let c = u32::from(chunk.get(2).copied().unwrap_or(0));
+        let n = (a << 16) | (b << 8) | c;
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        out.push(T[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            T[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 #[derive(Debug, Clone)]
 pub struct EmailContent {
     pub headline: String,
@@ -147,8 +194,18 @@ pub fn render_plain(from_name: &str, content: &EmailContent) -> String {
 }
 
 pub fn render_html(from_name: &str, content: &EmailContent) -> String {
+    render_html_with_logo(from_name, content, LogoSrc::Cid)
+}
+
+/// HTML suitable for the admin Settings preview iframe (embedded data-URI logo).
+pub fn render_html_preview(from_name: &str, content: &EmailContent) -> String {
+    render_html_with_logo(from_name, content, LogoSrc::DataUri)
+}
+
+fn render_html_with_logo(from_name: &str, content: &EmailContent, logo: LogoSrc) -> String {
     let headline = html_escape(&content.headline);
     let from_name_esc = html_escape(from_name);
+    let logo_src = logo.as_img_src();
 
     let mut paragraphs = String::new();
     for paragraph in &content.paragraphs {
@@ -192,6 +249,7 @@ pub fn render_html(from_name: &str, content: &EmailContent) -> String {
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;">
           <tr>
             <td style="padding:0 0 20px;text-align:center;">
+              <img src="{logo_src}" width="48" height="48" alt="{from_name_esc}" style="display:block;margin:0 auto 10px;border:0;outline:none;text-decoration:none;border-radius:10px;" />
               <p style="margin:0;font-size:18px;font-weight:700;color:#18181b;letter-spacing:-0.02em;">{from_name_esc}</p>
             </td>
           </tr>
@@ -260,5 +318,9 @@ mod tests {
         assert!(html.contains("alice"));
         assert!(html.contains("1.2.3.4"));
         assert!(html.contains("Failed management login"));
+        assert!(html.contains(&format!("cid:{LOGO_CONTENT_ID}")));
+        let preview = render_html_preview("Pertisk Proxy", &content);
+        assert!(preview.contains("data:image/png;base64,"));
+        assert!(!LOGO_PNG.is_empty());
     }
 }
