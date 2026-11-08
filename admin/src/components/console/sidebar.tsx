@@ -1,4 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
+import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { Logo } from '@/components/Logo';
 import { cn } from '@/lib/utils';
 import type { NavSection } from '@/lib/nav';
@@ -15,33 +16,48 @@ export function Sidebar({
   hostname,
   footer,
   onNavigate,
+  collapsed = false,
+  onToggleCollapse,
 }: {
   sections: NavSection[];
   version?: string | null;
   hostname?: string | null;
   footer?: React.ReactNode;
   onNavigate?: () => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }) {
   const { pathname } = useLocation();
 
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
-      <div className="flex h-16 items-center gap-2.5 border-b border-sidebar-border px-5">
+      <div
+        className={cn(
+          'flex h-16 items-center border-b border-sidebar-border',
+          collapsed ? 'justify-center px-2' : 'gap-2.5 px-5',
+        )}
+      >
         <Logo className="size-8 shrink-0" alt="" />
-        <div className="flex min-w-0 flex-col leading-none">
-          <span className="truncate text-sm font-semibold tracking-tight">Pertisk Proxy</span>
-          {version ? (
-            <span className="font-mono text-[10px] text-muted-foreground">v{version}</span>
-          ) : null}
-        </div>
+        {!collapsed ? (
+          <div className="flex min-w-0 flex-col leading-none">
+            <span className="truncate text-sm font-semibold tracking-tight">Pertisk Proxy</span>
+            {version ? (
+              <span className="font-mono text-[10px] text-muted-foreground">v{version}</span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 py-4" aria-label="Main">
+      <nav className={cn('flex-1 overflow-y-auto py-4', collapsed ? 'px-2' : 'px-3')} aria-label="Main">
         {sections.map((section) => (
           <div key={section.id} className="mb-5 last:mb-0">
-            <p className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
-              {section.title}
-            </p>
+            {!collapsed ? (
+              <p className="px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+                {section.title}
+              </p>
+            ) : (
+              <div className="mx-auto mb-1.5 h-px w-6 bg-sidebar-border" aria-hidden />
+            )}
             <ul className="flex flex-col gap-0.5">
               {section.items.map((item) => {
                 const Icon = item.icon;
@@ -52,15 +68,23 @@ export function Sidebar({
                       to={item.to}
                       end={item.end}
                       onClick={onNavigate}
+                      title={collapsed ? item.label : undefined}
+                      aria-label={collapsed ? item.label : undefined}
                       className={cn(
-                        'group relative flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors',
+                        'group relative flex items-center rounded-md text-sm transition-colors',
+                        collapsed ? 'justify-center px-0 py-2.5' : 'gap-2.5 px-2.5 py-2',
                         active
                           ? 'bg-sidebar-accent text-foreground'
                           : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
                       )}
                     >
                       {active ? (
-                        <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-primary" />
+                        <span
+                          className={cn(
+                            'absolute inset-y-1.5 w-0.5 rounded-full bg-primary',
+                            collapsed ? 'left-0.5' : 'left-0',
+                          )}
+                        />
                       ) : null}
                       <Icon
                         className={cn(
@@ -68,7 +92,7 @@ export function Sidebar({
                           active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
                         )}
                       />
-                      <span className="truncate">{item.label}</span>
+                      {!collapsed ? <span className="truncate">{item.label}</span> : null}
                     </NavLink>
                   </li>
                 );
@@ -78,8 +102,36 @@ export function Sidebar({
         ))}
       </nav>
 
-      <div className="border-t border-sidebar-border px-5 py-3.5">
-        {footer ? (
+      {onToggleCollapse ? (
+        <div className={cn('border-t border-sidebar-border', collapsed ? 'p-2' : 'px-3 py-2')}>
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className={cn(
+              'hidden w-full items-center rounded-md text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground lg:flex',
+              collapsed ? 'justify-center px-0 py-2.5' : 'gap-2.5 px-2.5 py-2',
+            )}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {collapsed ? (
+              <PanelLeftOpen className="size-4 shrink-0" />
+            ) : (
+              <>
+                <PanelLeftClose className="size-4 shrink-0" />
+                <span>Collapse</span>
+              </>
+            )}
+          </button>
+        </div>
+      ) : null}
+
+      <div className={cn('border-t border-sidebar-border', collapsed ? 'px-2 py-3' : 'px-5 py-3.5')}>
+        {collapsed ? (
+          <div className="flex justify-center" title={hostname ? `Healthy · ${hostname}` : 'Healthy'}>
+            <StatusDot tone="success" pulse />
+          </div>
+        ) : footer ? (
           footer
         ) : (
           <div className="flex items-center gap-2">
