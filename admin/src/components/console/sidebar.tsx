@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { Logo } from '@/components/Logo';
 import { cn } from '@/lib/utils';
 import type { NavSection } from '@/lib/nav';
@@ -33,22 +33,40 @@ export function Sidebar({
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       <div
         className={cn(
-          'flex h-16 items-center border-b border-sidebar-border',
-          collapsed ? 'justify-center px-2' : 'gap-2.5 px-5',
+          'flex h-16 shrink-0 items-center border-b border-sidebar-border',
+          collapsed ? 'justify-center px-2' : 'gap-2.5 pr-3 pl-5',
         )}
       >
-        <Logo className="size-8 shrink-0" alt="" />
         {!collapsed ? (
-          <div className="flex min-w-0 flex-col leading-none">
-            <span className="truncate text-sm font-semibold tracking-tight">Pertisk Proxy</span>
-            {version ? (
-              <span className="font-mono text-[10px] text-muted-foreground">v{version}</span>
-            ) : null}
-          </div>
+          <>
+            <Logo className="size-8 shrink-0" alt="" />
+            <div className="flex min-w-0 flex-1 flex-col leading-none">
+              <span className="truncate text-sm font-semibold tracking-tight">Pertisk Proxy</span>
+              {version ? (
+                <span className="font-mono text-[10px] text-muted-foreground">v{version}</span>
+              ) : null}
+            </div>
+          </>
         ) : null}
+        {onToggleCollapse ? (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {collapsed ? <ChevronsRight className="size-4" /> : <ChevronsLeft className="size-4" />}
+          </button>
+        ) : (
+          <Logo className="size-8 shrink-0" alt="" />
+        )}
       </div>
 
-      <nav className={cn('flex-1 overflow-y-auto py-4', collapsed ? 'px-2' : 'px-3')} aria-label="Main">
+      <nav
+        className={cn('min-h-0 flex-1 overflow-y-auto py-4', collapsed ? 'px-2' : 'px-3')}
+        aria-label="Main"
+      >
         {sections.map((section) => (
           <div key={section.id} className="mb-5 last:mb-0">
             {!collapsed ? (
@@ -102,31 +120,7 @@ export function Sidebar({
         ))}
       </nav>
 
-      {onToggleCollapse ? (
-        <div className={cn('border-t border-sidebar-border', collapsed ? 'p-2' : 'px-3 py-2')}>
-          <button
-            type="button"
-            onClick={onToggleCollapse}
-            className={cn(
-              'hidden w-full items-center rounded-md text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground lg:flex',
-              collapsed ? 'justify-center px-0 py-2.5' : 'gap-2.5 px-2.5 py-2',
-            )}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {collapsed ? (
-              <PanelLeftOpen className="size-4 shrink-0" />
-            ) : (
-              <>
-                <PanelLeftClose className="size-4 shrink-0" />
-                <span>Collapse</span>
-              </>
-            )}
-          </button>
-        </div>
-      ) : null}
-
-      <div className={cn('border-t border-sidebar-border', collapsed ? 'px-2 py-3' : 'px-5 py-3.5')}>
+      <div className={cn('shrink-0 border-t border-sidebar-border', collapsed ? 'px-2 py-3' : 'px-5 py-3.5')}>
         {collapsed ? (
           <div className="flex justify-center" title={hostname ? `Healthy · ${hostname}` : 'Healthy'}>
             <StatusDot tone="success" pulse />
