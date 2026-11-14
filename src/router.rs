@@ -203,10 +203,8 @@ pub fn parse_upstream(raw: &str) -> Option<Backend> {
         if let Ok(url) = url::Url::parse(trimmed) {
             match url.scheme() {
                 "file" => {
+                    // `url` always yields a non-empty path for parseable `file:` URLs (`/` minimum).
                     let path = url.path();
-                    if path.is_empty() {
-                        return None;
-                    }
                     return Some(Backend {
                         address: format!("file:{path}"),
                         port: 0,

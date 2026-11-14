@@ -244,6 +244,9 @@ mod tests {
         )
     }
 
+    /// Serialize tests that mutate the shared rate map.
+    static RATE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn missing_ua_challenges() {
         let policy = BotPolicy {
@@ -333,6 +336,7 @@ mod tests {
 
     #[test]
     fn rate_limit_adds_signal_after_limit() {
+        let _guard = RATE_TEST_LOCK.lock().unwrap();
         let policy = BotPolicy {
             enabled: true,
             challenge_score: 25,
@@ -367,6 +371,7 @@ mod tests {
 
     #[test]
     fn rate_map_prunes_stale_buckets_and_rolls_window() {
+        let _guard = RATE_TEST_LOCK.lock().unwrap();
         {
             let mut map = rate_map().lock().unwrap();
             map.clear();

@@ -106,9 +106,10 @@ impl CertStore {
                     for host in &entry.hosts {
                         by_host.insert(normalize_host(host), StoredCert::File(paths.clone()));
                     }
+                    let cert_path = cert.display().to_string();
                     info!(
                         hosts = ?entry.hosts,
-                        cert = %cert.display(),
+                        cert = %cert_path,
                         "loaded site TLS certificate"
                     );
                 }

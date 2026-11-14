@@ -81,10 +81,11 @@ pub fn warn_host_cert_mismatch(cert_path: &Path, configured_hosts: &[String]) ->
         if cert_covers_host(&cert_names, &host) {
             continue;
         }
+        let cert_display = cert_path.display().to_string();
         warn!(
             configured_host = %host,
             cert_names = ?cert_names,
-            cert = %cert_path.display(),
+            cert = %cert_display,
             "TLS hostname is not covered by certificate; clients will reject the handshake (BadCertificate)"
         );
     }

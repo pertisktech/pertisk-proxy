@@ -217,7 +217,7 @@ fn acme_wildcard_host(hosts: &[String]) -> Option<String> {
         .map(|h| h.trim().to_ascii_lowercase())
 }
 
-fn acme_sources_equivalent(a: &TlsSource, b: &TlsSource) -> bool {
+pub(crate) fn acme_sources_equivalent(a: &TlsSource, b: &TlsSource) -> bool {
     match (a, b) {
         (
             TlsSource::Acme {
@@ -1184,6 +1184,10 @@ mod tls_normalize_tests {
             expires_at: None,
         };
         assert!(!tls_entries_should_merge(&a, &b));
+        assert!(!acme_sources_equivalent(
+            &TlsSource::Kubernetes,
+            &TlsSource::Kubernetes
+        ));
 
         let file = TlsConfig {
             hosts: vec!["a.example.com".into()],
@@ -1194,6 +1198,7 @@ mod tls_normalize_tests {
             expires_at: None,
         };
         assert!(!tls_entries_should_merge(&file, &a));
+        assert!(!acme_sources_equivalent(&file.source, &a.source));
     }
 
     #[test]

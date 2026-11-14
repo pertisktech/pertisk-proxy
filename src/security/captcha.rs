@@ -60,7 +60,7 @@ fn secret_bytes_from_env() -> Option<Vec<u8>> {
     None
 }
 
-static SECRET: LazyLock<Vec<u8>> = LazyLock::new(|| {
+fn resolve_captcha_secret() -> Vec<u8> {
     if let Some(bytes) = secret_bytes_from_env() {
         return bytes;
     }
@@ -70,7 +70,9 @@ static SECRET: LazyLock<Vec<u8>> = LazyLock::new(|| {
         "PERTISK_CAPTCHA_SECRET unset; using ephemeral captcha secret (cookies reset on restart)"
     );
     bytes.to_vec()
-});
+}
+
+static SECRET: LazyLock<Vec<u8>> = LazyLock::new(resolve_captcha_secret);
 
 fn now_secs() -> u64 {
     SystemTime::now()
@@ -451,6 +453,8 @@ mod tests {
         std::env::remove_var("PERTISK_CAPTCHA_SECRET");
         std::env::remove_var("PERTISK_AUTH_SIGNING_SECRET");
         assert!(secret_bytes_from_env().is_none());
+        // Ephemeral path (no env secrets).
+        assert_eq!(resolve_captcha_secret().len(), 32);
 
         std::env::set_var("PERTISK_CAPTCHA_SECRET", "   ");
         assert!(secret_bytes_from_env().is_none());
@@ -459,12 +463,14 @@ mod tests {
             secret_bytes_from_env().as_deref(),
             Some(b"auth-secret".as_slice())
         );
+        assert_eq!(resolve_captcha_secret(), b"auth-secret");
 
         std::env::set_var("PERTISK_CAPTCHA_SECRET", " captcha-secret ");
         assert_eq!(
             secret_bytes_from_env().as_deref(),
             Some(b"captcha-secret".as_slice())
         );
+        assert_eq!(resolve_captcha_secret(), b"captcha-secret");
 
         match captcha {
             Some(v) => std::env::set_var("PERTISK_CAPTCHA_SECRET", v),

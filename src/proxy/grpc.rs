@@ -247,12 +247,10 @@ pub(crate) fn rebuild_upstream_path(upstream: &mut RequestHeader, new_path: &str
             "invalid gRPC upstream path",
         )
     })?);
-    upstream.set_uri(Uri::from_parts(parts).map_err(|_| {
-        pingora_error::Error::explain(
-            pingora_error::ErrorType::InternalError,
-            "failed to rebuild gRPC upstream uri",
-        )
-    })?);
+    // Path/query already validated above; from_parts only fails on inconsistent Parts.
+    upstream.set_uri(
+        Uri::from_parts(parts).expect("path_and_query parse implies valid Uri parts"),
+    );
     Ok(())
 }
 
