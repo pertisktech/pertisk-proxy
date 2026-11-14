@@ -32,10 +32,26 @@ fn is_benign_h3_disconnect(err: &anyhow::Error) -> bool {
     msg.contains("aborted by peer")
         || msg.contains("closed abruptly")
         || msg.contains("connection reset")
+        // Quinn idle timeout Display is often just "Timeout" (not "timed out").
         || msg.contains("timed out")
+        || msg == "timeout"
+        || msg.contains("idle timeout")
         // Normal client shutdown (curl, k6, browsers closing QUIC cleanly).
         || msg.contains("h3_no_error")
         || msg.contains("h3_cancel")
+}
+
+/// Scanners / wrong DNS hit UDP :443 with missing or unknown SNI. Matches HTTPS
+/// OpenSSL SNI path which logs those at debug, not warn.
+fn is_benign_h3_handshake_failure(err: &impl std::fmt::Display) -> bool {
+    let msg = err.to_string().to_ascii_lowercase();
+    msg.contains("no server certificate chain resolved")
+        || msg.contains("no certificate")
+        || msg.contains("unknown psk identity")
+        || msg.contains("peer closed")
+        || msg.contains("connection reset")
+        || msg.contains("timed out")
+        || msg.contains("timeout")
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
@@ -276,7 +292,13 @@ pub async fn run(
                                 }
                             }
                         }
-                        Err(err) => warn!(error = %err, "HTTP/3 handshake failed"),
+                        Err(err) => {
+                            if is_benign_h3_handshake_failure(&err) {
+                                tracing::debug!(error = %err, "HTTP/3 handshake rejected");
+                            } else {
+                                warn!(error = %err, "HTTP/3 handshake failed");
+                            }
+                        }
                     }
                 });
             }
@@ -935,4 +957,25 @@ fn request_host(req: &http::Request<()>) -> String {
         return authority.host().to_string();
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_benign_h3_disconnect;
+
+    #[test]
+    fn quinn_timeout_display_is_benign() {
+        let err = anyhow::anyhow!("Timeout");
+        assert!(is_benign_h3_disconnect(&err));
+        assert!(is_benign_h3_disconnect(&anyhow::anyhow!("connection timed out")));
+        assert!(!is_benign_h3_disconnect(&anyhow::anyhow!("protocol violation")));
+    }
+
+    #[test]
+    fn missing_sni_cert_handshake_is_benign() {
+        assert!(is_benign_h3_handshake_failure(
+            &"the cryptographic handshake failed: error 49: unexpected error: no server certificate chain resolved"
+        ));
+        assert!(!is_benign_h3_handshake_failure(&"certificate expired"));
+    }
 }
