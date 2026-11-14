@@ -961,7 +961,7 @@ fn request_host(req: &http::Request<()>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::is_benign_h3_disconnect;
+    use super::{is_benign_h3_disconnect, is_benign_h3_handshake_failure};
 
     #[test]
     fn quinn_timeout_display_is_benign() {
