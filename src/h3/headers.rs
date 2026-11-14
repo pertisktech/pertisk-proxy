@@ -1,8 +1,8 @@
 use http::header::{HeaderName, HeaderValue, HOST};
 use http::uri::{PathAndQuery, Uri};
 use http::{Request, Response, StatusCode};
-use quiche::h3::{Header, NameValue};
 use quiche::h3::Header as H3Header;
+use quiche::h3::{Header, NameValue};
 
 /// Extract `:authority` host (without port).
 pub fn pseudo_authority(headers: &[Header]) -> Option<&[u8]> {
@@ -77,10 +77,7 @@ pub fn h3_to_request(headers: Vec<Header>) -> anyhow::Result<Request<()>> {
 }
 
 pub fn response_to_h3(res: &Response<Vec<u8>>) -> Vec<H3Header> {
-    let mut headers = vec![H3Header::new(
-        b":status",
-        res.status().as_str().as_bytes(),
-    )];
+    let mut headers = vec![H3Header::new(b":status", res.status().as_str().as_bytes())];
 
     for (name, value) in res.headers().iter() {
         headers.push(H3Header::new(name.as_ref(), value.as_bytes()));

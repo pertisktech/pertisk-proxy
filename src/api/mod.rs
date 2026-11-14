@@ -152,8 +152,7 @@ async fn bind_management_listener(addr: SocketAddr) -> Result<TcpListener> {
         socket
             .set_nonblocking(true)
             .context("management nonblocking")?;
-        TcpListener::from_std(std::net::TcpListener::from(socket))
-            .context("management TcpListener")
+        TcpListener::from_std(std::net::TcpListener::from(socket)).context("management TcpListener")
     } else {
         TcpListener::bind(addr)
             .await
@@ -194,9 +193,15 @@ pub fn router(state: AdminState) -> Router {
         .route("/api/tls", get(get_tls))
         .route("/api/routes", get(get_routes))
         .route("/api/auth/change-password", post(auth_change_password))
-        .route("/api/certificates", get(certificates_list).post(certificates_upload))
+        .route(
+            "/api/certificates",
+            get(certificates_list).post(certificates_upload),
+        )
         .route("/api/certificates/{id}", delete(certificates_delete))
-        .route("/api/dns-providers", get(dns_providers_list).post(dns_providers_create))
+        .route(
+            "/api/dns-providers",
+            get(dns_providers_list).post(dns_providers_create),
+        )
         .route("/api/dns-providers/supported", get(dns_providers_supported))
         .route(
             "/api/dns-providers/{id}",
@@ -247,13 +252,31 @@ pub fn router(state: AdminState) -> Router {
 
     #[cfg(feature = "ingress")]
     let protected = protected
-        .route("/api/kubernetes/namespaces", get(kubernetes::kubernetes_namespaces))
+        .route(
+            "/api/kubernetes/namespaces",
+            get(kubernetes::kubernetes_namespaces),
+        )
         .route("/api/kubernetes/pods", get(kubernetes::kubernetes_pods))
-        .route("/api/kubernetes/deployments", get(kubernetes::kubernetes_deployments))
-        .route("/api/kubernetes/services", get(kubernetes::kubernetes_services))
-        .route("/api/kubernetes/configmaps", get(kubernetes::kubernetes_configmaps))
-        .route("/api/kubernetes/secrets", get(kubernetes::kubernetes_secrets))
-        .route("/api/kubernetes/tls-secrets", get(kubernetes::kubernetes_tls_secrets))
+        .route(
+            "/api/kubernetes/deployments",
+            get(kubernetes::kubernetes_deployments),
+        )
+        .route(
+            "/api/kubernetes/services",
+            get(kubernetes::kubernetes_services),
+        )
+        .route(
+            "/api/kubernetes/configmaps",
+            get(kubernetes::kubernetes_configmaps),
+        )
+        .route(
+            "/api/kubernetes/secrets",
+            get(kubernetes::kubernetes_secrets),
+        )
+        .route(
+            "/api/kubernetes/tls-secrets",
+            get(kubernetes::kubernetes_tls_secrets),
+        )
         .route(
             "/api/kubernetes/ingresses",
             get(kubernetes::kubernetes_ingresses).post(kubernetes::kubernetes_ingresses_create),
@@ -284,7 +307,10 @@ pub fn router(state: AdminState) -> Router {
                 .put(kubernetes::kubernetes_gateway_update)
                 .delete(kubernetes::kubernetes_gateway_delete),
         )
-        .route("/api/kubernetes/httproutes", get(kubernetes::kubernetes_httproutes))
+        .route(
+            "/api/kubernetes/httproutes",
+            get(kubernetes::kubernetes_httproutes),
+        )
         .route("/api/kubernetes/nodes", get(kubernetes::kubernetes_nodes))
         .route("/api/kubernetes/events", get(kubernetes::kubernetes_events))
         .route(
@@ -292,9 +318,9 @@ pub fn router(state: AdminState) -> Router {
             get(kubernetes::kubernetes_cluster_summary),
         );
     let protected = protected.layer(middleware::from_fn_with_state(
-            state.clone(),
-            require_auth_middleware,
-        ));
+        state.clone(),
+        require_auth_middleware,
+    ));
 
     public
         .merge(protected)
@@ -582,17 +608,14 @@ async fn auth_login(
     }
 
     let authenticated = if let Some(ref db) = state.db {
-        let Some(hash) = db
-            .get_user_password_hash(username)
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ApiError {
-                        error: e.to_string(),
-                    }),
-                )
-            })?
+        let Some(hash) = db.get_user_password_hash(username).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            )
+        })?
         else {
             notify_auth_login_failure(&state, username, &headers, addr);
             return Err((
@@ -621,9 +644,8 @@ async fn auth_login(
 
     let ttl_secs = session_ttl_secs();
     let token = if let Some(secret) = session_signing_secret(&state) {
-        mint_signed_session_token(&secret, username, ttl_secs).unwrap_or_else(|| {
-            uuid::Uuid::new_v4().to_string()
-        })
+        mint_signed_session_token(&secret, username, ttl_secs)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
     } else {
         uuid::Uuid::new_v4().to_string()
     };
@@ -637,10 +659,7 @@ async fn auth_login(
     );
     if let Some(ref db) = state.db {
         let expires_at_chrono = chrono::Utc::now() + chrono::Duration::seconds(ttl_secs as i64);
-        if let Err(err) = db
-            .insert_session(&token, username, expires_at_chrono)
-            .await
-        {
+        if let Err(err) = db.insert_session(&token, username, expires_at_chrono).await {
             warn!(error = %err, "failed to persist session to database");
         }
     }
@@ -654,14 +673,9 @@ async fn auth_login(
     }))
 }
 
-fn client_auth_context(
-    headers: &HeaderMap,
-    peer: SocketAddr,
-) -> (String, String) {
+fn client_auth_context(headers: &HeaderMap, peer: SocketAddr) -> (String, String) {
     let socket_ip = peer.ip().to_string();
-    let xff = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok());
+    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
     let x_real_ip = headers.get("x-real-ip").and_then(|v| v.to_str().ok());
     let ip = crate::proxy::forward::resolve_client_ip(Some(&socket_ip), xff, x_real_ip)
         .unwrap_or(socket_ip);
@@ -1084,7 +1098,14 @@ fn tuning_info(runtime_cfg: &RuntimeConfig) -> TuningInfo {
 }
 
 #[cfg(feature = "ingress")]
-fn management_ingress_fields(state: &AdminState) -> (Option<bool>, Option<String>, Option<String>, Option<LeaderElectionInfo>) {
+fn management_ingress_fields(
+    state: &AdminState,
+) -> (
+    Option<bool>,
+    Option<String>,
+    Option<String>,
+    Option<LeaderElectionInfo>,
+) {
     (
         if state.viewer_mode {
             Some(state.gateway_api_enabled)
@@ -1250,8 +1271,7 @@ pub(crate) async fn build_management_info(state: &AdminState) -> ManagementInfo 
         .as_ref()
         .map(|d| d.path().to_path_buf())
         .unwrap_or_else(|| state.certs_dir.clone());
-    let (disk_total_bytes, disk_used_bytes, disk_mount_point) =
-        disk_usage_for_path(&data_path);
+    let (disk_total_bytes, disk_used_bytes, disk_mount_point) = disk_usage_for_path(&data_path);
     let (
         hostname,
         os,
@@ -1275,7 +1295,11 @@ pub(crate) async fn build_management_info(state: &AdminState) -> ManagementInfo 
         }
     };
     ManagementInfo {
-        mode: if state.viewer_mode { "ingress" } else { "proxy" },
+        mode: if state.viewer_mode {
+            "ingress"
+        } else {
+            "proxy"
+        },
         version: VERSION,
         uptime_secs: state.started_at.elapsed().as_secs(),
         db_path: state
@@ -1315,10 +1339,12 @@ pub(crate) async fn build_management_info(state: &AdminState) -> ManagementInfo 
         ipv6_addrs,
         gateway_api_enabled,
         helm_enabled: if state.viewer_mode {
-            Some(std::env::var("PERTISK_HELM_ENABLED")
-                .ok()
-                .map(|v| !matches!(v.as_str(), "0" | "false" | "FALSE" | "no" | "NO"))
-                .unwrap_or(false))
+            Some(
+                std::env::var("PERTISK_HELM_ENABLED")
+                    .ok()
+                    .map(|v| !matches!(v.as_str(), "0" | "false" | "FALSE" | "no" | "NO"))
+                    .unwrap_or(false),
+            )
         } else {
             None
         },
@@ -1412,9 +1438,7 @@ fn gather_system_info() -> (
 
     fn is_private_or_docker_ipv4(ip: &std::net::Ipv4Addr) -> bool {
         let o = ip.octets();
-        o[0] == 127
-            || (o[0] == 172 && o[1] >= 16 && o[1] <= 31)
-            || (o[0] == 192 && o[1] == 168)
+        o[0] == 127 || (o[0] == 172 && o[1] >= 16 && o[1] <= 31) || (o[0] == 192 && o[1] == 168)
     }
 
     let (mut ipv4_addrs, mut ipv6_addrs): (Vec<String>, Vec<String>) =
@@ -1575,7 +1599,9 @@ pub(crate) async fn build_config(state: &AdminState) -> Config {
     cfg
 }
 
-async fn get_config(State(state): State<AdminState>) -> Result<Json<Config>, (StatusCode, Json<ApiError>)> {
+async fn get_config(
+    State(state): State<AdminState>,
+) -> Result<Json<Config>, (StatusCode, Json<ApiError>)> {
     Ok(Json(build_config(&state).await))
 }
 
@@ -1642,10 +1668,7 @@ async fn runtime_env_put(
             continue;
         }
         if let Err(msg) = crate::runtime_env::validate_override(key, value) {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ApiError { error: msg }),
-            ));
+            return Err((StatusCode::BAD_REQUEST, Json(ApiError { error: msg })));
         }
     }
 
@@ -1722,14 +1745,7 @@ async fn put_config(
     })?;
     backup::activate_proxy_config(&state, db.as_ref(), &body)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ApiError {
-                    error: e,
-                }),
-            )
-        })?;
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError { error: e })))?;
     state
         .proxy_log
         .push(ProxyLogEntry::config_reload(format!(
@@ -1744,7 +1760,9 @@ async fn put_config(
     }))
 }
 
-async fn reload_config(State(state): State<AdminState>) -> Result<Json<ReloadResponse>, (StatusCode, Json<ApiError>)> {
+async fn reload_config(
+    State(state): State<AdminState>,
+) -> Result<Json<ReloadResponse>, (StatusCode, Json<ApiError>)> {
     let Some(db) = &state.db else {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1753,14 +1771,18 @@ async fn reload_config(State(state): State<AdminState>) -> Result<Json<ReloadRes
             }),
         ));
     };
-    let cfg = db.get_proxy_config().await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError {
-                error: e.to_string(),
-            }),
-        )
-    })?.unwrap_or_default();
+    let cfg = db
+        .get_proxy_config()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: e.to_string(),
+                }),
+            )
+        })?
+        .unwrap_or_default();
     apply::apply_config(state.router.as_ref(), &cfg).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1771,7 +1793,8 @@ async fn reload_config(State(state): State<AdminState>) -> Result<Json<ReloadRes
     })?;
     state.cert_store.reload_from_configs(&cfg.tls).ok();
     state.cert_store.set_expected_from_config(&cfg);
-    if let Err(err) = load_db_certs_into_store(db.as_ref(), state.cert_store.as_ref(), &state.certs_dir).await
+    if let Err(err) =
+        load_db_certs_into_store(db.as_ref(), state.cert_store.as_ref(), &state.certs_dir).await
     {
         tracing::warn!(error = %err, "reload: failed to load certificates from database");
     }
@@ -1820,10 +1843,7 @@ async fn certificates_list(
 ) -> Result<Json<Vec<CertificateRow>>, (StatusCode, Json<ApiError>)> {
     match build_certificates(&state).await {
         Ok(rows) => Ok(Json(rows)),
-        Err(error) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError { error }),
-        )),
+        Err(error) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error }))),
     }
 }
 
@@ -2260,7 +2280,9 @@ struct TlsResponse {
     host_count: usize,
 }
 
-async fn get_tls(State(state): State<AdminState>) -> Result<Json<TlsResponse>, (StatusCode, Json<ApiError>)> {
+async fn get_tls(
+    State(state): State<AdminState>,
+) -> Result<Json<TlsResponse>, (StatusCode, Json<ApiError>)> {
     let cfg = state.runtime_config.read().await;
     let entries = cfg
         .tls
@@ -2286,10 +2308,7 @@ pub(crate) struct ApiError {
     error: String,
 }
 
-async fn admin_spa_fallback(
-    State(state): State<AdminState>,
-    req: Request,
-) -> Response {
+async fn admin_spa_fallback(State(state): State<AdminState>, req: Request) -> Response {
     let path = req.uri().path();
     // Never serve the SPA HTML for API routes — clients expect JSON.
     if path == "/api" || path.starts_with("/api/") {
@@ -2303,7 +2322,11 @@ async fn admin_spa_fallback(
     }
 
     if let Some(origin) = state.dev_origin.as_ref() {
-        let query = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
+        let query = req
+            .uri()
+            .query()
+            .map(|q| format!("?{q}"))
+            .unwrap_or_default();
         let location = format!("{origin}{path}{query}");
         return Redirect::temporary(&location).into_response();
     }

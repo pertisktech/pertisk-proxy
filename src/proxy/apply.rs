@@ -32,9 +32,9 @@ pub fn config_to_route_table(config: &Config) -> Result<RouteTable> {
         if host.is_empty() {
             continue;
         }
-        let backend = backends
-            .get(&site.backend)
-            .with_context(|| format!("site {host} references unknown backend '{}'", site.backend))?;
+        let backend = backends.get(&site.backend).with_context(|| {
+            format!("site {host} references unknown backend '{}'", site.backend)
+        })?;
         let upstream = backend
             .upstreams
             .first()
@@ -129,7 +129,10 @@ fn resolve_route_target(
         .filter(|s| !s.is_empty())
     {
         return parse_upstream(raw).with_context(|| {
-            format!("invalid per-route upstream '{raw}' for site {host} path {}", route.path)
+            format!(
+                "invalid per-route upstream '{raw}' for site {host} path {}",
+                route.path
+            )
         });
     }
 
@@ -146,7 +149,10 @@ fn resolve_route_target(
             "treating route rewrite as upstream URL; set routes[].upstream instead"
         );
         return parse_upstream(raw).with_context(|| {
-            format!("invalid rewrite-as-upstream '{raw}' for site {host} path {}", route.path)
+            format!(
+                "invalid rewrite-as-upstream '{raw}' for site {host} path {}",
+                route.path
+            )
         });
     }
 
@@ -225,7 +231,9 @@ pub fn migrate_from_routes_yaml(yaml: &str) -> Result<Config> {
                 path_type: match route.path_type {
                     PathMatchType::Exact => ConfigPathMatchType::Exact,
                     PathMatchType::Prefix => ConfigPathMatchType::Prefix,
-                    PathMatchType::ImplementationSpecific => ConfigPathMatchType::ImplementationSpecific,
+                    PathMatchType::ImplementationSpecific => {
+                        ConfigPathMatchType::ImplementationSpecific
+                    }
                 },
                 path: route.path.clone(),
                 rewrite: None,
@@ -250,10 +258,7 @@ pub fn migrate_from_routes_yaml(yaml: &str) -> Result<Config> {
         .into_iter()
         .map(|(name, addr)| Backend {
             name,
-            upstreams: vec![crate::proxy_config::Upstream {
-                addr,
-                weight: 1,
-            }],
+            upstreams: vec![crate::proxy_config::Upstream { addr, weight: 1 }],
             algorithm: Default::default(),
             health_path: None,
             health_interval_secs: 0,

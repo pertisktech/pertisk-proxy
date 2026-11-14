@@ -39,7 +39,9 @@ pub fn resolve_namespace() -> String {
             return ns;
         }
     }
-    if let Ok(ns) = std::fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/namespace") {
+    if let Ok(ns) =
+        std::fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+    {
         let ns = ns.trim();
         if !ns.is_empty() {
             return ns.to_string();
@@ -82,7 +84,10 @@ pub fn resolve_renew_interval_seconds() -> u64 {
         .unwrap_or(DEFAULT_RENEW_INTERVAL_SECONDS)
 }
 
-pub async fn start_leader_election(client: Client, config: LeaderElectionConfig) -> Arc<AtomicBool> {
+pub async fn start_leader_election(
+    client: Client,
+    config: LeaderElectionConfig,
+) -> Arc<AtomicBool> {
     let is_leader = Arc::new(AtomicBool::new(false));
     let is_leader_task = is_leader.clone();
     let namespace = config.namespace.clone();
@@ -106,7 +111,10 @@ pub async fn start_leader_election(client: Client, config: LeaderElectionConfig)
 
             if last_state != Some(leader) {
                 if leader {
-                    info!("Leader election: acquired leadership for {}", config.lease_name);
+                    info!(
+                        "Leader election: acquired leadership for {}",
+                        config.lease_name
+                    );
                 } else {
                     info!("Leader election: not leader for {}", config.lease_name);
                 }

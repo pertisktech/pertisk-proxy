@@ -3,9 +3,7 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
-use lettre::message::{
-    header::ContentType, Attachment, Mailbox, Message, MultiPart, SinglePart,
-};
+use lettre::message::{header::ContentType, Attachment, Mailbox, Message, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
 
@@ -134,9 +132,8 @@ fn build_mailer(
     builder = builder.port(port).timeout(Some(SMTP_TIMEOUT));
 
     if !settings.username.trim().is_empty() {
-        let pass = password.ok_or_else(|| {
-            anyhow!("SMTP password is required when username is configured")
-        })?;
+        let pass = password
+            .ok_or_else(|| anyhow!("SMTP password is required when username is configured"))?;
         builder = builder.credentials(Credentials::new(
             settings.username.trim().to_string(),
             pass.to_string(),

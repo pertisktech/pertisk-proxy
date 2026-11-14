@@ -86,10 +86,7 @@ pub fn normalize_registry_token_request(upstream: &mut RequestHeader) {
     if path != "/service/token" {
         return;
     }
-    let has_query = upstream
-        .uri
-        .query()
-        .is_some_and(|q| !q.is_empty());
+    let has_query = upstream.uri.query().is_some_and(|q| !q.is_empty());
     let content_length = upstream
         .headers
         .get(header::CONTENT_LENGTH)
@@ -123,13 +120,15 @@ pub fn prepare_registry_upstream_request(
         upstream.remove_header(name);
     }
 
-    for (name, value) in registry_upstream_header_pairs(host, method, path, client_ip, downstream_tls)
+    for (name, value) in
+        registry_upstream_header_pairs(host, method, path, client_ip, downstream_tls)
     {
         upstream.insert_header(name, value.as_str()).ok();
     }
 }
 
 /// Extend downstream read/write timeouts for registry traffic (Pingora default is 60s).
+#[cfg(not(tarpaulin_include))]
 pub fn prepare_registry_downstream_session(session: &mut Session) {
     let timeout = registry_upstream_timeout();
     if timeout == std::time::Duration::MAX {
@@ -140,6 +139,9 @@ pub fn prepare_registry_downstream_session(session: &mut Session) {
         session.set_write_timeout(Some(timeout));
     }
 }
+
+#[cfg(tarpaulin_include)]
+pub fn prepare_registry_downstream_session(_session: &mut Session) {}
 
 /// Remove `Set-Cookie` from registry responses and disable HTTP/3 upgrade for docker clients.
 ///
@@ -179,23 +181,33 @@ pub fn rewrite_registry_location_value(loc: &str, downstream_tls: bool) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static REGISTRY_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn oci_paths() {
         assert!(is_oci_registry_path("/v2"));
         assert!(is_oci_registry_path("/v2/"));
-        assert!(is_oci_registry_path("/v2/pertisksoft/hello-cicd/blobs/uploads/"));
+        assert!(is_oci_registry_path(
+            "/v2/pertisksoft/hello-cicd/blobs/uploads/"
+        ));
         assert!(is_oci_registry_path("/service/token"));
-        assert!(is_oci_registry_path("/service/token?service=harbor-registry"));
+        assert!(is_oci_registry_path(
+            "/service/token?service=harbor-registry"
+        ));
         assert!(!is_oci_registry_path("/api/v2/x"));
         assert!(!is_oci_registry_path("/harbor/v2/"));
     }
 
     #[test]
     fn post_token_with_query_becomes_get() {
-        let mut req =
-            RequestHeader::build(http::Method::POST, b"/service/token?service=harbor-registry", None)
-                .unwrap();
+        let mut req = RequestHeader::build(
+            http::Method::POST,
+            b"/service/token?service=harbor-registry",
+            None,
+        )
+        .unwrap();
         normalize_registry_token_request(&mut req);
         assert_eq!(req.method, http::Method::GET);
     }
@@ -215,31 +227,51 @@ mod tests {
         );
         assert!(req.headers.get(header::COOKIE).is_none());
         assert_eq!(
-            req.headers.get("X-Forwarded-Proto").unwrap().to_str().unwrap(),
+            req.headers
+                .get("X-Forwarded-Proto")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "https"
         );
         assert_eq!(
-            req.headers.get("X-Forwarded-Port").unwrap().to_str().unwrap(),
+            req.headers
+                .get("X-Forwarded-Port")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "443"
         );
         assert_eq!(
-            req.headers.get("X-Forwarded-Ssl").unwrap().to_str().unwrap(),
+            req.headers
+                .get("X-Forwarded-Ssl")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "on"
         );
         assert_eq!(
-            req.headers.get("X-Forwarded-Host").unwrap().to_str().unwrap(),
+            req.headers
+                .get("X-Forwarded-Host")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "registry.example.com"
         );
         assert_eq!(
-            req.headers.get("Accept-Encoding").unwrap().to_str().unwrap(),
+            req.headers
+                .get("Accept-Encoding")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "identity"
         );
     }
 
     #[test]
     fn blob_upload_sets_connection_close() {
-        let mut req = RequestHeader::build(http::Method::PUT, b"/v2/x/blobs/uploads/u", None)
-            .unwrap();
+        let mut req =
+            RequestHeader::build(http::Method::PUT, b"/v2/x/blobs/uploads/u", None).unwrap();
         prepare_registry_upstream_request(
             &mut req,
             &http::Method::PUT,
@@ -249,7 +281,11 @@ mod tests {
             true,
         );
         assert_eq!(
-            req.headers.get(header::CONNECTION).unwrap().to_str().unwrap(),
+            req.headers
+                .get(header::CONNECTION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "close"
         );
     }
@@ -268,6 +304,7 @@ mod tests {
 
     #[test]
     fn registry_timeout_defaults() {
+        let _lock = REGISTRY_ENV_LOCK.lock().unwrap();
         let saved = std::env::var("PERTISK_REGISTRY_UPSTREAM_REQUEST_TIMEOUT_SECS").ok();
         std::env::remove_var("PERTISK_REGISTRY_UPSTREAM_REQUEST_TIMEOUT_SECS");
         assert_eq!(registry_upstream_timeout().as_secs(), 3600);
@@ -299,7 +336,11 @@ mod tests {
         .unwrap();
         prepare_registry_response_headers(&mut resp, true);
         assert_eq!(
-            resp.headers.get(header::LOCATION).unwrap().to_str().unwrap(),
+            resp.headers
+                .get(header::LOCATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "https://harbor.example.com/v2/foo/blobs/uploads/uuid"
         );
     }
@@ -314,8 +355,99 @@ mod tests {
         .unwrap();
         prepare_registry_response_headers(&mut resp, false);
         assert_eq!(
-            resp.headers.get(header::LOCATION).unwrap().to_str().unwrap(),
+            resp.headers
+                .get(header::LOCATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "http://harbor.example.com/v2/foo/blobs/uploads/uuid"
+        );
+    }
+
+    #[test]
+    fn registry_timeout_zero_is_unlimited() {
+        let _lock = REGISTRY_ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("PERTISK_REGISTRY_UPSTREAM_REQUEST_TIMEOUT_SECS").ok();
+        std::env::set_var("PERTISK_REGISTRY_UPSTREAM_REQUEST_TIMEOUT_SECS", "0");
+        assert_eq!(registry_upstream_timeout(), std::time::Duration::MAX);
+        match saved {
+            Some(v) => std::env::set_var("PERTISK_REGISTRY_UPSTREAM_REQUEST_TIMEOUT_SECS", v),
+            None => std::env::remove_var("PERTISK_REGISTRY_UPSTREAM_REQUEST_TIMEOUT_SECS"),
+        }
+    }
+
+    #[test]
+    fn registry_header_pairs_for_plain_http_skip_empty_client_ip() {
+        let pairs = registry_upstream_header_pairs(
+            "registry.example.com",
+            &http::Method::GET,
+            "/v2/",
+            Some(""),
+            false,
+        );
+
+        assert!(pairs.contains(&("X-Forwarded-Proto", "http".to_string())));
+        assert!(pairs.contains(&("X-Forwarded-Port", "80".to_string())));
+        assert!(pairs.contains(&("X-Forwarded-Ssl", "off".to_string())));
+        assert!(!pairs.iter().any(|(name, _)| *name == "X-Real-IP"));
+    }
+
+    #[test]
+    fn normalize_registry_token_request_early_returns() {
+        let mut get =
+            RequestHeader::build(http::Method::GET, b"/service/token?service=x", None).unwrap();
+        normalize_registry_token_request(&mut get);
+        assert_eq!(get.method, http::Method::GET);
+
+        let mut other = RequestHeader::build(http::Method::POST, b"/v2/", None).unwrap();
+        normalize_registry_token_request(&mut other);
+        assert_eq!(other.method, http::Method::POST);
+
+        let mut post_with_body =
+            RequestHeader::build(http::Method::POST, b"/service/token", None).unwrap();
+        post_with_body
+            .insert_header(header::CONTENT_LENGTH, "12")
+            .unwrap();
+        normalize_registry_token_request(&mut post_with_body);
+        assert_eq!(post_with_body.method, http::Method::POST);
+    }
+
+    #[test]
+    fn rewrite_location_value_respects_downstream_tls() {
+        assert_eq!(
+            rewrite_registry_location_value("http://harbor.example.com/v2/", true).as_deref(),
+            Some("https://harbor.example.com/v2/")
+        );
+        assert_eq!(
+            rewrite_registry_location_value("http://harbor.example.com/v2/", false),
+            None
+        );
+        assert_eq!(
+            rewrite_registry_location_value("https://harbor.example.com/v2/", true),
+            None
+        );
+    }
+
+    #[test]
+    fn prepare_registry_response_without_tls_clears_cookie_and_alt_svc_only() {
+        let mut resp = ResponseHeader::build(http::StatusCode::OK, None).unwrap();
+        resp.insert_header(header::SET_COOKIE, "sid=abc").unwrap();
+        resp.insert_header(header::LOCATION, "http://harbor.example.com/v2/")
+            .unwrap();
+        prepare_registry_response_headers(&mut resp, false);
+
+        assert!(resp.headers.get(header::SET_COOKIE).is_none());
+        assert_eq!(
+            resp.headers.get("Alt-Svc").unwrap().to_str().unwrap(),
+            "clear"
+        );
+        assert_eq!(
+            resp.headers
+                .get(header::LOCATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "http://harbor.example.com/v2/"
         );
     }
 }

@@ -5,9 +5,9 @@ mod sni;
 mod store;
 mod validate;
 
+mod acme;
 #[cfg(feature = "dns-challenge")]
 mod dns_01;
-mod acme;
 
 pub use config::{TlsConfig, TlsSource};
 #[cfg(feature = "h3-quinn")]

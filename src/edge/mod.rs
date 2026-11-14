@@ -80,12 +80,21 @@ impl Default for EdgeGlobals {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RouteAuth {
-    Basic { username: String, password: String },
-    ApiKey { key: String },
+    Basic {
+        username: String,
+        password: String,
+    },
+    ApiKey {
+        key: String,
+    },
     /// HS256. Accepts `Authorization: Bearer` or `?pertisk_token=` / `?araleztoken=`.
-    Jwt { secret: String },
+    Jwt {
+        secret: String,
+    },
     /// Subrequest. 2xx from `url` allows the request.
-    Forward { url: String },
+    Forward {
+        url: String,
+    },
 }
 
 /// Per-route edge policy. Missing fields stay off.
@@ -326,7 +335,8 @@ pub fn issue_jwt(secret: &str, owner: &str, valid_minutes: u64) -> String {
 
 pub fn verify_jwt(secret: &str, token: &str) -> bool {
     let mut parts = token.split('.');
-    let (Some(header), Some(payload), Some(sig)) = (parts.next(), parts.next(), parts.next()) else {
+    let (Some(header), Some(payload), Some(sig)) = (parts.next(), parts.next(), parts.next())
+    else {
         return false;
     };
     if parts.next().is_some() {
@@ -424,10 +434,9 @@ pub fn auth_header_ok(auth: &RouteAuth, headers: &http::HeaderMap, query: &str) 
             };
             user == *username && pass == *password
         }
-        RouteAuth::ApiKey { key } => headers
-            .get("x-api-key")
-            .and_then(|v| v.to_str().ok())
-            == Some(key.as_str()),
+        RouteAuth::ApiKey { key } => {
+            headers.get("x-api-key").and_then(|v| v.to_str().ok()) == Some(key.as_str())
+        }
         RouteAuth::Jwt { secret } => {
             if let Some(token) = bearer_token(
                 headers

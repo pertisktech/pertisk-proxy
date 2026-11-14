@@ -94,15 +94,18 @@ fn build_table(specs: Vec<RouteSpec>) -> Result<RouteTable> {
         }
 
         for host in hosts {
-            by_host.entry(host.to_ascii_lowercase()).or_default().push(Route {
-                path: spec.path.clone(),
-                path_type: path_type.clone(),
-                backend: backend.clone(),
-                middlewares: spec.middlewares.clone(),
-                forward_client_ip: false,
-                geoip: Default::default(),
-                security: Default::default(),
-            });
+            by_host
+                .entry(host.to_ascii_lowercase())
+                .or_default()
+                .push(Route {
+                    path: spec.path.clone(),
+                    path_type: path_type.clone(),
+                    backend: backend.clone(),
+                    middlewares: spec.middlewares.clone(),
+                    forward_client_ip: false,
+                    geoip: Default::default(),
+                    security: Default::default(),
+                });
         }
     }
 
@@ -227,7 +230,10 @@ routes:
     upstream: http://backend:8080
 "#;
         let loaded = load_from_str(yaml).unwrap();
-        assert!(loaded.table.match_route("app.example.com", "/api/extra").is_some());
+        assert!(loaded
+            .table
+            .match_route("app.example.com", "/api/extra")
+            .is_some());
     }
 
     #[test]

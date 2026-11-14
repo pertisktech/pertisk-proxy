@@ -37,10 +37,7 @@ where
         let target = event.metadata().target();
         let include = target.starts_with("pertisk_proxy")
             || (target.starts_with("pingora")
-                && matches!(
-                    *event.metadata().level(),
-                    Level::WARN | Level::ERROR
-                ));
+                && matches!(*event.metadata().level(), Level::WARN | Level::ERROR));
         if !include {
             return;
         }
@@ -139,8 +136,7 @@ fn env_filter(level: Level) -> EnvFilter {
         return EnvFilter::try_new(&build_filter_spec(level))
             .unwrap_or_else(|_| EnvFilter::new(build_filter_spec(Level::INFO)));
     }
-    EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(build_filter_spec(level)))
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(build_filter_spec(level)))
 }
 
 fn tracing_level_to_log_level(level: Level) -> LogLevel {
@@ -162,7 +158,9 @@ fn build_filter_spec(level: Level) -> String {
     if matches!(level, Level::TRACE | Level::DEBUG) {
         return base.to_string();
     }
-    format!("{base},pingora_core::services::listening=off,pingora_core::apps=off,pingora_proxy=warn")
+    format!(
+        "{base},pingora_core::services::listening=off,pingora_core::apps=off,pingora_proxy=warn"
+    )
 }
 
 fn env_bool(key: &str, default: bool) -> bool {
@@ -226,7 +224,10 @@ mod tests {
             build_filter_spec(Level::INFO),
             "info,pingora_core::services::listening=off,pingora_core::apps=off,pingora_proxy=warn"
         );
-        assert_eq!(build_filter_spec(Level::WARN), "warn,pingora_core::services::listening=off,pingora_core::apps=off,pingora_proxy=warn");
+        assert_eq!(
+            build_filter_spec(Level::WARN),
+            "warn,pingora_core::services::listening=off,pingora_core::apps=off,pingora_proxy=warn"
+        );
         assert_eq!(build_filter_spec(Level::DEBUG), "debug");
     }
 

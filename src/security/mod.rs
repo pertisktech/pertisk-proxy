@@ -109,9 +109,7 @@ fn from_bot(
             BotVerdict::Block => "bot-block",
         },
         detail: if prefer_log {
-            waf_rule
-                .clone()
-                .unwrap_or_else(|| score.reasons.join(","))
+            waf_rule.clone().unwrap_or_else(|| score.reasons.join(","))
         } else {
             score.reasons.join(",")
         },
@@ -301,6 +299,7 @@ pub fn apply_annotations(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     fn view<'a>(
         method: &'a str,
@@ -332,7 +331,12 @@ mod tests {
         };
         let d = evaluate(
             &policy,
-            &view("GET", "/static/../../../etc/passwd", "", Some("Mozilla/5.0")),
+            &view(
+                "GET",
+                "/static/../../../etc/passwd",
+                "",
+                Some("Mozilla/5.0"),
+            ),
         );
         assert_eq!(d.action, SecurityAction::Block);
         assert_eq!(d.reason, "waf-block");
@@ -355,5 +359,450 @@ mod tests {
         };
         let d = evaluate(&policy, &view("GET", "/", "", None));
         assert_eq!(d.action, SecurityAction::Challenge);
+    }
+
+    #[test]
+    fn policy_helpers_report_active_default_and_normalize() {
+        assert!(!SecurityPolicy::default().is_active());
+        assert!(SecurityPolicy::default().is_default());
+
+        let policy = SecurityPolicy {
+            waf: WafPolicy {
+                enabled: true,
+                use_builtin_rules: false,
+                rules: vec![WafRule {
+                    id: " custom ".into(),
+                    enabled: true,
+                    action: WafAction::Log,
+                    methods: vec![" get ".into(), "".into()],
+                    path_contains: Some(" /admin ".into()),
+                    query_contains: None,
+                    ua_contains: None,
+                }],
+            },
+            bot: BotPolicy {
+                enabled: true,
+                challenge_score: 0,
+                block_score: 10,
+                rate_limit_per_min: 0,
+            },
+            captcha: CaptchaPolicy {
+                enabled: true,
+                cookie_ttl_secs: 0,
+            },
+        }
+        .normalized();
+
+        assert!(policy.is_active());
+        assert!(!policy.is_default());
+        assert_eq!(policy.waf.rules[0].id, "custom");
+        assert_eq!(policy.waf.rules[0].methods, vec!["GET"]);
+        assert_eq!(policy.waf.rules[0].path_contains.as_deref(), Some("/admin"));
+        assert_eq!(policy.bot.challenge_score, 40);
+        assert_eq!(policy.bot.block_score, 40);
+        assert_eq!(policy.bot.rate_limit_per_min, 120);
+        assert_eq!(policy.captcha.cookie_ttl_secs, 86_400);
+    }
+
+    #[test]
+    fn resolve_challenge_allows_valid_cookie_or_blocks_without_captcha() {
+        let mut req = view("GET", "/", "", Some("Mozilla/5.0"));
+        let cookie_line = captcha::mint_pass_cookie(req.client_ip, 3600);
+        let cookie = cookie_line.split(';').next().unwrap().to_string();
+        req.cookie = Some(&cookie);
+
+        let policy = SecurityPolicy {
+            captcha: CaptchaPolicy {
+                enabled: true,
+                cookie_ttl_secs: 3600,
+            },
+            ..Default::default()
+        };
+        assert_eq!(resolve_challenge(&policy, &req), SecurityAction::Allow);
+
+        req.cookie = None;
+        assert_eq!(resolve_challenge(&policy, &req), SecurityAction::Challenge);
+        assert_eq!(
+            resolve_challenge(&SecurityPolicy::default(), &req),
+            SecurityAction::Block
+        );
+    }
+
+    #[test]
+    fn from_bot_maps_verdicts_and_prefer_log() {
+        let req = view("GET", "/", "", Some("Mozilla/5.0"));
+        let policy = SecurityPolicy::default();
+
+        let allow = from_bot(
+            &policy,
+            &req,
+            bot::BotScore {
+                score: 0,
+                verdict: BotVerdict::Allow,
+                reasons: vec![],
+            },
+            None,
+            false,
+        );
+        assert_eq!(allow.action, SecurityAction::Allow);
+        assert_eq!(allow.reason, "bot-allow");
+
+        let logged = from_bot(
+            &policy,
+            &req,
+            bot::BotScore {
+                score: 0,
+                verdict: BotVerdict::Allow,
+                reasons: vec!["clean".into()],
+            },
+            Some("log-rule".into()),
+            true,
+        );
+        assert_eq!(logged.action, SecurityAction::Log);
+        assert_eq!(logged.reason, "waf-log");
+        assert_eq!(logged.detail, "log-rule");
+
+        let logged_without_rule = from_bot(
+            &policy,
+            &req,
+            bot::BotScore {
+                score: 0,
+                verdict: BotVerdict::Allow,
+                reasons: vec!["clean".into()],
+            },
+            None,
+            true,
+        );
+        assert_eq!(logged_without_rule.action, SecurityAction::Log);
+        assert_eq!(logged_without_rule.detail, "clean");
+
+        let challenged = from_bot(
+            &SecurityPolicy {
+                captcha: CaptchaPolicy {
+                    enabled: true,
+                    cookie_ttl_secs: 3600,
+                },
+                ..Default::default()
+            },
+            &req,
+            bot::BotScore {
+                score: 45,
+                verdict: BotVerdict::Challenge,
+                reasons: vec!["missing-ua".into()],
+            },
+            None,
+            false,
+        );
+        assert_eq!(challenged.action, SecurityAction::Challenge);
+        assert_eq!(challenged.reason, "bot-challenge");
+
+        let blocked = from_bot(
+            &policy,
+            &req,
+            bot::BotScore {
+                score: 90,
+                verdict: BotVerdict::Block,
+                reasons: vec!["rate".into()],
+            },
+            None,
+            false,
+        );
+        assert_eq!(blocked.action, SecurityAction::Block);
+        assert_eq!(blocked.reason, "bot-block");
+    }
+
+    #[test]
+    fn evaluate_covers_waf_bot_and_allow_paths() {
+        let browser_ua = Some("Mozilla/5.0 (Macintosh; Intel Mac OS X)");
+        let inactive = evaluate(
+            &SecurityPolicy::default(),
+            &view("GET", "/", "", browser_ua),
+        );
+        assert_eq!(inactive.action, SecurityAction::Allow);
+        assert_eq!(inactive.reason, "off");
+        assert_eq!(inactive.bot_score, None);
+        assert_eq!(inactive.waf_rule, None);
+
+        let waf_log_with_bot = SecurityPolicy {
+            waf: WafPolicy {
+                enabled: true,
+                use_builtin_rules: false,
+                rules: vec![WafRule {
+                    id: "log-admin".into(),
+                    enabled: true,
+                    action: WafAction::Log,
+                    methods: vec![],
+                    path_contains: Some("/admin".into()),
+                    query_contains: None,
+                    ua_contains: None,
+                }],
+            },
+            bot: BotPolicy {
+                enabled: true,
+                challenge_score: 40,
+                block_score: 80,
+                rate_limit_per_min: 10_000,
+            },
+            ..Default::default()
+        };
+        let d = evaluate(&waf_log_with_bot, &view("GET", "/admin", "", browser_ua));
+        assert_eq!(d.action, SecurityAction::Log);
+        assert_eq!(d.reason, "waf-log");
+        assert_eq!(d.detail, "log-admin");
+        assert_eq!(d.bot_score, Some(0));
+        assert_eq!(d.waf_rule.as_deref(), Some("log-admin"));
+
+        let waf_log_without_bot = SecurityPolicy {
+            waf: WafPolicy {
+                enabled: true,
+                use_builtin_rules: false,
+                rules: vec![WafRule {
+                    id: "log-only".into(),
+                    enabled: true,
+                    action: WafAction::Log,
+                    methods: vec![],
+                    path_contains: Some("/log-only".into()),
+                    query_contains: None,
+                    ua_contains: None,
+                }],
+            },
+            ..Default::default()
+        };
+        let d = evaluate(
+            &waf_log_without_bot,
+            &view("GET", "/log-only", "", browser_ua),
+        );
+        assert_eq!(d.action, SecurityAction::Log);
+        assert_eq!(d.reason, "waf-log");
+        assert_eq!(d.detail, "log-only");
+        assert_eq!(d.bot_score, None);
+        assert_eq!(d.waf_rule.as_deref(), Some("log-only"));
+
+        let waf_challenge = SecurityPolicy {
+            waf: WafPolicy {
+                enabled: true,
+                use_builtin_rules: false,
+                rules: vec![WafRule {
+                    id: "challenge-admin".into(),
+                    enabled: true,
+                    action: WafAction::Challenge,
+                    methods: vec![],
+                    path_contains: Some("/admin".into()),
+                    query_contains: None,
+                    ua_contains: None,
+                }],
+            },
+            captcha: CaptchaPolicy {
+                enabled: true,
+                cookie_ttl_secs: 3600,
+            },
+            ..Default::default()
+        };
+        let d = evaluate(&waf_challenge, &view("GET", "/admin", "", browser_ua));
+        assert_eq!(d.action, SecurityAction::Challenge);
+        assert_eq!(d.reason, "waf-challenge");
+
+        let waf_block = SecurityPolicy {
+            waf: WafPolicy {
+                enabled: true,
+                use_builtin_rules: false,
+                rules: vec![WafRule {
+                    id: "block-admin".into(),
+                    enabled: true,
+                    action: WafAction::Block,
+                    methods: vec![],
+                    path_contains: Some("/admin".into()),
+                    query_contains: None,
+                    ua_contains: None,
+                }],
+            },
+            ..Default::default()
+        };
+        let d = evaluate(&waf_block, &view("GET", "/admin", "", browser_ua));
+        assert_eq!(d.action, SecurityAction::Block);
+        assert_eq!(d.reason, "waf-block");
+
+        let bot_only = SecurityPolicy {
+            bot: BotPolicy {
+                enabled: true,
+                challenge_score: 40,
+                block_score: 80,
+                rate_limit_per_min: 10_000,
+            },
+            ..Default::default()
+        };
+        let d = evaluate(&bot_only, &view("GET", "/", "", browser_ua));
+        assert_eq!(d.action, SecurityAction::Allow);
+        assert_eq!(d.reason, "bot-allow");
+        assert_eq!(d.bot_score, Some(0));
+
+        let captcha_only = SecurityPolicy {
+            captcha: CaptchaPolicy {
+                enabled: true,
+                cookie_ttl_secs: 3600,
+            },
+            ..Default::default()
+        };
+        let d = evaluate(&captcha_only, &view("GET", "/", "", browser_ua));
+        assert_eq!(d.action, SecurityAction::Allow);
+        assert_eq!(d.reason, "allow");
+    }
+
+    #[test]
+    fn policy_from_annotations_handles_none_exempt_flags_and_numbers() {
+        assert_eq!(policy_from_annotations(None), SecurityPolicy::default());
+
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            "proxy.pertisk.tech/security-exempt".to_string(),
+            "yes".to_string(),
+        );
+        annotations.insert(
+            "proxy.pertisk.tech/waf-enabled".to_string(),
+            "true".to_string(),
+        );
+        assert_eq!(
+            policy_from_annotations(Some(&annotations)),
+            SecurityPolicy::default()
+        );
+
+        annotations.clear();
+        annotations.insert(
+            "proxy.pertisk.tech/waf-enabled".to_string(),
+            "on".to_string(),
+        );
+        annotations.insert(
+            "proxy.pertisk.tech/waf-builtin".to_string(),
+            "false".to_string(),
+        );
+        annotations.insert(
+            "proxy.pertisk.tech/bot-enabled".to_string(),
+            "1".to_string(),
+        );
+        annotations.insert(
+            "proxy.pertisk.tech/bot-challenge-score".to_string(),
+            "55".to_string(),
+        );
+        annotations.insert(
+            "proxy.pertisk.tech/bot-block-score".to_string(),
+            "bad".to_string(),
+        );
+        annotations.insert(
+            "proxy.pertisk.tech/bot-rate-limit".to_string(),
+            "0".to_string(),
+        );
+        annotations.insert(
+            "proxy.pertisk.tech/captcha-enabled".to_string(),
+            "true".to_string(),
+        );
+        annotations.insert(
+            "proxy.pertisk.tech/captcha-ttl-secs".to_string(),
+            "0".to_string(),
+        );
+
+        let policy = policy_from_annotations(Some(&annotations));
+        assert!(policy.waf.enabled);
+        assert!(policy.waf.use_builtin_rules);
+        assert!(policy.bot.enabled);
+        assert_eq!(policy.bot.challenge_score, 55);
+        assert_eq!(policy.bot.block_score, 80);
+        assert_eq!(policy.bot.rate_limit_per_min, 120);
+        assert!(policy.captcha.enabled);
+        assert_eq!(policy.captcha.cookie_ttl_secs, 86_400);
+    }
+
+    #[test]
+    fn apply_annotations_clears_defaults_and_writes_enabled_policy() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert("unrelated".to_string(), "keep".to_string());
+        for key in ANNOTATION_KEYS {
+            annotations.insert((*key).to_string(), "old".to_string());
+        }
+
+        apply_annotations(&mut annotations, &SecurityPolicy::default());
+        assert_eq!(
+            annotations.get("unrelated").map(String::as_str),
+            Some("keep")
+        );
+        for key in ANNOTATION_KEYS {
+            assert!(!annotations.contains_key(*key));
+        }
+
+        let policy = SecurityPolicy {
+            waf: WafPolicy {
+                enabled: true,
+                use_builtin_rules: false,
+                rules: vec![],
+            },
+            bot: BotPolicy {
+                enabled: true,
+                challenge_score: 50,
+                block_score: 70,
+                rate_limit_per_min: 33,
+            },
+            captcha: CaptchaPolicy {
+                enabled: true,
+                cookie_ttl_secs: 600,
+            },
+        };
+        apply_annotations(&mut annotations, &policy);
+        assert_eq!(
+            annotations
+                .get("proxy.pertisk.tech/waf-enabled")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            annotations
+                .get("proxy.pertisk.tech/waf-builtin")
+                .map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            annotations
+                .get("proxy.pertisk.tech/bot-enabled")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            annotations
+                .get("proxy.pertisk.tech/bot-challenge-score")
+                .map(String::as_str),
+            Some("50")
+        );
+        assert_eq!(
+            annotations
+                .get("proxy.pertisk.tech/bot-block-score")
+                .map(String::as_str),
+            Some("70")
+        );
+        assert_eq!(
+            annotations
+                .get("proxy.pertisk.tech/bot-rate-limit")
+                .map(String::as_str),
+            Some("33")
+        );
+        assert_eq!(
+            annotations
+                .get("proxy.pertisk.tech/captcha-enabled")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            annotations
+                .get("proxy.pertisk.tech/captcha-ttl-secs")
+                .map(String::as_str),
+            Some("600")
+        );
+
+        let mut policy = policy;
+        policy.waf.use_builtin_rules = true;
+        apply_annotations(&mut annotations, &policy);
+        assert_eq!(
+            annotations
+                .get("proxy.pertisk.tech/waf-builtin")
+                .map(String::as_str),
+            Some("true")
+        );
     }
 }

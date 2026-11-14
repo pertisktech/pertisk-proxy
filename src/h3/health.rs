@@ -7,8 +7,8 @@ use futures::SinkExt;
 use quiche::h3::Header as H3Header;
 use tokio_quiche::http3::driver::{InboundFrame, IncomingH3Headers, OutboundFrame};
 
-use crate::health::{is_health_path_bytes, is_json_health_path_bytes, API_HEALTH_BODY};
 use crate::h3::headers::pseudo_method_path;
+use crate::health::{is_health_path_bytes, is_json_health_path_bytes, API_HEALTH_BODY};
 
 const SERVER: &[u8] = b"pertisk-proxy/h3";
 
@@ -51,9 +51,7 @@ static PLAIN_OK_HEAD_HEADERS: LazyLock<Arc<Vec<H3Header>>> = LazyLock::new(|| {
 /// Returns `true` when `:method` + `:path` match a probe endpoint.
 pub fn matches_request(headers: &[quiche::h3::Header]) -> bool {
     pseudo_method_path(headers)
-        .map(|(method, path)| {
-            matches!(method, b"GET" | b"HEAD") && is_health_path_bytes(path)
-        })
+        .map(|(method, path)| matches!(method, b"GET" | b"HEAD") && is_health_path_bytes(path))
         .unwrap_or(false)
 }
 
@@ -105,10 +103,7 @@ fn health_get_response(path: &[u8]) -> (Arc<Vec<H3Header>>, Bytes) {
             Bytes::from_static(API_HEALTH_BODY),
         )
     } else {
-        (
-            Arc::clone(&PLAIN_OK_GET_HEADERS),
-            Bytes::from_static(b"ok"),
-        )
+        (Arc::clone(&PLAIN_OK_GET_HEADERS), Bytes::from_static(b"ok"))
     }
 }
 

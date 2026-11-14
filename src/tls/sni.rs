@@ -18,9 +18,7 @@ pub struct CertStoreSniCallback {
 #[async_trait]
 impl TlsAccept for CertStoreSniCallback {
     async fn certificate_callback(&self, ssl: &mut TlsRef) -> () {
-        let sni = ssl
-            .servername(NameType::HOST_NAME)
-            .map(str::to_owned);
+        let sni = ssl.servername(NameType::HOST_NAME).map(str::to_owned);
         let cert = sni
             .as_deref()
             .and_then(|host| self.store.lookup_sni(host))
@@ -73,11 +71,9 @@ impl TlsAccept for CertStoreSniCallback {
 fn load_openssl_key_pair(
     cert: &StoredCert,
 ) -> Result<(x509::X509, Vec<x509::X509>, pkey::PKey<Private>), String> {
-    let (cert_bytes, key_bytes) = cert
-        .read_pem()
-        .map_err(|e| format!("read TLS PEM: {e}"))?;
-    let stack = x509::X509::stack_from_pem(&cert_bytes)
-        .map_err(|e| format!("parse cert PEM: {e}"))?;
+    let (cert_bytes, key_bytes) = cert.read_pem().map_err(|e| format!("read TLS PEM: {e}"))?;
+    let stack =
+        x509::X509::stack_from_pem(&cert_bytes).map_err(|e| format!("parse cert PEM: {e}"))?;
     if stack.is_empty() {
         return Err("no certificates in PEM".to_string());
     }

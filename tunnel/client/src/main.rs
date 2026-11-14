@@ -18,7 +18,10 @@ use tokio::net::TcpStream;
 use tracing::{error, info, warn};
 
 #[derive(Debug, Parser)]
-#[command(name = "pertisk-tunnel-client", about = "Reverse tunnel client for pertisk-proxy")]
+#[command(
+    name = "pertisk-tunnel-client",
+    about = "Reverse tunnel client for pertisk-proxy"
+)]
 struct Args {
     /// Path to TOML config.
     #[arg(short, long, env = "PERTISK_TUNNEL_CONFIG")]
@@ -213,7 +216,10 @@ async fn handle_open_conn(
         .await
         .with_context(|| format!("connect backend {local} (dial {dial})"))?;
     let _ = tcp.set_nodelay(true);
-    tracing::debug!("opened backend {local} (dial {dial}) for tunnel {}", open.tunnel);
+    tracing::debug!(
+        "opened backend {local} (dial {dial}) for tunnel {}",
+        open.tunnel
+    );
     pipe_tcp_quic(&mut tcp, &mut send, &mut recv).await;
     Ok(())
 }
@@ -235,11 +241,7 @@ fn dial_target(raw: &str) -> Result<String> {
         (None, trimmed)
     };
 
-    let hostport = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(rest)
-        .trim();
+    let hostport = rest.split(['/', '?', '#']).next().unwrap_or(rest).trim();
     if hostport.is_empty() {
         bail!("missing host in tunnel target {raw}");
     }

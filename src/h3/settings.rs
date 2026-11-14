@@ -67,12 +67,10 @@ pub fn quic_settings(runtime_cfg: &RuntimeConfig, opts: &Http3Options) -> QuicSe
             10 * 1024 * 1024
         });
 
-    let idle_ms = opts.max_idle_timeout_ms.or_else(|| {
-        env_u64("PERTISK_HTTP3_IDLE_TIMEOUT_SECS").map(|s| s.saturating_mul(1000))
-    });
-    let idle_secs = idle_ms
-        .map(|ms| ms / 1000)
-        .unwrap_or(300);
+    let idle_ms = opts
+        .max_idle_timeout_ms
+        .or_else(|| env_u64("PERTISK_HTTP3_IDLE_TIMEOUT_SECS").map(|s| s.saturating_mul(1000)));
+    let idle_secs = idle_ms.map(|ms| ms / 1000).unwrap_or(300);
 
     let cc = env_string("PERTISK_HTTP3_CC_ALGORITHM")
         .or_else(|| opts.congestion_control.clone())

@@ -1,8 +1,8 @@
-pub mod routes;
-pub mod forward;
 pub mod apply;
+pub mod forward;
 pub mod grpc;
 pub mod registry;
+pub mod routes;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -204,12 +204,8 @@ impl ProxyHttp for Gateway {
         self.metrics.inc_active_connections();
         let req = session.req_header();
         let host = request_host(req);
-        let (is_grpc, is_grpc_web) = grpc::classify_grpc_request(
-            &req.headers,
-            &req.method,
-            req.uri.path(),
-            &host,
-        );
+        let (is_grpc, is_grpc_web) =
+            grpc::classify_grpc_request(&req.headers, &req.method, req.uri.path(), &host);
         ctx.is_long_lived_stream =
             grpc::is_long_lived_api_stream(&req.method, req.uri.path(), &req.headers);
         ctx.is_websocket = grpc::is_websocket_upgrade(&req.method, &req.headers);
@@ -276,19 +272,18 @@ impl ProxyHttp for Gateway {
         if self.auto_https && is_plain_http(session) {
             let req = session.req_header();
             let host = request_host(req);
-            let host = if host.is_empty() { "localhost" } else { host.as_str() };
+            let host = if host.is_empty() {
+                "localhost"
+            } else {
+                host.as_str()
+            };
 
             if deny::enabled()
                 && !host.is_empty()
                 && host != "localhost"
                 && !self.router.snapshot().has_host(host)
             {
-                deny::respond_pingora(
-                    session,
-                    false,
-                    &format!("pertisk-proxy/{protocol}"),
-                )
-                .await?;
+                deny::respond_pingora(session, false, &format!("pertisk-proxy/{protocol}")).await?;
                 return Ok(true);
             }
 
@@ -308,8 +303,7 @@ impl ProxyHttp for Gateway {
                 .unwrap_or(&path);
             let target = format!("https://{host}{port_suffix}{path_q}");
 
-            let mut resp =
-                ResponseHeader::build(http::StatusCode::PERMANENT_REDIRECT, Some(3))?;
+            let mut resp = ResponseHeader::build(http::StatusCode::PERMANENT_REDIRECT, Some(3))?;
             resp.insert_header("Location", target)?;
             resp.insert_header("Content-Length", "0")?;
             resp.insert_header("X-App-Name", crate::app_name())?;
@@ -398,8 +392,13 @@ impl ProxyHttp for Gateway {
             let query = session.req_header().uri.query().unwrap_or("");
             let ok = match &auth {
                 crate::edge::RouteAuth::Forward { url } => {
-                    crate::edge::forward_auth_ok(url, &host_for_edge, &path, &session.req_header().headers)
-                        .await
+                    crate::edge::forward_auth_ok(
+                        url,
+                        &host_for_edge,
+                        &path,
+                        &session.req_header().headers,
+                    )
+                    .await
                 }
                 other => crate::edge::auth_header_ok(other, &session.req_header().headers, query),
             };
@@ -424,9 +423,9 @@ impl ProxyHttp for Gateway {
         if let Some(root) = ctx.file_root.clone() {
             let req_path = session.req_header().uri.path();
             let server = format!("pertisk-proxy/{protocol}");
-            match crate::edge::safe_file(&root, req_path).and_then(|p| {
-                std::fs::read(&p).ok().map(|body| (p, body))
-            }) {
+            match crate::edge::safe_file(&root, req_path)
+                .and_then(|p| std::fs::read(&p).ok().map(|body| (p, body)))
+            {
                 Some((file_path, body)) => {
                     let mime = crate::edge::guess_mime(&file_path);
                     let mut resp = ResponseHeader::build(http::StatusCode::OK, Some(4))?;
@@ -482,9 +481,7 @@ impl ProxyHttp for Gateway {
                 resp.insert_header("X-Cache", "HIT")?;
                 resp.insert_header("X-App-Name", crate::app_name())?;
                 session.write_response_header(Box::new(resp), false).await?;
-                session
-                    .write_response_body(Some(hit.body), true)
-                    .await?;
+                session.write_response_body(Some(hit.body), true).await?;
                 return Ok(true);
             }
             ctx.cache_collect = true;
@@ -514,12 +511,8 @@ impl ProxyHttp for Gateway {
                         client_ip.as_deref().unwrap_or("-"),
                         format!("GeoIP blocked ({reason})"),
                     ));
-                    deny::respond_forbidden(
-                        session,
-                        &format!("pertisk-proxy/{protocol}"),
-                        reason,
-                    )
-                    .await?;
+                    deny::respond_forbidden(session, &format!("pertisk-proxy/{protocol}"), reason)
+                        .await?;
                     return Ok(true);
                 }
             }
@@ -580,15 +573,7 @@ impl ProxyHttp for Gateway {
             }
             let next = query_param(query, "next").unwrap_or_else(|| "/".into());
             let (body, ctype) = crate::security::challenge_page(&next, "check");
-            deny::respond_html(
-                session,
-                &server,
-                http::StatusCode::OK,
-                ctype,
-                &body,
-                &[],
-            )
-            .await?;
+            deny::respond_html(session, &server, http::StatusCode::OK, ctype, &body, &[]).await?;
             return Ok(true);
         }
 
@@ -624,8 +609,7 @@ impl ProxyHttp for Gateway {
                     } else {
                         format!("{path_only}?{query}")
                     };
-                    let (body, ctype) =
-                        crate::security::challenge_page(&next, decision.reason);
+                    let (body, ctype) = crate::security::challenge_page(&next, decision.reason);
                     deny::respond_html(
                         session,
                         &server,
@@ -643,8 +627,7 @@ impl ProxyHttp for Gateway {
                     } else if decision.reason.starts_with("bot") {
                         self.metrics.inc_bot_blocked();
                     }
-                    deny::respond_forbidden(session, &server, decision.reason)
-                        .await?;
+                    deny::respond_forbidden(session, &server, decision.reason).await?;
                     return Ok(true);
                 }
             }
@@ -718,8 +701,12 @@ impl ProxyHttp for Gateway {
         }
 
         if !ctx.is_registry && is_downstream_tls(session) {
-            upstream_request.insert_header("X-Forwarded-Proto", "https").ok();
-            upstream_request.insert_header("X-Forwarded-Host", host.as_str()).ok();
+            upstream_request
+                .insert_header("X-Forwarded-Proto", "https")
+                .ok();
+            upstream_request
+                .insert_header("X-Forwarded-Host", host.as_str())
+                .ok();
         }
 
         if !ctx.is_registry {
@@ -810,8 +797,8 @@ impl ProxyHttp for Gateway {
         if sse_response {
             ctx.is_long_lived_stream = true;
         }
-        let streaming = ctx.is_long_lived_stream
-            || (ctx.is_grpc && grpc::is_grpc_server_streaming(path));
+        let streaming =
+            ctx.is_long_lived_stream || (ctx.is_grpc && grpc::is_grpc_server_streaming(path));
         if ctx.is_websocket || upstream_response.status.as_u16() == 101 {
             // Preserve Connection/Upgrade for WebSocket handshakes.
         } else if streaming && upstream_response.status.is_success() {
@@ -842,8 +829,7 @@ impl ProxyHttp for Gateway {
             }
         }
         if (400..500).contains(&ctx.cache_status) {
-            if let (Some(ip), Some(host)) = (ctx.rate_client.as_deref(), ctx.rate_host.as_deref())
-            {
+            if let (Some(ip), Some(host)) = (ctx.rate_client.as_deref(), ctx.rate_host.as_deref()) {
                 crate::edge::note_4xx(ip, host);
             }
         }
@@ -879,8 +865,11 @@ impl ProxyHttp for Gateway {
                 upstream_response,
                 is_downstream_tls(session),
             );
-        } else if let Some(alt_svc) = alt_svc_header_value(self.enable_h3, self.h3_port, &host, ctx) {
-            upstream_response.insert_header("Alt-Svc", alt_svc.as_str()).ok();
+        } else if let Some(alt_svc) = alt_svc_header_value(self.enable_h3, self.h3_port, &host, ctx)
+        {
+            upstream_response
+                .insert_header("Alt-Svc", alt_svc.as_str())
+                .ok();
         } else if is_downstream_tls(session) {
             upstream_response.insert_header("Alt-Svc", "clear").ok();
         }
@@ -970,10 +959,7 @@ impl ProxyHttp for Gateway {
             .to_string();
         let method = req.method.as_str().to_string();
         let protocol = protocol_short(downstream_protocol_label(session));
-        let upstream = ctx
-            .log_upstream
-            .clone()
-            .unwrap_or_else(|| "-".to_string());
+        let upstream = ctx.log_upstream.clone().unwrap_or_else(|| "-".to_string());
         let duration_ms = ctx
             .log_started
             .map(|s| s.elapsed().as_millis() as u64)
@@ -1126,10 +1112,7 @@ fn query_param(query: &str, key: &str) -> Option<String> {
         let k = parts.next().unwrap_or("");
         let v = parts.next().unwrap_or("");
         if k == key {
-            return Some(
-                urlencoding_decode(v)
-                    .unwrap_or_else(|| v.replace('+', " ")),
-            );
+            return Some(urlencoding_decode(v).unwrap_or_else(|| v.replace('+', " ")));
         }
     }
     None
@@ -1192,7 +1175,9 @@ fn inject_forwarded_client_ip(upstream_request: &mut RequestHeader, client_ip: &
         .headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok());
-    for (name, value) in crate::proxy::forward::forwarded_client_ip_header_pairs(client_ip, existing) {
+    for (name, value) in
+        crate::proxy::forward::forwarded_client_ip_header_pairs(client_ip, existing)
+    {
         upstream_request.insert_header(name, value).ok();
     }
 }

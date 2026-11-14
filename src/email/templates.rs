@@ -128,10 +128,7 @@ pub fn password_change_content(details: &AuthEventDetails) -> EmailContent {
     EmailContent::with_details(
         "Management password changed",
         vec![
-            format!(
-                "The password for user “{}” was changed.",
-                details.username
-            ),
+            format!("The password for user “{}” was changed.", details.username),
             "If you did not make this change, secure the account and review access immediately."
                 .into(),
         ],

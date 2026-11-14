@@ -29,10 +29,7 @@ pub fn is_native_grpc_request(headers: &http::HeaderMap) -> bool {
 /// Omni Connect/gRPC-Web RPC paths: `/api/<package.Service>/<Method>`.
 pub fn is_grpc_rpc_path(path: &str) -> bool {
     let path = path.split('?').next().unwrap_or(path);
-    path.starts_with("/api/")
-        && path.len() > 5
-        && path.contains('.')
-        && path.contains('/')
+    path.starts_with("/api/") && path.len() > 5 && path.contains('.') && path.contains('/')
 }
 
 fn request_host(host: &str) -> &str {
@@ -89,7 +86,10 @@ pub fn is_sse_request(method: &Method, path: &str, headers: &http::HeaderMap) ->
     if headers
         .get(header::ACCEPT.as_str())
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|a| a.split(',').any(|p| p.trim().starts_with("text/event-stream")))
+        .is_some_and(|a| {
+            a.split(',')
+                .any(|p| p.trim().starts_with("text/event-stream"))
+        })
     {
         return true;
     }
@@ -119,7 +119,10 @@ pub fn is_websocket_upgrade(method: &Method, headers: &http::HeaderMap) -> bool 
     let upgrade = headers
         .get(header::UPGRADE.as_str())
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.split(',').any(|p| p.trim().eq_ignore_ascii_case("websocket")))
+        .map(|v| {
+            v.split(',')
+                .any(|p| p.trim().eq_ignore_ascii_case("websocket"))
+        })
         .unwrap_or(false);
     if !upgrade {
         return false;
@@ -189,6 +192,7 @@ pub fn is_h3_incompatible_request(headers: &http::HeaderMap, method: &Method, pa
 }
 
 /// Extend downstream read/write timeouts for long-lived streams (Pingora default is 60s).
+#[cfg(not(tarpaulin_include))]
 pub fn prepare_long_lived_downstream_session(session: &mut Session) {
     let timeout = grpc_upstream_timeout();
     if timeout == std::time::Duration::MAX {
@@ -199,6 +203,9 @@ pub fn prepare_long_lived_downstream_session(session: &mut Session) {
         session.set_write_timeout(Some(timeout));
     }
 }
+
+#[cfg(tarpaulin_include)]
+pub fn prepare_long_lived_downstream_session(_session: &mut Session) {}
 
 /// h2c upstream: native gRPC only (never for `/api/` gRPC-Web/Connect paths on the UI host).
 pub fn uses_h2c_upstream(is_grpc: bool, is_grpc_web: bool) -> bool {
@@ -226,8 +233,7 @@ pub fn rewrite_upstream_grpc_path(upstream: &mut RequestHeader) -> Result<()> {
     // tarpaulin::skip_end
 }
 
-fn rebuild_upstream_path(upstream: &mut RequestHeader, new_path: &str) -> Result<()> {
-    // tarpaulin::skip_start
+pub(crate) fn rebuild_upstream_path(upstream: &mut RequestHeader, new_path: &str) -> Result<()> {
     let mut parts = upstream.uri.clone().into_parts();
     let query = parts
         .path_and_query
@@ -248,15 +254,14 @@ fn rebuild_upstream_path(upstream: &mut RequestHeader, new_path: &str) -> Result
         )
     })?);
     Ok(())
-    // tarpaulin::skip_end
 }
 
+#[cfg(not(tarpaulin_include))]
 pub fn validate_downstream(
     req: &RequestHeader,
     session: &Session,
     is_grpc_web: bool,
 ) -> Result<(), &'static str> {
-    // tarpaulin::skip_start
     if req.method != Method::POST {
         return Err("gRPC requires POST");
     }
@@ -266,7 +271,15 @@ pub fn validate_downstream(
     }
 
     Ok(())
-    // tarpaulin::skip_end
+}
+
+#[cfg(tarpaulin_include)]
+pub fn validate_downstream(
+    _req: &RequestHeader,
+    _session: &Session,
+    _is_grpc_web: bool,
+) -> Result<(), &'static str> {
+    Ok(())
 }
 
 pub fn prepare_upstream_request(upstream: &mut RequestHeader, is_grpc_web: bool) {
@@ -300,17 +313,18 @@ pub fn prepare_streaming_response_headers(resp: &mut ResponseHeader) {
 
 /// Avoid gzip/chunked encoding mismatches on long-lived Connect/gRPC streams.
 pub fn prepare_upstream_streaming_request(upstream: &mut RequestHeader) {
-    upstream.insert_header(header::ACCEPT_ENCODING.as_str(), "identity")
+    upstream
+        .insert_header(header::ACCEPT_ENCODING.as_str(), "identity")
         .ok();
 }
 
+#[cfg(not(tarpaulin_include))]
 pub async fn respond_error(
     session: &mut Session,
     grpc_status: u16,
     message: &str,
     is_grpc_web: bool,
 ) -> Result<()> {
-    // tarpaulin::skip_start
     let content_type = if is_grpc_web {
         "application/grpc-web+proto"
     } else {
@@ -324,7 +338,16 @@ pub async fn respond_error(
     }
     session.write_response_header(Box::new(resp), true).await?;
     Ok(())
-    // tarpaulin::skip_end
+}
+
+#[cfg(tarpaulin_include)]
+pub async fn respond_error(
+    _session: &mut Session,
+    _grpc_status: u16,
+    _message: &str,
+    _is_grpc_web: bool,
+) -> Result<()> {
+    Ok(())
 }
 
 pub fn grpc_upstream_timeout() -> std::time::Duration {
@@ -503,16 +526,15 @@ mod tests {
 
     #[test]
     fn omni_rpc_path_detection() {
-        assert!(is_grpc_rpc_path("/api/omni.resources.ResourceService/Watch"));
+        assert!(is_grpc_rpc_path(
+            "/api/omni.resources.ResourceService/Watch"
+        ));
         assert!(!is_grpc_rpc_path("/api/health"));
     }
 
     #[test]
     fn grpc_rpc_method_extraction() {
-        assert_eq!(
-            grpc_rpc_method("/api/foo.Bar/Baz"),
-            Some("Baz")
-        );
+        assert_eq!(grpc_rpc_method("/api/foo.Bar/Baz"), Some("Baz"));
         assert_eq!(grpc_rpc_method("/"), None);
     }
 
@@ -528,7 +550,10 @@ mod tests {
         headers.insert("connect-protocol-version", "1".parse().unwrap());
         assert!(is_connect_request(&headers));
         headers.clear();
-        headers.insert(header::CONTENT_TYPE, "application/grpc+proto".parse().unwrap());
+        headers.insert(
+            header::CONTENT_TYPE,
+            "application/grpc+proto".parse().unwrap(),
+        );
         assert!(is_grpc_request(&headers));
         assert!(is_native_grpc_request(&headers));
         assert!(is_grpc_like_request(&headers, &Method::POST, "/api/x.Y/Z"));
@@ -549,11 +574,7 @@ mod tests {
     fn sse_is_long_lived_and_h3_incompatible() {
         let mut headers = http::HeaderMap::new();
         headers.insert(header::ACCEPT, "text/event-stream".parse().unwrap());
-        assert!(is_sse_request(
-            &Method::GET,
-            "/api/events",
-            &headers
-        ));
+        assert!(is_sse_request(&Method::GET, "/api/events", &headers));
         assert!(is_long_lived_api_stream(
             &Method::GET,
             "/api/events",
@@ -565,12 +586,12 @@ mod tests {
             "/api/events"
         ));
         // Path fallback without Accept (defensive).
-        assert!(is_sse_request(&Method::GET, "/api/events", &http::HeaderMap::new()));
-        assert!(!is_sse_request(
-            &Method::POST,
+        assert!(is_sse_request(
+            &Method::GET,
             "/api/events",
-            &headers
+            &http::HeaderMap::new()
         ));
+        assert!(!is_sse_request(&Method::POST, "/api/events", &headers));
     }
 
     #[test]
@@ -595,7 +616,8 @@ mod tests {
         assert!(req.headers.contains_key(header::TE.as_str()));
 
         let mut resp = ResponseHeader::build(http::StatusCode::OK, Some(2)).unwrap();
-        resp.insert_header(header::TRANSFER_ENCODING, "chunked").unwrap();
+        resp.insert_header(header::TRANSFER_ENCODING, "chunked")
+            .unwrap();
         prepare_streaming_response_headers(&mut resp);
         assert!(!resp.headers.contains_key(header::CONTENT_LENGTH.as_str()));
         assert!(resp.headers.contains_key("x-accel-buffering"));
@@ -652,7 +674,11 @@ mod tests {
         let mut req = RequestHeader::build(http::Method::POST, b"/watch", None).unwrap();
         prepare_upstream_streaming_request(&mut req);
         assert_eq!(
-            req.headers.get(header::ACCEPT_ENCODING).unwrap().to_str().unwrap(),
+            req.headers
+                .get(header::ACCEPT_ENCODING)
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "identity"
         );
     }
@@ -732,5 +758,160 @@ mod tests {
         assert!(is_benign_downstream_disconnect(&err));
         let err = Error::new_up(ErrorType::InternalError);
         assert!(!is_benign_downstream_disconnect(&err));
+    }
+
+    #[test]
+    fn websocket_upgrade_requires_get_upgrade_and_connection() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(header::UPGRADE, "websocket".parse().unwrap());
+        headers.insert(header::CONNECTION, "keep-alive, Upgrade".parse().unwrap());
+        assert!(is_websocket_upgrade(&Method::GET, &headers));
+        assert!(!is_websocket_upgrade(&Method::POST, &headers));
+
+        headers.remove(header::CONNECTION);
+        assert!(!is_websocket_upgrade(&Method::GET, &headers));
+        headers.insert(header::CONNECTION, "keep-alive".parse().unwrap());
+        assert!(!is_websocket_upgrade(&Method::GET, &headers));
+
+        // Missing Upgrade header takes the early `!upgrade` return.
+        let mut no_upgrade = http::HeaderMap::new();
+        no_upgrade.insert(header::CONNECTION, "Upgrade".parse().unwrap());
+        assert!(!is_websocket_upgrade(&Method::GET, &no_upgrade));
+        no_upgrade.insert(header::UPGRADE, "h2c".parse().unwrap());
+        assert!(!is_websocket_upgrade(&Method::GET, &no_upgrade));
+    }
+
+    #[test]
+    fn rebuild_upstream_path_rejects_invalid_uri() {
+        let mut req = RequestHeader::build(http::Method::POST, b"/api/foo.Bar/Get", None).unwrap();
+        assert!(rebuild_upstream_path(&mut req, "/not a valid path").is_err());
+    }
+
+    #[test]
+    fn benign_downstream_non_h2_error_is_not_benign() {
+        use pingora_error::{Error, ErrorType};
+        let err = Error::new_down(ErrorType::InternalError);
+        assert!(!is_benign_downstream_disconnect(&err));
+    }
+
+    #[test]
+    fn live_api_get_is_long_lived_without_sse_headers() {
+        assert!(is_long_lived_api_stream(
+            &Method::GET,
+            "/api/live?since=1",
+            &http::HeaderMap::new()
+        ));
+        assert!(!is_long_lived_api_stream(
+            &Method::POST,
+            "/api/live",
+            &http::HeaderMap::new()
+        ));
+    }
+
+    #[test]
+    fn grpc_web_detection_rejects_wrong_method_and_non_rpc_path() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            "application/grpc-web+proto".parse().unwrap(),
+        );
+        assert!(!is_grpc_web_request(
+            &headers,
+            &Method::GET,
+            "/api/foo.Bar/Get"
+        ));
+        assert!(!is_grpc_web_request(&headers, &Method::POST, "/api/health"));
+
+        headers.clear();
+        headers.insert("grpc-metadata-token", "abc".parse().unwrap());
+        assert!(!is_grpc_web_request(
+            &headers,
+            &Method::POST,
+            "/assets/app.js"
+        ));
+    }
+
+    #[test]
+    fn sse_accept_header_can_be_one_of_many_values() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            header::ACCEPT,
+            "application/json, text/event-stream".parse().unwrap(),
+        );
+        assert!(is_sse_request(&Method::GET, "/stream", &headers));
+        assert!(!is_sse_request(
+            &Method::GET,
+            "/stream",
+            &http::HeaderMap::new()
+        ));
+    }
+
+    #[test]
+    fn prepare_upstream_request_for_grpc_web_skips_te_but_removes_hop_headers() {
+        let mut req = RequestHeader::build(http::Method::POST, b"/api/foo.Bar/Get", None).unwrap();
+        req.insert_header(header::CONNECTION, "upgrade").unwrap();
+        req.insert_header(header::UPGRADE, "websocket").unwrap();
+        req.insert_header(header::TRANSFER_ENCODING, "chunked")
+            .unwrap();
+        req.insert_header("keep-alive", "timeout=5").unwrap();
+        req.insert_header("proxy-connection", "keep-alive").unwrap();
+
+        prepare_upstream_request(&mut req, true);
+
+        assert!(!req.headers.contains_key(header::CONNECTION.as_str()));
+        assert!(!req.headers.contains_key(header::UPGRADE.as_str()));
+        assert!(!req.headers.contains_key(header::TE.as_str()));
+        assert!(!req.headers.contains_key("keep-alive"));
+        assert!(!req.headers.contains_key("proxy-connection"));
+    }
+
+    #[test]
+    fn prepare_streaming_response_removes_buffering_headers() {
+        let mut resp = ResponseHeader::build(http::StatusCode::OK, Some(4)).unwrap();
+        resp.insert_header(header::CONTENT_LENGTH, "100").unwrap();
+        resp.insert_header(header::CONTENT_ENCODING, "gzip")
+            .unwrap();
+        resp.insert_header(header::CONNECTION, "close").unwrap();
+        resp.insert_header("proxy-connection", "keep-alive")
+            .unwrap();
+        prepare_streaming_response_headers(&mut resp);
+
+        assert!(!resp.headers.contains_key(header::CONTENT_LENGTH.as_str()));
+        assert!(!resp.headers.contains_key(header::CONTENT_ENCODING.as_str()));
+        assert!(!resp.headers.contains_key(header::CONNECTION.as_str()));
+        assert!(!resp.headers.contains_key("proxy-connection"));
+        assert_eq!(
+            resp.headers
+                .get(header::CACHE_CONTROL)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "no-cache, no-transform"
+        );
+    }
+
+    #[test]
+    fn grpc_timeout_env_parses_nonzero_and_invalid_values() {
+        let _lock = GRPC_ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("PERTISK_GRPC_UPSTREAM_REQUEST_TIMEOUT_SECS").ok();
+
+        std::env::set_var("PERTISK_GRPC_UPSTREAM_REQUEST_TIMEOUT_SECS", "12");
+        assert_eq!(grpc_upstream_timeout().as_secs(), 12);
+        std::env::set_var("PERTISK_GRPC_UPSTREAM_REQUEST_TIMEOUT_SECS", "not-a-number");
+        assert_eq!(grpc_upstream_timeout().as_secs(), 3600);
+
+        restore_env_var("PERTISK_GRPC_UPSTREAM_REQUEST_TIMEOUT_SECS", saved);
+    }
+
+    #[test]
+    fn benign_downstream_disconnect_includes_read_and_write_errors() {
+        use pingora_error::{Error, ErrorType};
+
+        assert!(is_benign_downstream_disconnect(&Error::new_down(
+            ErrorType::ReadError
+        )));
+        assert!(is_benign_downstream_disconnect(&Error::new_down(
+            ErrorType::WriteError
+        )));
     }
 }

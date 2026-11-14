@@ -100,9 +100,17 @@ pub fn unknown_host_status(tls: bool) -> StatusCode {
 }
 
 /// Respond on the Pingora HTTP/1 + HTTP/2 path for an unconfigured host.
-pub async fn respond_pingora(session: &mut Session, tls: bool, server: &str) -> pingora_core::Result<()> {
+pub async fn respond_pingora(
+    session: &mut Session,
+    tls: bool,
+    server: &str,
+) -> pingora_core::Result<()> {
     // tarpaulin::skip_start
-    let template = if tls { &*TLS_421_HEADERS } else { &*PLAIN_404_HEADERS };
+    let template = if tls {
+        &*TLS_421_HEADERS
+    } else {
+        &*PLAIN_404_HEADERS
+    };
     let mut resp = template.clone();
     resp.insert_header("Server", server)?;
     resp.insert_header("X-App-Name", crate::app_name())?;
@@ -208,7 +216,10 @@ mod tests {
         let hosts = installer_hosts_from(" get.proxy.pertisk.com, GET.pertisk.com. ");
         assert_eq!(
             hosts,
-            vec!["get.proxy.pertisk.com".to_string(), "get.pertisk.com".to_string()]
+            vec![
+                "get.proxy.pertisk.com".to_string(),
+                "get.pertisk.com".to_string()
+            ]
         );
         assert!(installer_hosts_from("").is_empty());
         assert!(installer_hosts_from("https://evil.example/x").is_empty());

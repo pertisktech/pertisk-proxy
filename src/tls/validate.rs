@@ -30,10 +30,7 @@ pub fn validate_cert_pair(cert_path: &Path, key_path: &Path) -> Result<()> {
     let mut key_reader = key_pem.as_slice();
     rustls_pemfile::private_key(&mut key_reader)
         .context("failed to parse private key PEM")?
-        .context(format!(
-            "no private key found in {}",
-            key_path.display()
-        ))?;
+        .context(format!("no private key found in {}", key_path.display()))?;
 
     Ok(())
 }
@@ -103,7 +100,8 @@ fn leaf_cert_names(pem: &[u8]) -> Result<Vec<String>> {
         .context("failed to read PEM certificate")?
         .context("no certificate in PEM file")?;
 
-    let (_, cert) = X509Certificate::from_der(der.as_ref()).context("invalid leaf certificate DER")?;
+    let (_, cert) =
+        X509Certificate::from_der(der.as_ref()).context("invalid leaf certificate DER")?;
     let mut names = Vec::new();
     if let Some(cn) = cert.subject().iter_common_name().next() {
         if let Ok(cn) = cn.as_str() {
@@ -123,7 +121,9 @@ fn leaf_cert_names(pem: &[u8]) -> Result<Vec<String>> {
 }
 
 fn cert_covers_host(cert_names: &[String], host: &str) -> bool {
-    cert_names.iter().any(|name| host_matches_cert_name(host, name))
+    cert_names
+        .iter()
+        .any(|name| host_matches_cert_name(host, name))
 }
 
 fn host_matches_cert_name(host: &str, cert_name: &str) -> bool {
@@ -156,7 +156,10 @@ mod tests {
             }
         }
         let cert = params.self_signed(&key_pair).unwrap();
-        (cert.pem().into_bytes(), key_pair.serialize_pem().into_bytes())
+        (
+            cert.pem().into_bytes(),
+            key_pair.serialize_pem().into_bytes(),
+        )
     }
 
     #[test]
@@ -225,7 +228,12 @@ mod tests {
         std::fs::write(&cert_path, &cert).unwrap();
         std::fs::write(&key_path, &key).unwrap();
         warn_host_cert_mismatch(&cert_path, &["example.com".into()]).unwrap();
-        warn_host_cert_mismatch(&cert_path, &["wrong.example.com".into()]).unwrap();
+        // Mismatch path exercises the warn! log that includes cert_path.display().
+        warn_host_cert_mismatch(
+            &cert_path,
+            &["wrong.example.com".into(), "also-wrong.example.com".into()],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -234,5 +242,30 @@ mod tests {
         let _ = key;
         let names = leaf_cert_names(&cert).unwrap();
         assert!(names.iter().any(|n| n.contains("example.com")));
+    }
+
+    #[test]
+    fn validate_cert_pair_pem_rejects_missing_key() {
+        let (cert, _) = test_cert_pair(&["example.com"]);
+        assert!(validate_cert_pair_pem(&cert, b"").is_err());
+        assert!(validate_cert_pair_pem(&cert, b"not a key").is_err());
+    }
+
+    #[test]
+    fn leaf_cert_names_rejects_invalid_pem() {
+        assert!(leaf_cert_names(b"not a certificate").is_err());
+    }
+
+    #[test]
+    fn warn_host_cert_mismatch_pem_handles_port_suffix() {
+        let (cert, _) = test_cert_pair(&["example.com"]);
+        warn_host_cert_mismatch_pem(&cert, &["example.com:443".into()]).unwrap();
+    }
+
+    #[test]
+    fn cert_covers_host_accepts_any_matching_name() {
+        let names = vec!["wrong.example.com".into(), "*.example.org".into()];
+        assert!(cert_covers_host(&names, "api.example.org"));
+        assert!(!cert_covers_host(&names, "api.example.net"));
     }
 }

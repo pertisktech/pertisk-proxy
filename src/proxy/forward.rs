@@ -61,11 +61,7 @@ pub fn forwarded_client_ip_header_pairs(
 }
 
 fn first_hop_from_xff(xff: Option<&str>) -> Option<String> {
-    let ip = xff?
-        .split(',')
-        .next()?
-        .trim()
-        .trim_matches('"');
+    let ip = xff?.split(',').next()?.trim().trim_matches('"');
     if ip.is_empty() {
         None
     } else {
@@ -127,21 +123,24 @@ pub fn is_public_routable_ip(ip: &str) -> bool {
     let Some(normalized) = normalize_ip_str(ip) else {
         return false;
     };
-    match normalized.parse::<IpAddr>() {
-        Ok(IpAddr::V4(v4)) => {
+// `normalize_ip_str` only returns parseable addresses.
+    match normalized
+        .parse::<IpAddr>()
+        .expect("normalize_ip_str returns parseable IPs")
+    {
+        IpAddr::V4(v4) => {
             !(v4.is_private()
                 || v4.is_loopback()
                 || v4.is_link_local()
                 || v4.is_unspecified()
                 || v4.is_broadcast())
         }
-        Ok(IpAddr::V6(v6)) => {
+        IpAddr::V6(v6) => {
             !(v6.is_loopback()
                 || v6.is_unique_local()
                 || v6.is_unicast_link_local()
                 || v6.is_unspecified())
         }
-        Err(_) => false,
     }
 }
 
@@ -476,15 +475,14 @@ mod tests {
     fn ipv4_mapped_private_is_not_public() {
         assert!(!is_public_routable_ip("::ffff:10.1.1.5"));
         assert!(is_public_routable_ip("::ffff:203.0.113.9"));
-        assert!(is_public_routable_ip("2405:9800:b901:194c:be24:11ff:feed:f72"));
+        assert!(is_public_routable_ip(
+            "2405:9800:b901:194c:be24:11ff:feed:f72"
+        ));
     }
 
     #[test]
     fn forwarded_client_ip_header_pairs_appends_existing_xff() {
-        let pairs = forwarded_client_ip_header_pairs(
-            "203.0.113.5",
-            Some("198.51.100.1"),
-        );
+        let pairs = forwarded_client_ip_header_pairs("203.0.113.5", Some("198.51.100.1"));
         assert_eq!(pairs[0], ("X-Real-IP", "203.0.113.5".to_string()));
         assert_eq!(
             pairs[1],
@@ -541,5 +539,206 @@ mod tests {
     fn resolve_forward_missing_route_errors() {
         let table = RouteTable::default();
         assert!(resolve_forward(&table, "missing.example", "/").is_err());
+    }
+
+    #[test]
+    fn first_hop_from_xff_ignores_empty_values() {
+        assert_eq!(first_hop_from_xff(Some("   ")), None);
+        assert_eq!(
+            first_hop_from_xff(Some("\"203.0.113.7\", 10.0.0.1")).as_deref(),
+            Some("203.0.113.7")
+        );
+        assert_eq!(first_hop_from_xff(None), None);
+    }
+
+    #[test]
+    fn resolve_client_ip_uses_real_ip_paths_and_private_socket_fallback() {
+        assert_eq!(
+            resolve_client_ip(Some("10.0.0.2"), None, Some("198.51.100.9")).as_deref(),
+            Some("198.51.100.9")
+        );
+        assert_eq!(
+            resolve_client_ip(Some("10.0.0.2"), None, Some("172.16.0.9")).as_deref(),
+            Some("172.16.0.9")
+        );
+        assert_eq!(
+            resolve_client_ip(Some("10.0.0.2"), Some("   "), None).as_deref(),
+            Some("10.0.0.2")
+        );
+    }
+
+    #[test]
+    fn normalize_ip_rejects_empty_invalid_and_keeps_ipv6() {
+        assert_eq!(normalize_ip_str(" \t "), None);
+        assert_eq!(normalize_ip_str("not an ip"), None);
+        assert_eq!(
+            normalize_ip_str("[2001:db8::1]").as_deref(),
+            Some("2001:db8::1")
+        );
+    }
+
+    #[test]
+    fn public_routable_rejects_invalid_and_loopbacks() {
+        assert!(!is_public_routable_ip("not an ip"));
+        assert!(!is_public_routable_ip("127.0.0.1"));
+        assert!(!is_public_routable_ip("::1"));
+        assert!(!is_public_routable_ip("fe80::1"));
+        assert!(!is_public_routable_ip("0.0.0.0"));
+    }
+
+    #[test]
+    fn client_ip_from_http_headers_checks_precedence_and_xff() {
+        for name in [
+            "cf-connecting-ip",
+            "true-client-ip",
+            "x-client-ip",
+            "x-real-ip",
+        ] {
+            let mut headers = http::HeaderMap::new();
+            headers.insert(name, " 198.51.100.10 ".parse().unwrap());
+            assert_eq!(
+                client_ip_from_http_headers(&headers).as_deref(),
+                Some("198.51.100.10")
+            );
+        }
+
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "198.51.100.20, 10.0.0.1".parse().unwrap(),
+        );
+        assert_eq!(
+            client_ip_from_http_headers(&headers).as_deref(),
+            Some("198.51.100.20")
+        );
+
+        headers.insert("cf-connecting-ip", "   ".parse().unwrap());
+        assert_eq!(
+            client_ip_from_http_headers(&headers).as_deref(),
+            Some("198.51.100.20")
+        );
+
+        assert_eq!(client_ip_from_http_headers(&http::HeaderMap::new()), None);
+
+        let mut empty_xff = http::HeaderMap::new();
+        empty_xff.insert("x-forwarded-for", "   ".parse().unwrap());
+        assert_eq!(client_ip_from_http_headers(&empty_xff), None);
+    }
+
+    #[test]
+    fn apply_forwarded_client_ip_headers_mutates_header_map() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-forwarded-for", "198.51.100.1".parse().unwrap());
+        apply_forwarded_client_ip_headers(&mut headers, "203.0.113.5");
+        assert_eq!(headers.get("x-real-ip").unwrap(), "203.0.113.5");
+        assert_eq!(
+            headers.get("x-forwarded-for").unwrap(),
+            "198.51.100.1, 203.0.113.5"
+        );
+    }
+
+    #[test]
+    fn resolve_forward_file_backend_sets_file_root() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "static.example.com".into(),
+            vec![Route {
+                path: "/assets".into(),
+                path_type: PathMatchType::Prefix,
+                backend: Backend {
+                    address: "file:/srv/www".into(),
+                    port: 0,
+                    use_tls: false,
+                },
+                middlewares: vec![Middleware::StripPrefix {
+                    prefix: "/assets".into(),
+                }],
+                forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
+            }],
+        )]));
+
+        let plan = resolve_forward(&table, "static.example.com", "/assets/app.css?v=1").unwrap();
+        assert_eq!(plan.peer_host, "127.0.0.1");
+        assert_eq!(plan.peer_port, 9);
+        assert_eq!(plan.upstream_url, "file:/srv/www/app.css?v=1");
+        assert_eq!(plan.middleware.file_root.as_deref(), Some("/srv/www"));
+    }
+
+    #[test]
+    fn resolve_forward_consul_missing_endpoint_is_503() {
+        let service = "forward-missing-test";
+        crate::edge::consul_set(service, vec![]);
+        let table = RouteTable::from_routes(HashMap::from([(
+            "svc.example.com".into(),
+            vec![Route {
+                path: "/".into(),
+                path_type: PathMatchType::Prefix,
+                backend: Backend {
+                    address: format!("consul:{service}"),
+                    port: 0,
+                    use_tls: false,
+                },
+                middlewares: vec![],
+                forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
+            }],
+        )]));
+
+        assert!(resolve_forward(&table, "svc.example.com", "/").is_err());
+    }
+
+    #[test]
+    fn resolve_forward_consul_success_uses_seeded_endpoint() {
+        let service = "forward-success-test";
+        crate::edge::consul_set(service, vec![("10.0.0.9".into(), 8088)]);
+        let table = RouteTable::from_routes(HashMap::from([(
+            "svc.example.com".into(),
+            vec![Route {
+                path: "/".into(),
+                path_type: PathMatchType::Prefix,
+                backend: Backend {
+                    address: format!("consul:{service}"),
+                    port: 0,
+                    use_tls: false,
+                },
+                middlewares: vec![],
+                forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
+            }],
+        )]));
+
+        let plan = resolve_forward(&table, "svc.example.com", "/health").unwrap();
+        assert_eq!(plan.peer_host, "10.0.0.9");
+        assert_eq!(plan.peer_port, 8088);
+        assert_eq!(plan.upstream_url, "http://10.0.0.9:8088/health");
+    }
+
+    #[test]
+    fn resolve_forward_auto_backend_probes_tls_branch() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "auto.example.com".into(),
+            vec![Route {
+                path: "/".into(),
+                path_type: PathMatchType::Prefix,
+                backend: Backend {
+                    address: "auto:127.0.0.1:1".into(),
+                    port: 1,
+                    use_tls: false,
+                },
+                middlewares: vec![],
+                forward_client_ip: false,
+                geoip: Default::default(),
+                security: Default::default(),
+            }],
+        )]));
+
+        let plan = resolve_forward(&table, "auto.example.com", "/probe").unwrap();
+        assert_eq!(plan.peer_host, "127.0.0.1");
+        assert_eq!(plan.peer_port, 1);
+        assert!(!plan.use_tls);
+        assert_eq!(plan.upstream_url, "http://127.0.0.1:1/probe");
     }
 }

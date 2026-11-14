@@ -112,11 +112,22 @@ fn rate_map() -> &'static Mutex<HashMap<String, RateBucket>> {
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn rate_prune_threshold() -> usize {
+    #[cfg(test)]
+    {
+        8
+    }
+    #[cfg(not(test))]
+    {
+        10_000
+    }
+}
+
 fn record_rate(ip: &str, limit: u32) -> u32 {
     let mut map = rate_map().lock().unwrap_or_else(|e| e.into_inner());
     let now = Instant::now();
     // Opportunistic prune when large.
-    if map.len() > 10_000 {
+    if map.len() > rate_prune_threshold() {
         map.retain(|_, b| now.duration_since(b.window_start) < Duration::from_secs(120));
     }
     let entry = map.entry(ip.to_string()).or_insert(RateBucket {
@@ -157,7 +168,12 @@ pub fn score_bot(policy: &BotPolicy, req: &RequestView<'_>) -> BotScore {
         }
     }
 
-    if req.accept.map(str::trim).filter(|s| !s.is_empty()).is_none() {
+    if req
+        .accept
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_none()
+    {
         score += 15;
         reasons.push("missing-accept".into());
     }
@@ -199,6 +215,34 @@ pub fn score_bot(policy: &BotPolicy, req: &RequestView<'_>) -> BotScore {
 mod tests {
     use super::*;
     use crate::security::RequestView;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn req<'a>(
+        user_agent: Option<&'a str>,
+        accept: Option<&'a str>,
+        accept_language: Option<&'a str>,
+        client_ip: Option<&'a str>,
+    ) -> RequestView<'a> {
+        RequestView {
+            method: "GET",
+            path: "/",
+            query: "",
+            user_agent,
+            accept,
+            accept_language,
+            cookie: None,
+            client_ip,
+        }
+    }
+
+    fn unique_ip() -> String {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        format!(
+            "bot-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        )
+    }
 
     #[test]
     fn missing_ua_challenges() {
@@ -221,5 +265,133 @@ mod tests {
         let s = score_bot(&policy, &req);
         assert!(s.score >= 40);
         assert_eq!(s.verdict, BotVerdict::Challenge);
+    }
+
+    #[test]
+    fn policy_helpers_report_default_active_and_normalize() {
+        assert!(BotPolicy::default().is_default());
+        assert!(!BotPolicy::default().is_active());
+
+        let policy = BotPolicy {
+            enabled: true,
+            challenge_score: 0,
+            block_score: 10,
+            rate_limit_per_min: 0,
+        }
+        .normalized();
+
+        assert!(policy.is_active());
+        assert!(!policy.is_default());
+        assert_eq!(policy.challenge_score, 40);
+        assert_eq!(policy.block_score, 40);
+        assert_eq!(policy.rate_limit_per_min, 120);
+    }
+
+    #[test]
+    fn automation_and_missing_headers_add_scores() {
+        let policy = BotPolicy {
+            enabled: true,
+            challenge_score: 40,
+            block_score: 60,
+            rate_limit_per_min: 10_000,
+        };
+        let ip = unique_ip();
+        let score = score_bot(&policy, &req(Some("curl/8"), None, None, Some(ip.as_str())));
+
+        assert_eq!(score.verdict, BotVerdict::Block);
+        assert!(score.reasons.contains(&"automation-ua".to_string()));
+        assert!(score.reasons.contains(&"short-ua".to_string()));
+        assert!(score.reasons.contains(&"missing-accept".to_string()));
+        assert!(score
+            .reasons
+            .contains(&"missing-accept-language".to_string()));
+    }
+
+    #[test]
+    fn benign_browser_request_allows() {
+        let policy = BotPolicy {
+            enabled: true,
+            challenge_score: 40,
+            block_score: 80,
+            rate_limit_per_min: 10_000,
+        };
+        let ip = unique_ip();
+        let score = score_bot(
+            &policy,
+            &req(
+                Some("Mozilla/5.0 (Macintosh; Intel Mac OS X)"),
+                Some("text/html"),
+                Some("en-US,en;q=0.9"),
+                Some(ip.as_str()),
+            ),
+        );
+
+        assert_eq!(score.score, 0);
+        assert_eq!(score.verdict, BotVerdict::Allow);
+        assert!(score.reasons.is_empty());
+    }
+
+    #[test]
+    fn rate_limit_adds_signal_after_limit() {
+        let policy = BotPolicy {
+            enabled: true,
+            challenge_score: 25,
+            block_score: 80,
+            rate_limit_per_min: 1,
+        };
+        let ip = unique_ip();
+        let first = score_bot(
+            &policy,
+            &req(
+                Some("Mozilla/5.0 (Macintosh; Intel Mac OS X)"),
+                Some("text/html"),
+                Some("en"),
+                Some(ip.as_str()),
+            ),
+        );
+        let second = score_bot(
+            &policy,
+            &req(
+                Some("Mozilla/5.0 (Macintosh; Intel Mac OS X)"),
+                Some("text/html"),
+                Some("en"),
+                Some(ip.as_str()),
+            ),
+        );
+
+        assert_eq!(first.verdict, BotVerdict::Allow);
+        assert_eq!(second.verdict, BotVerdict::Challenge);
+        assert!(second.reasons.contains(&"rate".to_string()));
+        assert!(second.score >= 25);
+    }
+
+    #[test]
+    fn rate_map_prunes_stale_buckets_and_rolls_window() {
+        {
+            let mut map = rate_map().lock().unwrap();
+            map.clear();
+            for i in 0..10 {
+                map.insert(
+                    format!("198.51.100.{i}"),
+                    RateBucket {
+                        window_start: Instant::now() - Duration::from_secs(200),
+                        count: 3,
+                    },
+                );
+            }
+            map.insert(
+                "203.0.113.77".into(),
+                RateBucket {
+                    window_start: Instant::now() - Duration::from_secs(90),
+                    count: 2,
+                },
+            );
+        }
+
+        // Over threshold → prune drops >120s buckets; same-IP call rolls the 90s window.
+        assert_eq!(record_rate("203.0.113.77", 100), 0);
+        let map = rate_map().lock().unwrap();
+        assert!(!map.contains_key("198.51.100.0"));
+        assert_eq!(map.get("203.0.113.77").map(|b| b.count), Some(1));
     }
 }

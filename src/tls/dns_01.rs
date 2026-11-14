@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 
-
 #[cfg(feature = "dns-challenge")]
 use aws_credential_types::Credentials as AwsCredentials;
 
@@ -294,10 +293,7 @@ struct CloudflareSolver {
 #[cfg(feature = "dns-challenge")]
 impl CloudflareSolver {
     fn new(api_token: String, zone_id: Option<String>) -> Self {
-        Self {
-            api_token,
-            zone_id,
-        }
+        Self { api_token, zone_id }
     }
 }
 
@@ -434,9 +430,7 @@ impl DigitalOceanSolver {
 impl Dns01Solver for DigitalOceanSolver {
     async fn set_txt(&self, fqdn: &str, value: &str) -> Result<(), String> {
         let client = reqwest::Client::new();
-        let domain = fqdn
-            .strip_prefix("_acme-challenge.")
-            .unwrap_or(fqdn);
+        let domain = fqdn.strip_prefix("_acme-challenge.").unwrap_or(fqdn);
         let list: serde_json::Value = client
             .get("https://api.digitalocean.com/v2/domains")
             .header("Authorization", format!("Bearer {}", self.token))
@@ -459,12 +453,7 @@ impl Dns01Solver for DigitalOceanSolver {
                 .iter()
                 .filter_map(|d| d.get("name").and_then(|n| n.as_str())),
         )
-        .ok_or_else(|| {
-            format!(
-                "domain not found in DigitalOcean account for {}",
-                domain
-            )
-        })?;
+        .ok_or_else(|| format!("domain not found in DigitalOcean account for {}", domain))?;
 
         let domain_obj = domains
             .iter()
@@ -616,7 +605,10 @@ struct GoDaddySolver {
 #[cfg(feature = "dns-challenge")]
 impl GoDaddySolver {
     fn new(api_key: String, api_secret: String) -> Self {
-        Self { api_key, api_secret }
+        Self {
+            api_key,
+            api_secret,
+        }
     }
 
     fn auth_header(&self) -> String {
@@ -641,7 +633,8 @@ impl Dns01Solver for GoDaddySolver {
         let list = domains.as_array().ok_or("godaddy: invalid response")?;
         let zone = best_zone_for_fqdn(
             fqdn,
-            list.iter().filter_map(|d| d.get("domain").and_then(|v| v.as_str())),
+            list.iter()
+                .filter_map(|d| d.get("domain").and_then(|v| v.as_str())),
         )
         .ok_or("godaddy: zone not found")?;
         let mut record_name = relative_record_name(fqdn, &zone);
@@ -701,7 +694,9 @@ impl Dns01Solver for LinodeSolver {
             .ok_or("linode: invalid response")?;
         let zone = best_zone_for_fqdn(
             fqdn,
-            domains.iter().filter_map(|d| d.get("domain").and_then(|v| v.as_str())),
+            domains
+                .iter()
+                .filter_map(|d| d.get("domain").and_then(|v| v.as_str())),
         )
         .ok_or("linode: zone not found")?;
         let zone_id = domains
@@ -711,7 +706,10 @@ impl Dns01Solver for LinodeSolver {
             .ok_or("linode: zone id missing")?;
         let record_name = relative_record_name(fqdn, &zone);
         let existing: serde_json::Value = client
-            .get(format!("https://api.linode.com/v4/domains/{}/records", zone_id))
+            .get(format!(
+                "https://api.linode.com/v4/domains/{}/records",
+                zone_id
+            ))
             .query(&[("type", "TXT"), ("name", record_name.as_str())])
             .bearer_auth(&self.api_token)
             .send()
@@ -741,7 +739,10 @@ impl Dns01Solver for LinodeSolver {
             "ttl_sec": 60
         });
         client
-            .post(format!("https://api.linode.com/v4/domains/{}/records", zone_id))
+            .post(format!(
+                "https://api.linode.com/v4/domains/{}/records",
+                zone_id
+            ))
             .bearer_auth(&self.api_token)
             .json(&body)
             .send()
@@ -783,7 +784,9 @@ impl Dns01Solver for HetznerSolver {
             .ok_or("hetzner: invalid response")?;
         let zone_name = best_zone_for_fqdn(
             fqdn,
-            zones.iter().filter_map(|z| z.get("name").and_then(|v| v.as_str())),
+            zones
+                .iter()
+                .filter_map(|z| z.get("name").and_then(|v| v.as_str())),
         )
         .ok_or("hetzner: zone not found")?;
         let zone_id = zones
@@ -897,7 +900,13 @@ struct NamecheapSolver {
 
 #[cfg(feature = "dns-challenge")]
 impl NamecheapSolver {
-    fn new(api_user: String, api_key: String, username: String, client_ip: String, domain: String) -> Self {
+    fn new(
+        api_user: String,
+        api_key: String,
+        username: String,
+        client_ip: String,
+        domain: String,
+    ) -> Self {
         Self {
             api_user,
             api_key,
@@ -918,7 +927,10 @@ impl NamecheapSolver {
         Ok((sld, tld))
     }
 
-    async fn get_hosts(&self, client: &reqwest::Client) -> Result<Vec<NamecheapHostRecord>, String> {
+    async fn get_hosts(
+        &self,
+        client: &reqwest::Client,
+    ) -> Result<Vec<NamecheapHostRecord>, String> {
         let (sld, tld) = self.sld_tld()?;
         let params = vec![
             ("ApiUser", self.api_user.as_str()),
@@ -996,7 +1008,10 @@ impl NamecheapSolver {
             ("ApiKey".to_string(), self.api_key.clone()),
             ("UserName".to_string(), self.username.clone()),
             ("ClientIp".to_string(), self.client_ip.clone()),
-            ("Command".to_string(), "namecheap.domains.dns.setHosts".to_string()),
+            (
+                "Command".to_string(),
+                "namecheap.domains.dns.setHosts".to_string(),
+            ),
             ("SLD".to_string(), sld),
             ("TLD".to_string(), tld),
         ];
@@ -1089,10 +1104,7 @@ impl OvhSolver {
         body: Option<serde_json::Value>,
     ) -> Result<reqwest::Response, String> {
         let timestamp = self.ovh_time(client).await?;
-        let body_str = body
-            .as_ref()
-            .map(|b| b.to_string())
-            .unwrap_or_default();
+        let body_str = body.as_ref().map(|b| b.to_string()).unwrap_or_default();
         let signature = self.signature(method.as_str(), url, &body_str, &timestamp);
         let mut req = client
             .request(method, url)
@@ -1123,14 +1135,9 @@ impl Dns01Solver for OvhSolver {
             .json::<serde_json::Value>()
             .await
             .map_err(|e| e.to_string())?;
-        let zones = zones_resp
-            .as_array()
-            .ok_or("ovh: invalid response")?;
-        let zone = best_zone_for_fqdn(
-            fqdn,
-            zones.iter().filter_map(|z| z.as_str()),
-        )
-        .ok_or("ovh: zone not found")?;
+        let zones = zones_resp.as_array().ok_or("ovh: invalid response")?;
+        let zone = best_zone_for_fqdn(fqdn, zones.iter().filter_map(|z| z.as_str()))
+            .ok_or("ovh: zone not found")?;
         let record_name = relative_record_name(fqdn, &zone);
         let list_url = format!(
             "https://api.ovh.com/1.0/domain/zone/{}/record?fieldType=TXT&subDomain={}",
@@ -1145,10 +1152,8 @@ impl Dns01Solver for OvhSolver {
         if let Some(ids) = existing.as_array() {
             for id in ids {
                 if let Some(id) = id.as_i64() {
-                    let del_url = format!(
-                        "https://api.ovh.com/1.0/domain/zone/{}/record/{}",
-                        zone, id
-                    );
+                    let del_url =
+                        format!("https://api.ovh.com/1.0/domain/zone/{}/record/{}", zone, id);
                     let _ = self
                         .request(&client, reqwest::Method::DELETE, &del_url, None)
                         .await;
@@ -1190,8 +1195,9 @@ impl GoogleCloudDnsSolver {
     }
 
     async fn access_token(&self) -> Result<String, String> {
-        let key: yup_oauth2::ServiceAccountKey = serde_json::from_str(&self.service_account_json)
-            .map_err(|e| format!("googleclouddns: invalid service_account_json: {}", e))?;
+        let key: yup_oauth2::ServiceAccountKey =
+            serde_json::from_str(&self.service_account_json)
+                .map_err(|e| format!("googleclouddns: invalid service_account_json: {}", e))?;
         let auth = yup_oauth2::ServiceAccountAuthenticator::builder(key)
             .build()
             .await
@@ -1429,7 +1435,9 @@ impl Dns01Solver for GandiSolver {
         let domains = list.as_array().ok_or("gandi: invalid response")?;
         let zone = best_zone_for_fqdn(
             fqdn,
-            domains.iter().filter_map(|d| d.get("fqdn").and_then(|v| v.as_str())),
+            domains
+                .iter()
+                .filter_map(|d| d.get("fqdn").and_then(|v| v.as_str())),
         )
         .ok_or("gandi: zone not found")?;
         let mut record_name = relative_record_name(fqdn, &zone);

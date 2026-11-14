@@ -46,10 +46,13 @@ pub fn run(
     proxy_log_enabled: Arc<std::sync::atomic::AtomicBool>,
     metrics: ProxyMetrics,
 ) -> Result<()> {
-    let https_enabled =
-        https_should_listen(server_config, &cert_store, acme_tls_pending, https_sni_always);
-    let sni_enabled =
-        cert_store.host_count() > 0 || acme_tls_pending || https_sni_always;
+    let https_enabled = https_should_listen(
+        server_config,
+        &cert_store,
+        acme_tls_pending,
+        https_sni_always,
+    );
+    let sni_enabled = cert_store.host_count() > 0 || acme_tls_pending || https_sni_always;
 
     info!(
         http = %server_config.http_listen,
@@ -243,15 +246,10 @@ fn build_tls_settings(
     tls_grade: crate::edge::TlsGrade,
 ) -> Result<TlsSettings> {
     let mut tls_settings = if cert_store.host_count() > 0 || acme_tls_pending || https_sni_always {
-        let callbacks: TlsAcceptCallbacks = Box::new(CertStoreSniCallback {
-            store: cert_store,
-        });
+        let callbacks: TlsAcceptCallbacks = Box::new(CertStoreSniCallback { store: cert_store });
         TlsSettings::with_callbacks(callbacks)?
     } else if let Some(paths) = cert_store.default_paths() {
-        TlsSettings::intermediate(
-            &paths.cert.to_string_lossy(),
-            &paths.key.to_string_lossy(),
-        )?
+        TlsSettings::intermediate(&paths.cert.to_string_lossy(), &paths.key.to_string_lossy())?
     } else {
         let cert = server_config.tls_cert_path()?;
         let key = server_config.tls_key_path()?;

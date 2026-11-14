@@ -96,7 +96,10 @@ pub struct NamedWafPolicy {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "crate::security::SecurityPolicy::is_default")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::security::SecurityPolicy::is_default"
+    )]
     pub security: crate::security::SecurityPolicy,
 }
 
@@ -139,7 +142,10 @@ pub struct Site {
     pub geoip: crate::geoip::GeoIpPolicy,
     /// WAF / bot / captcha policy. Disabled by default.
     /// When `waf_policy_id` is set, apply resolves from that policy (this field is a snapshot).
-    #[serde(default, skip_serializing_if = "crate::security::SecurityPolicy::is_default")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::security::SecurityPolicy::is_default"
+    )]
     pub security: crate::security::SecurityPolicy,
 }
 
@@ -187,10 +193,7 @@ pub enum TlsSource {
         dns_credentials: Option<HashMap<String, String>>,
     },
     /// Paths to cert and key files.
-    File {
-        cert: PathBuf,
-        key: PathBuf,
-    },
+    File { cert: PathBuf, key: PathBuf },
     /// TLS from Kubernetes Secret (Ingress/CRD spec.tls.secretName).
     Kubernetes,
 }
@@ -240,11 +243,10 @@ fn acme_sources_equivalent(a: &TlsSource, b: &TlsSource) -> bool {
 }
 
 fn tls_entries_should_merge(a: &TlsConfig, b: &TlsConfig) -> bool {
-    if !acme_sources_equivalent(&a.source, &b.source) {
-        return false;
-    }
     match (&a.source, &b.source) {
-        (TlsSource::Acme { .. }, TlsSource::Acme { .. }) => {
+        (TlsSource::Acme { .. }, TlsSource::Acme { .. })
+            if acme_sources_equivalent(&a.source, &b.source) =>
+        {
             if acme_wildcard_host(&a.hosts).is_some()
                 && acme_wildcard_host(&a.hosts) == acme_wildcard_host(&b.hosts)
             {
@@ -252,7 +254,12 @@ fn tls_entries_should_merge(a: &TlsConfig, b: &TlsConfig) -> bool {
             }
             !tls_hosts_set(&a.hosts).is_disjoint(&tls_hosts_set(&b.hosts))
         }
-        (TlsSource::File { .. }, TlsSource::File { .. }) => true,
+        (TlsSource::File { .. }, TlsSource::File { .. })
+            if acme_sources_equivalent(&a.source, &b.source) =>
+        {
+            true
+        }
+        // Mixed / Kubernetes / unequal file paths — never merge.
         _ => false,
     }
 }
@@ -277,18 +284,17 @@ pub fn is_invalid_acme_identifier(host: &str) -> bool {
 pub fn normalize_tls_config(tls: &mut Vec<TlsConfig>) {
     let mut merged: Vec<TlsConfig> = Vec::new();
     for entry in tls.drain(..) {
-        if let Some(idx) = merged.iter().position(|e| tls_entries_should_merge(e, &entry)) {
+        if let Some(idx) = merged
+            .iter()
+            .position(|e| tls_entries_should_merge(e, &entry))
+        {
             let existing = &mut merged[idx];
             for h in entry.hosts {
                 let h = h.trim().to_string();
                 if h.is_empty() {
                     continue;
                 }
-                if !existing
-                    .hosts
-                    .iter()
-                    .any(|x| x.eq_ignore_ascii_case(&h))
-                {
+                if !existing.hosts.iter().any(|x| x.eq_ignore_ascii_case(&h)) {
                     existing.hosts.push(h);
                 }
             }
@@ -745,7 +751,9 @@ backends:
     #[test]
     fn default_config_has_security_headers() {
         let cfg = Config::default();
-        assert!(cfg.security_headers.contains_key("Strict-Transport-Security"));
+        assert!(cfg
+            .security_headers
+            .contains_key("Strict-Transport-Security"));
         assert!(cfg.proxy_log);
     }
 
@@ -861,12 +869,10 @@ backends:
             security: Default::default(),
         };
         let value = serde_json::to_value(&site).unwrap();
-        assert!(
-            !value
-                .as_object()
-                .unwrap()
-                .contains_key("http3_alt_svc_enabled")
-        );
+        assert!(!value
+            .as_object()
+            .unwrap()
+            .contains_key("http3_alt_svc_enabled"));
     }
 
     #[test]
@@ -1163,5 +1169,176 @@ mod tls_normalize_tests {
         ];
         normalize_tls_config(&mut tls);
         assert_eq!(tls.len(), 2);
+    }
+
+    #[test]
+    fn tls_entries_should_merge_rejects_kubernetes_and_mixed_sources() {
+        let a = TlsConfig {
+            hosts: vec!["a.example.com".into()],
+            source: TlsSource::Kubernetes,
+            expires_at: None,
+        };
+        let b = TlsConfig {
+            hosts: vec!["a.example.com".into()],
+            source: TlsSource::Kubernetes,
+            expires_at: None,
+        };
+        assert!(!tls_entries_should_merge(&a, &b));
+
+        let file = TlsConfig {
+            hosts: vec!["a.example.com".into()],
+            source: TlsSource::File {
+                cert: "/a.pem".into(),
+                key: "/a.key".into(),
+            },
+            expires_at: None,
+        };
+        assert!(!tls_entries_should_merge(&file, &a));
+    }
+
+    #[test]
+    fn path_rewrite_omits_zero_limits_when_serializing() {
+        let value = serde_json::to_value(PathRewrite::default()).unwrap();
+        let obj = value.as_object().unwrap();
+        assert!(!obj.contains_key("rate_limit_rps"));
+        assert!(!obj.contains_key("x4xx_limit_rps"));
+    }
+
+    #[test]
+    fn invalid_acme_identifier_rejects_empty_and_single_label() {
+        assert!(is_invalid_acme_identifier("   "));
+        assert!(is_invalid_acme_identifier("localhost"));
+    }
+
+    #[test]
+    fn normalize_tls_does_not_merge_different_acme_providers() {
+        let mut dns_a = acme_source();
+        if let TlsSource::Acme {
+            challenge,
+            dns_provider,
+            ..
+        } = &mut dns_a
+        {
+            *challenge = "dns01".into();
+            *dns_provider = Some("cloudflare-a".into());
+        }
+        let mut dns_b = acme_source();
+        if let TlsSource::Acme {
+            challenge,
+            dns_provider,
+            ..
+        } = &mut dns_b
+        {
+            *challenge = "dns01".into();
+            *dns_provider = Some("cloudflare-b".into());
+        }
+        let mut tls = vec![
+            TlsConfig {
+                hosts: vec!["a.example.com".into()],
+                source: dns_a,
+                expires_at: None,
+            },
+            TlsConfig {
+                hosts: vec!["a.example.com".into()],
+                source: dns_b,
+                expires_at: None,
+            },
+        ];
+
+        normalize_tls_config(&mut tls);
+        assert_eq!(tls.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod policy_resolution_tests {
+    use super::*;
+
+    fn site_with_embedded_policies() -> Site {
+        Site {
+            host: "app.example.com".into(),
+            routes: vec![],
+            backend: "api".into(),
+            security_headers: None,
+            ingress_namespace: None,
+            ingress_name: None,
+            k8s_resource_kind: None,
+            http3_alt_svc_enabled: true,
+            forward_client_ip: true,
+            access_list_id: None,
+            waf_policy_id: None,
+            geoip: crate::geoip::GeoIpPolicy {
+                enabled: true,
+                allow_countries: vec![" th ".into()],
+                ..Default::default()
+            },
+            security: crate::security::SecurityPolicy {
+                captcha: crate::security::CaptchaPolicy {
+                    enabled: true,
+                    cookie_ttl_secs: 0,
+                },
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn resolve_site_geoip_uses_named_access_list_when_id_matches() {
+        let mut cfg = Config::default();
+        cfg.access_lists.push(AccessList {
+            id: "acl-1".into(),
+            name: "Thailand".into(),
+            description: None,
+            geoip: crate::geoip::GeoIpPolicy {
+                enabled: true,
+                allow_countries: vec![" us ".into(), "US".into()],
+                ..Default::default()
+            },
+        });
+        let mut site = site_with_embedded_policies();
+        site.access_list_id = Some(" acl-1 ".into());
+
+        let resolved = cfg.resolve_site_geoip(&site);
+        assert_eq!(resolved.allow_countries, vec!["US"]);
+    }
+
+    #[test]
+    fn resolve_site_security_uses_named_waf_policy_when_id_matches() {
+        let mut cfg = Config::default();
+        cfg.waf_policies.push(NamedWafPolicy {
+            id: "waf-1".into(),
+            name: "Bot".into(),
+            description: None,
+            security: crate::security::SecurityPolicy {
+                bot: crate::security::BotPolicy {
+                    enabled: true,
+                    challenge_score: 0,
+                    block_score: 0,
+                    rate_limit_per_min: 0,
+                },
+                ..Default::default()
+            },
+        });
+        let mut site = site_with_embedded_policies();
+        site.waf_policy_id = Some(" waf-1 ".into());
+
+        let resolved = cfg.resolve_site_security(&site);
+        assert!(resolved.bot.enabled);
+        assert_eq!(resolved.bot.challenge_score, 40);
+        assert_eq!(resolved.bot.rate_limit_per_min, 120);
+    }
+
+    #[test]
+    fn resolve_site_policies_fall_back_to_embedded_when_id_missing() {
+        let cfg = Config::default();
+        let mut site = site_with_embedded_policies();
+        site.access_list_id = Some("missing".into());
+        site.waf_policy_id = Some("missing".into());
+
+        assert_eq!(cfg.resolve_site_geoip(&site).allow_countries, vec!["TH"]);
+        assert_eq!(
+            cfg.resolve_site_security(&site).captcha.cookie_ttl_secs,
+            86_400
+        );
     }
 }

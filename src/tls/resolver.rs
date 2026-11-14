@@ -42,9 +42,7 @@ fn stored_to_certified_key(
     cert: &StoredCert,
     provider: &rustls::crypto::CryptoProvider,
 ) -> Result<CertifiedKey, String> {
-    let (cert_pem, key_pem) = cert
-        .read_pem()
-        .map_err(|e| format!("read TLS PEM: {e}"))?;
+    let (cert_pem, key_pem) = cert.read_pem().map_err(|e| format!("read TLS PEM: {e}"))?;
     let cert_chain: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_pem.as_slice())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("parse cert PEM: {e}"))?

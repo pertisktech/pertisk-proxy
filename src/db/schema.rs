@@ -76,9 +76,10 @@ pub fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
 }
 
 fn seed_smtp_settings(conn: &Connection) -> Result<(), rusqlite::Error> {
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM smtp_settings WHERE id = 1", [], |r| {
-        r.get(0)
-    })?;
+    let count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM smtp_settings WHERE id = 1", [], |r| {
+            r.get(0)
+        })?;
     if count > 0 {
         return Ok(());
     }
@@ -144,7 +145,10 @@ fn add_column_if_missing(
         |r| r.get(0),
     )?;
     if !has_col {
-        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
+            [],
+        )?;
     }
     Ok(())
 }

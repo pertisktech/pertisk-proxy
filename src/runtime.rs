@@ -124,7 +124,10 @@ pub fn runtime_config_from_env(env: &RuntimeEnv) -> anyhow::Result<RuntimeConfig
     })
 }
 
-pub fn build_runtime(cfg: &RuntimeConfig, thread_name: &str) -> anyhow::Result<tokio::runtime::Runtime> {
+pub fn build_runtime(
+    cfg: &RuntimeConfig,
+    thread_name: &str,
+) -> anyhow::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(cfg.worker_threads)
@@ -252,15 +255,11 @@ pub struct DownstreamTcpKeepalive {
 }
 
 fn env_u64(name: &str) -> Option<u64> {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
+    std::env::var(name).ok().and_then(|v| v.trim().parse().ok())
 }
 
 fn env_usize(name: &str) -> Option<usize> {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
+    std::env::var(name).ok().and_then(|v| v.trim().parse().ok())
 }
 
 pub fn downstream_tcp_keepalive_config() -> DownstreamTcpKeepalive {
@@ -304,8 +303,8 @@ pub fn downstream_tcp_keepalive() -> Option<pingora_core::protocols::TcpKeepaliv
 
 /// Build Pingora `ServerConf` tuned from runtime mode.
 pub fn pingora_server_conf(cfg: &RuntimeConfig) -> pingora_core::server::configuration::ServerConf {
-    let mut conf = pingora_core::server::configuration::ServerConf::new()
-        .expect("default pingora ServerConf");
+    let mut conf =
+        pingora_core::server::configuration::ServerConf::new().expect("default pingora ServerConf");
 
     conf.threads = pingora_service_threads(cfg);
     conf.listener_tasks_per_fd = pingora_listener_tasks_per_fd(cfg);

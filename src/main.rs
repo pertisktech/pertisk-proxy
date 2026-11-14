@@ -175,7 +175,11 @@ fn main() -> Result<()> {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             tracing::info!("Auto-SSL startup pass #1");
             pertisk_proxy::api::acme::spawn_auto_ssl_for_config(
-                &cfg, db_c.clone(), acme_c.clone(), store_c.clone(), dir.clone(),
+                &cfg,
+                db_c.clone(),
+                acme_c.clone(),
+                store_c.clone(),
+                dir.clone(),
             )
             .await;
         });
@@ -188,7 +192,11 @@ fn main() -> Result<()> {
             tokio::time::sleep(std::time::Duration::from_secs(120)).await;
             tracing::info!("Auto-SSL startup pass #2 (retry)");
             pertisk_proxy::api::acme::spawn_auto_ssl_for_config(
-                &cfg_retry, db_retry, acme_retry, store_retry, dir_retry,
+                &cfg_retry,
+                db_retry,
+                acme_retry,
+                store_retry,
+                dir_retry,
             )
             .await;
         });

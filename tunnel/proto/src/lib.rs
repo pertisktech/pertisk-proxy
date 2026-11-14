@@ -44,12 +44,8 @@ pub enum ClientControl {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerControl {
-    HelloOk {
-        tunnels: Vec<TunnelGranted>,
-    },
-    HelloErr {
-        message: String,
-    },
+    HelloOk { tunnels: Vec<TunnelGranted> },
+    HelloErr { message: String },
     Pong,
 }
 
@@ -90,7 +86,10 @@ pub struct TunnelStatusEntry {
     pub streams: u64,
 }
 
-pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, value: &impl Serialize) -> Result<(), ProtoError> {
+pub async fn write_frame<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    value: &impl Serialize,
+) -> Result<(), ProtoError> {
     let body = serde_json::to_vec(value)?;
     if body.len() > MAX_FRAME {
         return Err(ProtoError::FrameTooLarge(body.len()));

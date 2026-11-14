@@ -6,7 +6,7 @@ description = "Reverse proxy and Kubernetes Ingress controller with HTTP/1, HTTP
 license = "Apache-2.0"
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin)', 'cfg(tarpaulin_include)'] }
 
 [features]
 default = ["admin", "acme", "dns-challenge", "h3-quinn", "prometheus"]

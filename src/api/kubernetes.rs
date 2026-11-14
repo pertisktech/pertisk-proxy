@@ -2,6 +2,11 @@
 
 use super::AdminState;
 use crate::db::cert_validity_from_pem;
+use crate::ingress::gateway_api::{
+    AllowedRoutes, Gateway, GatewayListener, GatewayListenerTls, GatewaySpec, HTTPBackendRef,
+    HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, HTTPRouteSpec, ParentReference,
+    RouteNamespaces, SecretObjectReference,
+};
 use axum::{
     extract::{Path as AxumPath, Query, State},
     response::{IntoResponse, Response},
@@ -11,8 +16,8 @@ use http::StatusCode;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{ConfigMap, Event, Namespace, Node, Pod, Secret, Service};
 use k8s_openapi::api::networking::v1::{
-    HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend, IngressRule, IngressSpec,
-    IngressTLS, IngressServiceBackend, ServiceBackendPort,
+    HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend, IngressRule,
+    IngressServiceBackend, IngressSpec, IngressTLS, ServiceBackendPort,
 };
 use k8s_openapi::jiff::Timestamp;
 use kube::api::{Api, DeleteParams, ListParams, PostParams};
@@ -20,11 +25,6 @@ use kube::core::{ApiResource, DynamicObject, GroupVersionKind};
 use kube::ResourceExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use crate::ingress::gateway_api::{
-    AllowedRoutes, Gateway, GatewayListener, GatewayListenerTls, GatewaySpec, HTTPBackendRef,
-    HTTPPathMatch, RouteNamespaces,
-    HTTPRoute, HTTPRouteMatch, HTTPRouteRule, HTTPRouteSpec, ParentReference, SecretObjectReference,
-};
 
 fn format_k8s_time(ts: &Timestamp) -> String {
     ts.to_string()
@@ -145,32 +145,32 @@ pub struct K8sEventRow {
 #[derive(Serialize)]
 pub struct K8sClusterSummary {
     // Node capacity (total)
-    pub cpu_capacity: i64,      // in millicores
-    pub memory_capacity: i64,   // in bytes
-    
+    pub cpu_capacity: i64,    // in millicores
+    pub memory_capacity: i64, // in bytes
+
     // Node allocatable (usable)
-    pub cpu_allocatable: i64,   // in millicores
+    pub cpu_allocatable: i64,    // in millicores
     pub memory_allocatable: i64, // in bytes
-    
+
     // Pod requests (sum of all pod requests)
-    pub cpu_requests: i64,      // in millicores
-    pub memory_requests: i64,   // in bytes
-    
+    pub cpu_requests: i64,    // in millicores
+    pub memory_requests: i64, // in bytes
+
     // Pod limits (sum of all pod limits)
-    pub cpu_limits: i64,        // in millicores
-    pub memory_limits: i64,     // in bytes
-    
+    pub cpu_limits: i64,    // in millicores
+    pub memory_limits: i64, // in bytes
+
     // Counts
     pub node_count: i32,
     pub pod_count: i32,
     pub pod_capacity: i64,
     pub pod_allocatable: i64,
-    
+
     // Storage (from nodes)
-    pub storage_capacity: i64,     // in bytes
-    pub storage_allocatable: i64,  // in bytes
-    pub storage_requests: i64,     // in bytes
-    
+    pub storage_capacity: i64,    // in bytes
+    pub storage_allocatable: i64, // in bytes
+    pub storage_requests: i64,    // in bytes
+
     // Calculated percentages (0-100)
     pub cpu_requests_percent: f64,
     pub memory_requests_percent: f64,
@@ -328,7 +328,10 @@ pub struct NamespaceQuery {
     pub namespace: Option<String>,
 }
 
-pub async fn kubernetes_pods(State(state): State<AdminState>, Query(q): Query<NamespaceQuery>) -> Response {
+pub async fn kubernetes_pods(
+    State(state): State<AdminState>,
+    Query(q): Query<NamespaceQuery>,
+) -> Response {
     match list_pods_rows(&state, q.namespace.as_deref()).await {
         Ok(None) => not_available(),
         Ok(Some(rows)) => Json(rows).into_response(),
@@ -360,25 +363,27 @@ pub(crate) async fn list_pods_rows(
         .await
         .map_err(|e| e.to_string())?;
     let nodes_api: Api<Node> = Api::all(client.clone());
-    let node_status_map: std::collections::HashMap<String, String> = match nodes_api.list(&ListParams::default()).await {
-        Ok(nodes) => nodes
-            .items
-            .into_iter()
-            .map(|n| {
-                let status = n
-                    .status
-                    .as_ref()
-                    .and_then(|s| s.conditions.as_ref())
-                    .and_then(|conds| conds.iter().find(|x| x.type_ == "Ready"))
-                    .map(|c| c.status.clone())
-                    .unwrap_or_else(|| "Unknown".to_string());
-                (n.name_any(), status)
-            })
-            .collect(),
-        Err(_) => std::collections::HashMap::new(),
-    };
+    let node_status_map: std::collections::HashMap<String, String> =
+        match nodes_api.list(&ListParams::default()).await {
+            Ok(nodes) => nodes
+                .items
+                .into_iter()
+                .map(|n| {
+                    let status = n
+                        .status
+                        .as_ref()
+                        .and_then(|s| s.conditions.as_ref())
+                        .and_then(|conds| conds.iter().find(|x| x.type_ == "Ready"))
+                        .map(|c| c.status.clone())
+                        .unwrap_or_else(|| "Unknown".to_string());
+                    (n.name_any(), status)
+                })
+                .collect(),
+            Err(_) => std::collections::HashMap::new(),
+        };
 
-    let mut pod_usage_map: std::collections::HashMap<(String, String), (i64, i64)> = std::collections::HashMap::new();
+    let mut pod_usage_map: std::collections::HashMap<(String, String), (i64, i64)> =
+        std::collections::HashMap::new();
     let pod_metrics_gvk = GroupVersionKind::gvk("metrics.k8s.io", "v1beta1", "PodMetrics");
     let mut pod_metrics_ar = ApiResource::from_gvk(&pod_metrics_gvk);
     pod_metrics_ar.plural = "pods".to_string();
@@ -390,11 +395,7 @@ pub(crate) async fn list_pods_rows(
                 .namespace
                 .clone()
                 .unwrap_or_else(|| "default".to_string());
-            let name = metric
-                .metadata
-                .name
-                .clone()
-                .unwrap_or_default();
+            let name = metric.metadata.name.clone().unwrap_or_default();
             if name.is_empty() {
                 continue;
             }
@@ -435,7 +436,11 @@ pub(crate) async fn list_pods_rows(
         .map(|p| {
             let pod_name = p.name_any();
             let pod_namespace = p.namespace().unwrap_or_else(|| "default".to_string());
-            let phase = p.status.as_ref().and_then(|s| s.phase.clone()).unwrap_or_else(|| "Unknown".to_string());
+            let phase = p
+                .status
+                .as_ref()
+                .and_then(|s| s.phase.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
             let node_name = p.spec.as_ref().and_then(|sp| sp.node_name.clone());
             let node_status = node_name
                 .as_ref()
@@ -511,7 +516,10 @@ pub(crate) async fn list_pods_rows(
     Ok(Some(rows))
 }
 
-pub async fn kubernetes_deployments(State(state): State<AdminState>, Query(q): Query<NamespaceQuery>) -> Response {
+pub async fn kubernetes_deployments(
+    State(state): State<AdminState>,
+    Query(q): Query<NamespaceQuery>,
+) -> Response {
     if !state.viewer_mode {
         return not_available();
     }
@@ -561,7 +569,10 @@ pub async fn kubernetes_deployments(State(state): State<AdminState>, Query(q): Q
     Json(rows).into_response()
 }
 
-pub async fn kubernetes_services(State(state): State<AdminState>, Query(q): Query<NamespaceQuery>) -> Response {
+pub async fn kubernetes_services(
+    State(state): State<AdminState>,
+    Query(q): Query<NamespaceQuery>,
+) -> Response {
     if !state.viewer_mode {
         return not_available();
     }
@@ -588,7 +599,9 @@ pub async fn kubernetes_services(State(state): State<AdminState>, Query(q): Quer
         .into_iter()
         .map(|svc| {
             let spec = svc.spec.as_ref();
-            let typ = spec.and_then(|s| s.type_.clone()).unwrap_or_else(|| "ClusterIP".to_string());
+            let typ = spec
+                .and_then(|s| s.type_.clone())
+                .unwrap_or_else(|| "ClusterIP".to_string());
             let cluster_ip = spec.and_then(|s| s.cluster_ip.clone());
             let external_ip = svc
                 .status
@@ -604,16 +617,18 @@ pub async fn kubernetes_services(State(state): State<AdminState>, Query(q): Quer
                                 .filter(|s| !s.is_empty())
                                 .cloned()
                                 .or_else(|| {
-                                    entry
-                                        .hostname
-                                        .as_ref()
-                                        .filter(|s| !s.is_empty())
-                                        .cloned()
+                                    entry.hostname.as_ref().filter(|s| !s.is_empty()).cloned()
                                 })
                         })
                         .collect::<Vec<String>>()
                 })
-                .and_then(|items| if items.is_empty() { None } else { Some(items.join(", ")) });
+                .and_then(|items| {
+                    if items.is_empty() {
+                        None
+                    } else {
+                        Some(items.join(", "))
+                    }
+                });
             let created_at = svc
                 .metadata
                 .creation_timestamp
@@ -974,7 +989,10 @@ fn gateway_managed_by_app(gw: &Gateway, want_class: Option<&str>) -> bool {
     }
 }
 
-fn managed_gateway_keys(gateways: &[Gateway], want_class: Option<&str>) -> HashSet<(String, String)> {
+fn managed_gateway_keys(
+    gateways: &[Gateway],
+    want_class: Option<&str>,
+) -> HashSet<(String, String)> {
     gateways
         .iter()
         .filter(|gw| gateway_managed_by_app(gw, want_class))
@@ -987,10 +1005,7 @@ fn managed_gateway_keys(gateways: &[Gateway], want_class: Option<&str>) -> HashS
         .collect()
 }
 
-fn httproute_attached_to_managed(
-    route: &HTTPRoute,
-    managed: &HashSet<(String, String)>,
-) -> bool {
+fn httproute_attached_to_managed(route: &HTTPRoute, managed: &HashSet<(String, String)>) -> bool {
     let route_ns = route.namespace().unwrap_or_else(|| "default".to_string());
     let route_name = route.name_any();
     if route.spec.parent_refs.is_empty() {
@@ -998,10 +1013,7 @@ fn httproute_attached_to_managed(
     }
     route.spec.parent_refs.iter().any(|parent| {
         let gw_name = &parent.name;
-        let gw_ns = parent
-            .namespace
-            .as_deref()
-            .unwrap_or(route_ns.as_str());
+        let gw_ns = parent.namespace.as_deref().unwrap_or(route_ns.as_str());
         managed.contains(&(gw_ns.to_string(), gw_name.clone()))
     })
 }
@@ -1244,8 +1256,10 @@ fn ingress_paths_from_body(body: &CreateIngressBody) -> Result<Vec<HTTPIngressPa
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty());
-            let service_port = backend_port(route.service_port, service_port_name)
-                .ok_or_else(|| "each route requires service_port or service_port_name".to_string())?;
+            let service_port =
+                backend_port(route.service_port, service_port_name).ok_or_else(|| {
+                    "each route requires service_port or service_port_name".to_string()
+                })?;
             let path = route.path.as_deref().unwrap_or("/").trim();
             let path_type = route
                 .path_type
@@ -1254,7 +1268,11 @@ fn ingress_paths_from_body(body: &CreateIngressBody) -> Result<Vec<HTTPIngressPa
                 .filter(|value| !value.is_empty())
                 .unwrap_or("Prefix");
             paths.push(HTTPIngressPath {
-                path: Some(if path.is_empty() { "/".to_string() } else { path.to_string() }),
+                path: Some(if path.is_empty() {
+                    "/".to_string()
+                } else {
+                    path.to_string()
+                }),
                 path_type: path_type.to_string(),
                 backend: IngressBackend {
                     service: Some(IngressServiceBackend {
@@ -1287,7 +1305,11 @@ fn ingress_paths_from_body(body: &CreateIngressBody) -> Result<Vec<HTTPIngressPa
         .filter(|value| !value.is_empty())
         .unwrap_or("Prefix");
     Ok(vec![HTTPIngressPath {
-        path: Some(if path.is_empty() { "/".to_string() } else { path.to_string() }),
+        path: Some(if path.is_empty() {
+            "/".to_string()
+        } else {
+            path.to_string()
+        }),
         path_type: path_type.to_string(),
         backend: IngressBackend {
             service: Some(IngressServiceBackend {
@@ -1355,9 +1377,7 @@ pub async fn kubernetes_ingresses_create(
     };
     let rule = IngressRule {
         host: Some(host.to_string()),
-        http: Some(HTTPIngressRuleValue {
-            paths,
-        }),
+        http: Some(HTTPIngressRuleValue { paths }),
     };
     let mut spec = IngressSpec {
         default_backend: None,
@@ -1366,8 +1386,14 @@ pub async fn kubernetes_ingresses_create(
         tls: None,
     };
     if let (Some(ns), Some(name)) = (
-        body.tls_secret_namespace.as_deref().map(str::trim).filter(|s| !s.is_empty()),
-        body.tls_secret_name.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        body.tls_secret_namespace
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        body.tls_secret_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
     ) {
         if ns != ingress_ns {
             return (
@@ -1441,11 +1467,7 @@ pub async fn kubernetes_ingress_get(
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             };
-            return (
-                code,
-                Json(serde_json::json!({ "error": err_str })),
-            )
-                .into_response();
+            return (code, Json(serde_json::json!({ "error": err_str }))).into_response();
         }
     };
     let spec = match ingress.spec.as_ref() {
@@ -1469,14 +1491,15 @@ pub async fn kubernetes_ingress_get(
                     http.paths
                         .iter()
                         .map(|path| {
-                            let (service_name, service_port, service_port_name) = match path.backend.service.as_ref() {
-                                Some(service) => (
-                                    service.name.clone(),
-                                    service.port.as_ref().and_then(|port| port.number),
-                                    service.port.as_ref().and_then(|port| port.name.clone()),
-                                ),
-                                None => (String::new(), None, None),
-                            };
+                            let (service_name, service_port, service_port_name) =
+                                match path.backend.service.as_ref() {
+                                    Some(service) => (
+                                        service.name.clone(),
+                                        service.port.as_ref().and_then(|port| port.number),
+                                        service.port.as_ref().and_then(|port| port.name.clone()),
+                                    ),
+                                    None => (String::new(), None, None),
+                                };
                             IngressFormRouteRow {
                                 path: path.path.as_deref().unwrap_or("/").to_string(),
                                 path_type: path.path_type.clone(),
@@ -1593,9 +1616,7 @@ pub async fn kubernetes_ingress_update(
     };
     let rule = IngressRule {
         host: Some(host.to_string()),
-        http: Some(HTTPIngressRuleValue {
-            paths,
-        }),
+        http: Some(HTTPIngressRuleValue { paths }),
     };
     let mut spec = IngressSpec {
         default_backend: None,
@@ -1604,8 +1625,14 @@ pub async fn kubernetes_ingress_update(
         tls: None,
     };
     if let (Some(ns), Some(tls_name)) = (
-        body.tls_secret_namespace.as_deref().map(str::trim).filter(|s| !s.is_empty()),
-        body.tls_secret_name.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        body.tls_secret_namespace
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        body.tls_secret_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
     ) {
         if ns != ingress_ns {
             return (
@@ -1632,11 +1659,7 @@ pub async fn kubernetes_ingress_update(
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             };
-            return (
-                code,
-                Json(serde_json::json!({ "error": err_str })),
-            )
-                .into_response();
+            return (code, Json(serde_json::json!({ "error": err_str }))).into_response();
         }
     };
     current.spec = Some(spec);
@@ -1710,7 +1733,10 @@ pub async fn kubernetes_ingress_delete(
     }
 }
 
-pub async fn kubernetes_ingresses(State(state): State<AdminState>, Query(q): Query<NamespaceQuery>) -> Response {
+pub async fn kubernetes_ingresses(
+    State(state): State<AdminState>,
+    Query(q): Query<NamespaceQuery>,
+) -> Response {
     if !state.viewer_mode {
         return not_available();
     }
@@ -1843,7 +1869,12 @@ pub async fn kubernetes_events(State(state): State<AdminState>) -> Response {
                 .as_ref()
                 .map(|t| format_k8s_time(&t.0))
                 .or_else(|| e.first_timestamp.as_ref().map(|t| format_k8s_time(&t.0)))
-                .or_else(|| e.metadata.creation_timestamp.as_ref().map(|t| format_k8s_time(&t.0)));
+                .or_else(|| {
+                    e.metadata
+                        .creation_timestamp
+                        .as_ref()
+                        .map(|t| format_k8s_time(&t.0))
+                });
 
             K8sEventRow {
                 namespace: e.namespace().unwrap_or_else(|| "default".to_string()),
@@ -1913,7 +1944,7 @@ pub async fn kubernetes_cluster_summary(State(state): State<AdminState>) -> Resp
                     }
                 }
             }
-            
+
             // Allocatable
             if let Some(allocatable) = &status.allocatable {
                 if let Some(cpu) = allocatable.get("cpu") {
@@ -1956,11 +1987,13 @@ pub async fn kubernetes_cluster_summary(State(state): State<AdminState>) -> Resp
 
     // Aggregate pod requests and limits (skip pods not Running or Pending)
     for pod in &pods.items {
-        let phase = pod.status.as_ref()
+        let phase = pod
+            .status
+            .as_ref()
             .and_then(|s| s.phase.as_ref())
             .map(|p| p.as_str())
             .unwrap_or("Unknown");
-        
+
         if phase != "Running" && phase != "Pending" {
             continue;
         }
@@ -2005,17 +2038,22 @@ pub async fn kubernetes_cluster_summary(State(state): State<AdminState>) -> Resp
 
     // Calculate percentages based on allocatable resources
     if metrics.cpu_allocatable > 0 {
-        metrics.cpu_requests_percent = (metrics.cpu_requests as f64 / metrics.cpu_allocatable as f64) * 100.0;
-        metrics.cpu_limits_percent = (metrics.cpu_limits as f64 / metrics.cpu_allocatable as f64) * 100.0;
+        metrics.cpu_requests_percent =
+            (metrics.cpu_requests as f64 / metrics.cpu_allocatable as f64) * 100.0;
+        metrics.cpu_limits_percent =
+            (metrics.cpu_limits as f64 / metrics.cpu_allocatable as f64) * 100.0;
     }
-    
+
     if metrics.memory_allocatable > 0 {
-        metrics.memory_requests_percent = (metrics.memory_requests as f64 / metrics.memory_allocatable as f64) * 100.0;
-        metrics.memory_limits_percent = (metrics.memory_limits as f64 / metrics.memory_allocatable as f64) * 100.0;
+        metrics.memory_requests_percent =
+            (metrics.memory_requests as f64 / metrics.memory_allocatable as f64) * 100.0;
+        metrics.memory_limits_percent =
+            (metrics.memory_limits as f64 / metrics.memory_allocatable as f64) * 100.0;
     }
-    
+
     if metrics.storage_allocatable > 0 {
-        metrics.storage_requests_percent = (metrics.storage_requests as f64 / metrics.storage_allocatable as f64) * 100.0;
+        metrics.storage_requests_percent =
+            (metrics.storage_requests as f64 / metrics.storage_allocatable as f64) * 100.0;
     }
 
     Json(metrics).into_response()
@@ -2036,21 +2074,26 @@ fn httproute_rules_from_body(
     body: &CreateIngressBody,
     service_namespace: &str,
 ) -> Result<Vec<HTTPRouteRule>, String> {
-    let build_rule = |path: &str, path_type: &str, service_name: &str, service_port: i32| HTTPRouteRule {
-        matches: vec![HTTPRouteMatch {
-            path: Some(HTTPPathMatch {
-                match_type: Some(gateway_path_match_type(path_type).to_string()),
-                value: Some(if path.is_empty() { "/".to_string() } else { path.to_string() }),
-            }),
-        }],
-        backend_refs: vec![HTTPBackendRef {
-            group: None,
-            kind: Some("Service".to_string()),
-            name: service_name.to_string(),
-            namespace: Some(service_namespace.to_string()),
-            port: Some(service_port),
-        }],
-    };
+    let build_rule =
+        |path: &str, path_type: &str, service_name: &str, service_port: i32| HTTPRouteRule {
+            matches: vec![HTTPRouteMatch {
+                path: Some(HTTPPathMatch {
+                    match_type: Some(gateway_path_match_type(path_type).to_string()),
+                    value: Some(if path.is_empty() {
+                        "/".to_string()
+                    } else {
+                        path.to_string()
+                    }),
+                }),
+            }],
+            backend_refs: vec![HTTPBackendRef {
+                group: None,
+                kind: Some("Service".to_string()),
+                name: service_name.to_string(),
+                namespace: Some(service_namespace.to_string()),
+                port: Some(service_port),
+            }],
+        };
 
     if let Some(routes) = body.routes.as_ref().filter(|routes| !routes.is_empty()) {
         let mut rules = Vec::with_capacity(routes.len());
@@ -2059,9 +2102,9 @@ fn httproute_rules_from_body(
             if service_name.is_empty() {
                 return Err("each route requires service_name".to_string());
             }
-            let service_port = route
-                .service_port
-                .ok_or_else(|| "each route requires service_port or service_port_name".to_string())?;
+            let service_port = route.service_port.ok_or_else(|| {
+                "each route requires service_port or service_port_name".to_string()
+            })?;
             let path = route.path.as_deref().unwrap_or("/").trim();
             let path_type = route
                 .path_type
@@ -2088,7 +2131,12 @@ fn httproute_rules_from_body(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("Prefix");
-    Ok(vec![build_rule(path, path_type, service_name, service_port)])
+    Ok(vec![build_rule(
+        path,
+        path_type,
+        service_name,
+        service_port,
+    )])
 }
 
 fn standard_allowed_routes_same_namespace() -> AllowedRoutes {
@@ -2122,7 +2170,11 @@ fn build_https_listener(host: &str, tls_secret_name: Option<&str>) -> GatewayLis
     }
 }
 
-fn merge_https_listener(old: &GatewayListener, host: &str, tls_secret_name: Option<&str>) -> GatewayListener {
+fn merge_https_listener(
+    old: &GatewayListener,
+    host: &str,
+    tls_secret_name: Option<&str>,
+) -> GatewayListener {
     let tls = match tls_secret_name {
         Some(secret_name) => {
             let mode = old
@@ -2177,9 +2229,10 @@ fn apply_gateway_form_to_spec(
     };
     let class = gateway_class.or_else(|| existing.gateway_class_name.clone());
     let mut listeners = existing.listeners.clone();
-    if let Some(idx) = listeners.iter().position(|l| {
-        l.name == "https" || l.protocol.eq_ignore_ascii_case("https")
-    }) {
+    if let Some(idx) = listeners
+        .iter()
+        .position(|l| l.name == "https" || l.protocol.eq_ignore_ascii_case("https"))
+    {
         listeners[idx] = merge_https_listener(&listeners[idx], host, tls_secret_name);
     } else {
         listeners.push(build_https_listener(host, tls_secret_name));
@@ -2219,7 +2272,9 @@ fn ingress_form_routes_from_httproute(route: &HTTPRoute) -> Vec<IngressFormRoute
             service_port_name: None,
         }];
     }
-    route.spec.rules
+    route
+        .spec
+        .rules
         .iter()
         .map(|rule| {
             let path_match = rule.matches.first().and_then(|m| m.path.as_ref());
@@ -2336,12 +2391,7 @@ pub async fn kubernetes_gateway_sites_create(
             ),
             ..Default::default()
         },
-        spec: build_httproute_spec(
-            host,
-            &gateway_name,
-            &ns,
-            rules,
-        ),
+        spec: build_httproute_spec(host, &gateway_name, &ns, rules),
     };
     match route_api.create(&PostParams::default(), &httproute).await {
         Ok(_) => (
@@ -2386,11 +2436,7 @@ pub async fn kubernetes_gateway_site_get(
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             };
-            return (
-                code,
-                Json(serde_json::json!({ "error": err_str })),
-            )
-                .into_response();
+            return (code, Json(serde_json::json!({ "error": err_str }))).into_response();
         }
     };
     if let Err(resp) = ensure_httproute_managed(&state, client, &route).await {
@@ -2529,13 +2575,7 @@ pub async fn kubernetes_gateway_site_update(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from)
-        .or_else(|| {
-            httproute
-                .spec
-                .parent_refs
-                .first()
-                .map(|p| p.name.clone())
-        })
+        .or_else(|| httproute.spec.parent_refs.first().map(|p| p.name.clone()))
         .unwrap_or_default();
     if gateway_name.is_empty() {
         return (
@@ -2582,7 +2622,10 @@ pub async fn kubernetes_gateway_site_update(
         body.access_list_id.as_deref(),
         body.waf_policy_id.as_deref(),
     );
-    match route_api.replace(&name, &PostParams::default(), &httproute).await {
+    match route_api
+        .replace(&name, &PostParams::default(), &httproute)
+        .await
+    {
         Ok(_) => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -2800,8 +2843,14 @@ pub async fn kubernetes_gateways_create(
         .or_else(|| state.gateway_class.clone())
         .or_else(|| state.ingress_class.clone());
     let tls_secret_name = match (
-        body.tls_secret_namespace.as_deref().map(str::trim).filter(|s| !s.is_empty()),
-        body.tls_secret_name.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        body.tls_secret_namespace
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        body.tls_secret_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
     ) {
         (Some(tls_ns), Some(tls_name)) if tls_ns == ns => Some(tls_name.to_string()),
         (Some(_), Some(_)) => {
@@ -2912,8 +2961,14 @@ pub async fn kubernetes_gateway_update(
         .or_else(|| state.gateway_class.clone())
         .or_else(|| state.ingress_class.clone());
     let tls_secret_name = match (
-        body.tls_secret_namespace.as_deref().map(str::trim).filter(|s| !s.is_empty()),
-        body.tls_secret_name.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        body.tls_secret_namespace
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        body.tls_secret_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
     ) {
         (Some(tls_ns), Some(tls_name)) if tls_ns == namespace => Some(tls_name.to_string()),
         (Some(_), Some(_)) => {
@@ -2947,7 +3002,10 @@ pub async fn kubernetes_gateway_update(
         gateway_class,
         tls_secret_name.as_deref(),
     );
-    match gw_api.replace(&name, &PostParams::default(), &gateway).await {
+    match gw_api
+        .replace(&name, &PostParams::default(), &gateway)
+        .await
+    {
         Ok(_) => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -3033,4 +3091,3 @@ pub async fn kubernetes_gateway_delete(
         }
     }
 }
-

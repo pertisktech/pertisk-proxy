@@ -133,7 +133,11 @@ pub fn resolve_enable_h3(requested: bool) -> bool {
         );
         return false;
     }
-    #[cfg(all(target_os = "macos", not(feature = "h3-quinn"), not(feature = "h3-quiche")))]
+    #[cfg(all(
+        target_os = "macos",
+        not(feature = "h3-quinn"),
+        not(feature = "h3-quiche")
+    ))]
     {
         tracing::warn!("ENABLE_H3 is set but HTTP/3 was not compiled in");
         return false;
@@ -145,11 +149,7 @@ fn parse_port(listen: &str) -> Option<u16> {
     listen.rsplit(':').next()?.parse().ok()
 }
 
-fn ensure_tls_pair(
-    cert: &Option<PathBuf>,
-    key: &Option<PathBuf>,
-    reason: &str,
-) -> Result<()> {
+fn ensure_tls_pair(cert: &Option<PathBuf>, key: &Option<PathBuf>, reason: &str) -> Result<()> {
     if cert.is_some() && key.is_some() {
         Ok(())
     } else {

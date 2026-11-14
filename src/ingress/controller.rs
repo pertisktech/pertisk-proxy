@@ -8,8 +8,8 @@ use crate::ingress::gateway_api::{
 use crate::log::{ProxyLog, ProxyLogEntry};
 use crate::proxy::apply;
 use crate::proxy_config::{
-    Backend, Config, LoadBalancerAlgorithm, PathMatchType, PathRewrite, Site, TlsConfig,
-    TlsSource, Upstream,
+    Backend, Config, LoadBalancerAlgorithm, PathMatchType, PathRewrite, Site, TlsConfig, TlsSource,
+    Upstream,
 };
 use crate::tls::CertStore;
 use crate::Router;
@@ -316,7 +316,12 @@ impl IngressController {
                 }
             };
             let type_ = secret.type_.as_deref().unwrap_or("");
-            if type_ != "kubernetes.io/tls" && !secret.data.as_ref().map_or(false, |d| d.contains_key("tls.crt")) {
+            if type_ != "kubernetes.io/tls"
+                && !secret
+                    .data
+                    .as_ref()
+                    .map_or(false, |d| d.contains_key("tls.crt"))
+            {
                 continue;
             }
             let data = match secret.data.as_ref() {
@@ -332,7 +337,10 @@ impl IngressController {
                 None => continue,
             };
             if cert_pem.is_empty() || key_pem.is_empty() {
-                warn!("Secret {}/{} has empty tls.crt or tls.key", namespace, secret_name);
+                warn!(
+                    "Secret {}/{} has empty tls.crt or tls.key",
+                    namespace, secret_name
+                );
                 continue;
             }
             let expires_at = cert_expiry_from_pem(&cert_pem);
@@ -349,11 +357,10 @@ impl IngressController {
                 source: TlsSource::Kubernetes,
                 expires_at,
             });
-            if let Err(e) = self.cert_store.insert_pem_in_memory_for_hosts(
-                &merged_hosts,
-                &cert_pem,
-                &key_pem,
-            ) {
+            if let Err(e) =
+                self.cert_store
+                    .insert_pem_in_memory_for_hosts(&merged_hosts, &cert_pem, &key_pem)
+            {
                 warn!(
                     "Failed to load TLS from Secret {}/{}: {}",
                     namespace, secret_name, e
@@ -426,8 +433,7 @@ impl IngressController {
     async fn reconcile_gateway_class_status(&self) -> Result<(), kube::Error> {
         let api: Api<GatewayClass> = Api::all(self.client.clone());
         let list = api.list(&ListParams::default()).await?;
-        let now = chrono::Utc::now()
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
         for gc in list {
             if gc.spec.controller_name != self.config.gateway_controller_name {
@@ -450,12 +456,8 @@ impl IngressController {
                     }]
                 }
             });
-            api.patch_status(
-                &name,
-                &PatchParams::default(),
-                &Patch::Merge(&patch),
-            )
-            .await?;
+            api.patch_status(&name, &PatchParams::default(), &Patch::Merge(&patch))
+                .await?;
             info!("GatewayClass {} marked Accepted", name);
         }
         Ok(())
@@ -567,10 +569,7 @@ impl IngressController {
             Ok(l) => l,
             Err(e) => {
                 warn!("Failed to list HTTPRoute resources: {}", e);
-                if let Err(e) = self
-                    .reconcile_gateway_statuses(&gateways, &[])
-                    .await
-                {
+                if let Err(e) = self.reconcile_gateway_statuses(&gateways, &[]).await {
                     warn!("Failed to update Gateway status: {}", e);
                 }
                 return (n_gateways, 0);
@@ -688,10 +687,7 @@ impl IngressController {
             }
         }
 
-        if let Err(e) = self
-            .reconcile_gateway_statuses(&gateways, &routes)
-            .await
-        {
+        if let Err(e) = self.reconcile_gateway_statuses(&gateways, &routes).await {
             warn!("Failed to update Gateway status: {}", e);
         }
 
@@ -704,8 +700,7 @@ impl IngressController {
         gw_list: &[Gateway],
         route_list: &[HTTPRoute],
     ) -> Result<(), kube::Error> {
-        let now = chrono::Utc::now()
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let addresses = self.gateway_status_addresses().await;
 
         for gw in gw_list {
@@ -730,8 +725,7 @@ impl IngressController {
                 if !is_http_listener_protocol(&listener.protocol) {
                     continue;
                 }
-                let attached_routes =
-                    count_attached_routes(route_list, &ns, &name, &listener.name);
+                let attached_routes = count_attached_routes(route_list, &ns, &name, &listener.name);
                 let tls_ok = match listener.tls.as_ref() {
                     None => true,
                     Some(tls) => {
@@ -867,12 +861,12 @@ impl IngressController {
         Ok(())
     }
 
-    async fn gateway_tls_secret_ready(&self, gw_ns: &str, cert_ref: &SecretObjectReference) -> bool {
-        let secret_ns = cert_ref
-            .namespace
-            .as_deref()
-            .unwrap_or(gw_ns)
-            .to_string();
+    async fn gateway_tls_secret_ready(
+        &self,
+        gw_ns: &str,
+        cert_ref: &SecretObjectReference,
+    ) -> bool {
+        let secret_ns = cert_ref.namespace.as_deref().unwrap_or(gw_ns).to_string();
         let api: Api<Secret> = Api::namespaced(self.client.clone(), &secret_ns);
         match api.get(&cert_ref.name).await {
             Ok(secret) => secret
@@ -954,11 +948,7 @@ fn spawn_kube_watch<K>(
 fn backend_name_for(backend: &IngressBackend, ingress_name: &str) -> String {
     if let Some(ref svc) = backend.service {
         let name = svc.name.as_str();
-        let port = svc
-            .port
-            .as_ref()
-            .and_then(|p| p.number)
-            .unwrap_or(80i32);
+        let port = svc.port.as_ref().and_then(|p| p.number).unwrap_or(80i32);
         format!("{}.{}:{}", name, ingress_name, port)
     } else if let Some(ref res) = backend.resource {
         format!("resource.{}.{}", res.name.as_str(), ingress_name)
@@ -1031,10 +1021,7 @@ struct ManagedGateway {
 }
 
 fn is_http_listener_protocol(protocol: &str) -> bool {
-    matches!(
-        protocol.to_ascii_uppercase().as_str(),
-        "HTTP" | "HTTPS"
-    )
+    matches!(protocol.to_ascii_uppercase().as_str(), "HTTP" | "HTTPS")
 }
 
 fn is_secret_ref(cert_ref: &SecretObjectReference) -> bool {
@@ -1178,7 +1165,11 @@ fn gateway_backend_name(
     let port = backend_ref.port.unwrap_or(80);
     format!(
         "{}.{}:{}:{}:{}",
-        backend_ref.name, route_name, port, rule_idx, match_idx * 10 + backend_idx
+        backend_ref.name,
+        route_name,
+        port,
+        rule_idx,
+        match_idx * 10 + backend_idx
     )
 }
 
@@ -1187,10 +1178,7 @@ fn upstreams_from_gateway_backend(
     namespace: Option<&str>,
     default_port: u16,
 ) -> Vec<Upstream> {
-    let port = backend_ref
-        .port
-        .map(|p| p as u16)
-        .unwrap_or(default_port);
+    let port = backend_ref.port.map(|p| p as u16).unwrap_or(default_port);
     let ns = backend_ref
         .namespace
         .as_deref()

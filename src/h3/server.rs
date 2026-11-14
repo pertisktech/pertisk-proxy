@@ -339,7 +339,10 @@ async fn handle_proxied_request(
             method: req.method().as_str(),
             path: path_only,
             query,
-            user_agent: req.headers().get("user-agent").and_then(|v| v.to_str().ok()),
+            user_agent: req
+                .headers()
+                .get("user-agent")
+                .and_then(|v| v.to_str().ok()),
             accept: req.headers().get("accept").and_then(|v| v.to_str().ok()),
             accept_language: req
                 .headers()

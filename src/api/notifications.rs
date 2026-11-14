@@ -9,7 +9,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{ApiError, AdminState};
+use super::{AdminState, ApiError};
 use crate::db::{Database, SmtpSettingsRow, SmtpSettingsUpdate};
 use crate::email::{smtp, templates};
 
@@ -265,10 +265,7 @@ pub(crate) async fn smtp_preview(
         )
     })?;
     let kind = query.template.trim();
-    if !matches!(
-        kind,
-        "test" | "login" | "login_failure" | "password_change"
-    ) {
+    if !matches!(kind, "test" | "login" | "login_failure" | "password_change") {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ApiError {
@@ -353,12 +350,7 @@ pub fn notify_login_failure(
     );
 }
 
-pub fn notify_login(
-    db: Arc<Database>,
-    username: String,
-    ip_address: String,
-    user_agent: String,
-) {
+pub fn notify_login(db: Arc<Database>, username: String, ip_address: String, user_agent: String) {
     notify_auth_event(db, AuthNotifyKind::Login, username, ip_address, user_agent);
 }
 

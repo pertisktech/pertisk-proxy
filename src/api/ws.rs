@@ -292,7 +292,11 @@ async fn channel_event(
             serde_json::json!({ "channel": channel.as_str(), "error": error }).to_string()
         }
     };
-    if !force && last_payload.get(&channel).is_some_and(|prev| prev == &payload) {
+    if !force
+        && last_payload
+            .get(&channel)
+            .is_some_and(|prev| prev == &payload)
+    {
         return None;
     }
     last_payload.insert(channel, payload.clone());
@@ -462,7 +466,9 @@ async fn push_channel(
                 .await
                 .map_err(|_| "websocket closed".to_string())?;
             let mut guard = conn.lock().await;
-            guard.last_sent_at.insert(channel, std::time::Instant::now());
+            guard
+                .last_sent_at
+                .insert(channel, std::time::Instant::now());
             return Ok(());
         }
     };
@@ -475,12 +481,21 @@ async fn push_channel(
 
     {
         let mut guard = conn.lock().await;
-        if !force && guard.last_payload.get(&channel).is_some_and(|prev| prev == &payload) {
-            guard.last_sent_at.insert(channel, std::time::Instant::now());
+        if !force
+            && guard
+                .last_payload
+                .get(&channel)
+                .is_some_and(|prev| prev == &payload)
+        {
+            guard
+                .last_sent_at
+                .insert(channel, std::time::Instant::now());
             return Ok(());
         }
         guard.last_payload.insert(channel, payload.clone());
-        guard.last_sent_at.insert(channel, std::time::Instant::now());
+        guard
+            .last_sent_at
+            .insert(channel, std::time::Instant::now());
     }
 
     tx.send(Message::Text(payload.into()))
@@ -495,8 +510,9 @@ async fn snapshot_channel(
     logs_filter: &LogsQuery,
 ) -> Result<serde_json::Value, String> {
     match channel {
-        Channel::Management => serde_json::to_value(build_management_info(state).await)
-            .map_err(|e| e.to_string()),
+        Channel::Management => {
+            serde_json::to_value(build_management_info(state).await).map_err(|e| e.to_string())
+        }
         Channel::Metrics => {
             serde_json::to_value(build_metrics_response(state)).map_err(|e| e.to_string())
         }

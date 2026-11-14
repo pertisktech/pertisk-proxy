@@ -43,7 +43,11 @@ pub struct AcmeManager {
 
 #[cfg(not(feature = "acme"))]
 impl AcmeManager {
-    pub fn new(_cache_dir: PathBuf, _use_staging: bool, http01_store: Http01ChallengeStore) -> Self {
+    pub fn new(
+        _cache_dir: PathBuf,
+        _use_staging: bool,
+        http01_store: Http01ChallengeStore,
+    ) -> Self {
         Self { http01_store }
     }
 }
@@ -69,15 +73,11 @@ impl AcmeManager {
     pub fn obtain_certs_sync(
         &self,
         tls_config: &TlsConfig,
-        #[cfg(feature = "dns-challenge")]
-        dns_solver: Option<Box<dyn super::dns_01::Dns01Solver>>,
-        #[cfg(feature = "dns-challenge")]
-        rt_handle: Option<tokio::runtime::Handle>,
+        #[cfg(feature = "dns-challenge")] dns_solver: Option<Box<dyn super::dns_01::Dns01Solver>>,
+        #[cfg(feature = "dns-challenge")] rt_handle: Option<tokio::runtime::Handle>,
     ) -> Result<(Vec<String>, Vec<u8>, Vec<u8>), String> {
         let TlsSource::Acme {
-            email,
-            challenge,
-            ..
+            email, challenge, ..
         } = &tls_config.source
         else {
             return Err("not an ACME config".to_string());
@@ -145,9 +145,9 @@ impl AcmeManager {
                         let chall = auth.dns_challenge();
                         let fqdn = format!("_acme-challenge.{}", auth.domain_name());
                         let value = chall.dns_proof();
-                        let solver = dns_solver.as_ref().ok_or(
-                            "DNS-01 requires DNS provider credentials",
-                        )?;
+                        let solver = dns_solver
+                            .as_ref()
+                            .ok_or("DNS-01 requires DNS provider credentials")?;
                         if let Some(ref handle) = rt_handle {
                             handle.block_on(solver.set_txt(&fqdn, &value))?;
                         } else {
@@ -165,8 +165,12 @@ impl AcmeManager {
 
         let ord_csr = ord_new.confirm_validations().expect("validated");
         let pkey = acme_lib::create_p384_key();
-        let ord_cert = ord_csr.finalize_pkey(pkey, 5000).map_err(|e| e.to_string())?;
-        let cert = ord_cert.download_and_save_cert().map_err(|e| e.to_string())?;
+        let ord_cert = ord_csr
+            .finalize_pkey(pkey, 5000)
+            .map_err(|e| e.to_string())?;
+        let cert = ord_cert
+            .download_and_save_cert()
+            .map_err(|e| e.to_string())?;
         let cert_pem = cert.certificate().as_bytes().to_vec();
         let key_pem = cert.private_key().as_bytes().to_vec();
         let hosts = tls_config.hosts.clone();
@@ -174,4 +178,3 @@ impl AcmeManager {
         Ok((hosts, cert_pem, key_pem))
     }
 }
-

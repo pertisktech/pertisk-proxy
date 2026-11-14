@@ -24,7 +24,10 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 #[derive(Debug, Parser)]
-#[command(name = "pertisk-tunnel-server", about = "Reverse tunnel server for pertisk-proxy")]
+#[command(
+    name = "pertisk-tunnel-server",
+    about = "Reverse tunnel server for pertisk-proxy"
+)]
 struct Args {
     /// Path to TOML config (token + tunnel allowlist).
     #[arg(short, long, env = "PERTISK_TUNNEL_CONFIG")]
@@ -110,7 +113,10 @@ async fn main() -> Result<()> {
             bail!("tunnel {} remote_port must be non-zero", t.name);
         }
         if !seen_ports.insert(t.remote_port) {
-            bail!("duplicate remote_port {} (used by more than one tunnel)", t.remote_port);
+            bail!(
+                "duplicate remote_port {} (used by more than one tunnel)",
+                t.remote_port
+            );
         }
         if map.insert(t.name.clone(), t.remote_port).is_some() {
             bail!("duplicate tunnel name {}", t.name);
@@ -170,7 +176,10 @@ async fn main() -> Result<()> {
         info!("tunnel status JSON on http://{status_addr}/status");
     }
 
-    let bind: SocketAddr = cfg.bind.parse().with_context(|| format!("bind {}", cfg.bind))?;
+    let bind: SocketAddr = cfg
+        .bind
+        .parse()
+        .with_context(|| format!("bind {}", cfg.bind))?;
     let endpoint = make_endpoint(bind)?;
     info!(
         "pertisk-tunnel-server listening on UDP {bind} (ALPN={})",
@@ -243,12 +252,19 @@ async fn forward_accepted(
     };
 
     let (mut send, mut recv) = conn.open_bi().await.context("open data stream")?;
-    proto::write_frame(&mut send, &proto::OpenConn { tunnel: name.clone() }).await?;
+    proto::write_frame(
+        &mut send,
+        &proto::OpenConn {
+            tunnel: name.clone(),
+        },
+    )
+    .await?;
     tracing::debug!("relaying {peer} via tunnel `{name}`");
     let (to_client, from_client) = pipe_tcp_quic(&mut tcp, &mut send, &mut recv).await;
     if let Some(c) = state.counters.get(&name) {
         c.bytes_to_client.fetch_add(to_client, Ordering::Relaxed);
-        c.bytes_from_client.fetch_add(from_client, Ordering::Relaxed);
+        c.bytes_from_client
+            .fetch_add(from_client, Ordering::Relaxed);
         c.streams.fetch_add(1, Ordering::Relaxed);
     }
     if to_client + from_client > 50 * 1024 * 1024 {
@@ -405,8 +421,7 @@ async fn handle_connection(incoming: Incoming, state: AppState) -> Result<()> {
         let mut slot = state.session.write().await;
         if let Some(old) = slot.take() {
             info!("replacing previous client {}", old.addr);
-            old.conn
-                .close(0u32.into(), b"replaced by new client");
+            old.conn.close(0u32.into(), b"replaced by new client");
         }
         *slot = Some(ClientSession {
             conn: Arc::new(conn.clone()),

@@ -25,20 +25,12 @@ pub fn is_json_health_path(path: &str) -> bool {
 pub fn is_health_path_bytes(path: &[u8]) -> bool {
     matches!(
         path,
-        b"/api/health"
-            | b"/health"
-            | b"/healthz"
-            | b"/readyz"
-            | b"/live"
-            | b"/ready"
+        b"/api/health" | b"/health" | b"/healthz" | b"/readyz" | b"/live" | b"/ready"
     )
 }
 
 pub fn is_json_health_path_bytes(path: &[u8]) -> bool {
-    matches!(
-        path,
-        b"/api/health" | b"/health" | b"/live" | b"/ready"
-    )
+    matches!(path, b"/api/health" | b"/health" | b"/live" | b"/ready")
 }
 
 fn health_body(path: &str) -> &'static [u8] {

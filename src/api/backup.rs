@@ -398,18 +398,17 @@ async fn build_proxy_backup(state: &AdminState) -> Result<BuiltBackup, Response>
     };
 
     let config = state.runtime_config.read().await.clone();
-    let pem_by_id: HashMap<String, (Vec<String>, Vec<u8>, Vec<u8>)> = match
-        db.get_all_certificates_for_store().await
-    {
-        Ok(rows) => rows
-            .into_iter()
-            .map(|(id, hosts, cert_pem, key_pem)| (id, (hosts, cert_pem, key_pem)))
-            .collect(),
-        Err(e) => {
-            tracing::warn!(error = %e, "backup: failed to read certificate PEM data");
-            HashMap::new()
-        }
-    };
+    let pem_by_id: HashMap<String, (Vec<String>, Vec<u8>, Vec<u8>)> =
+        match db.get_all_certificates_for_store().await {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|(id, hosts, cert_pem, key_pem)| (id, (hosts, cert_pem, key_pem)))
+                .collect(),
+            Err(e) => {
+                tracing::warn!(error = %e, "backup: failed to read certificate PEM data");
+                HashMap::new()
+            }
+        };
 
     let certificates = match db.list_certificates().await {
         Ok(rows) => rows
@@ -524,7 +523,9 @@ async fn proxy_backup_restore(state: &AdminState, body: RestoreBackupBody) -> Re
                     &state.certs_dir,
                     &id,
                 ) {
-                    errors.push(format!("Certificate loaded to DB but cert store failed: {e}"));
+                    errors.push(format!(
+                        "Certificate loaded to DB but cert store failed: {e}"
+                    ));
                 } else {
                     info!(hosts = ?cert.hosts, "backup: restored certificate");
                 }
@@ -579,7 +580,8 @@ fn merge_proxy_config(mut merged: Config, backup: Config) -> Config {
         }
     }
 
-    let existing_backends: HashSet<String> = merged.backends.iter().map(|b| b.name.clone()).collect();
+    let existing_backends: HashSet<String> =
+        merged.backends.iter().map(|b| b.name.clone()).collect();
     for backend in backup.backends {
         if !existing_backends.contains(&backend.name) {
             merged.backends.push(backend);
@@ -666,10 +668,7 @@ async fn build_ingress_backup(
             .into_iter()
             .filter(|sec| {
                 let typ = sec.type_.as_deref().unwrap_or("");
-                let has_tls = sec
-                    .data
-                    .as_ref()
-                    .is_some_and(|d| d.contains_key("tls.crt"));
+                let has_tls = sec.data.as_ref().is_some_and(|d| d.contains_key("tls.crt"));
                 typ == "kubernetes.io/tls" || has_tls
             })
             .map(|sec| serde_json::to_value(sec).unwrap_or(serde_json::Value::Null))
@@ -989,7 +988,9 @@ async fn fetch_helm_backup_snapshot() -> Option<HelmBackupSnapshot> {
     let helm_path = helm_env_value("PERTISK_HELM_PATH").unwrap_or_else(|| "helm".to_string());
 
     let values_output = tokio::process::Command::new(&helm_path)
-        .args(["get", "values", &release, "-n", &namespace, "--output", "yaml"])
+        .args([
+            "get", "values", &release, "-n", &namespace, "--output", "yaml",
+        ])
         .output()
         .await
         .ok()?;
@@ -1032,7 +1033,11 @@ fn restore_response(restored_count: usize, errors: Vec<String>, note: Option<Str
             )
         },
         restored_count,
-        errors: if errors.is_empty() { None } else { Some(errors) },
+        errors: if errors.is_empty() {
+            None
+        } else {
+            Some(errors)
+        },
         note,
     };
     let status = if body.errors.is_some() {
@@ -1061,7 +1066,9 @@ pub async fn activate_proxy_config(
         tracing::warn!(error = %err, "config apply: failed to reload certificates from database");
     }
     *state.runtime_config.write().await = config.clone();
-    state.proxy_log_enabled.store(config.proxy_log, Ordering::Relaxed);
+    state
+        .proxy_log_enabled
+        .store(config.proxy_log, Ordering::Relaxed);
     #[cfg(feature = "acme")]
     if let Some(acme) = state.acme_manager.clone() {
         let cfg = config.clone();

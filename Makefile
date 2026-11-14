@@ -199,9 +199,9 @@ run-ingress-release:
 test:
 	$(CARGO) test --features $(INGRESS_FEATURES)
 
-# Run library unit tests with 95% line coverage (see tarpaulin.toml).
+# Run library unit tests with 100% line coverage (see tarpaulin.toml).
 test-coverage:
-	cargo tarpaulin --config tarpaulin.toml --lib
+	cargo tarpaulin --config tarpaulin.toml --lib --features ingress
 
 # --- Packaging: DEB + RPM + tarball (Docker cross-build on macOS) → release/ ---
 # Requires: docker (buildx cross-compile + fpm only; no runtime images).

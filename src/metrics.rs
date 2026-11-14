@@ -79,7 +79,10 @@ impl ProxyMetrics {
         if host.is_empty() {
             return;
         }
-        let mut map = self.site_protocol_requests.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self
+            .site_protocol_requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let entry = map.entry(host).or_default();
         match version {
             http::Version::HTTP_2 => {
@@ -161,35 +164,44 @@ impl ProxyMetrics {
 
     pub fn add_bytes_received(&self, bytes: u64) {
         if bytes > 0 {
-            self.bytes_received_total.fetch_add(bytes, Ordering::Relaxed);
+            self.bytes_received_total
+                .fetch_add(bytes, Ordering::Relaxed);
         }
     }
 
     pub fn get_metrics_text(&self) -> String {
         let mut output = String::new();
 
-        output.push_str("# HELP pertisk_http_requests_total Total number of HTTP requests processed\n");
+        output.push_str(
+            "# HELP pertisk_http_requests_total Total number of HTTP requests processed\n",
+        );
         output.push_str("# TYPE pertisk_http_requests_total counter\n");
         output.push_str(&format!(
             "pertisk_http_requests_total {}\n",
             self.http_requests_total.load(Ordering::Relaxed)
         ));
 
-        output.push_str("# HELP pertisk_https_requests_total Total number of HTTPS requests processed\n");
+        output.push_str(
+            "# HELP pertisk_https_requests_total Total number of HTTPS requests processed\n",
+        );
         output.push_str("# TYPE pertisk_https_requests_total counter\n");
         output.push_str(&format!(
             "pertisk_https_requests_total {}\n",
             self.https_requests_total.load(Ordering::Relaxed)
         ));
 
-        output.push_str("# HELP pertisk_h3_requests_total Total number of HTTP/3 (QUIC) requests processed\n");
+        output.push_str(
+            "# HELP pertisk_h3_requests_total Total number of HTTP/3 (QUIC) requests processed\n",
+        );
         output.push_str("# TYPE pertisk_h3_requests_total counter\n");
         output.push_str(&format!(
             "pertisk_h3_requests_total {}\n",
             self.h3_requests_total.load(Ordering::Relaxed)
         ));
 
-        output.push_str("# HELP pertisk_h2_requests_total Total number of HTTP/2 requests processed\n");
+        output.push_str(
+            "# HELP pertisk_h2_requests_total Total number of HTTP/2 requests processed\n",
+        );
         output.push_str("# TYPE pertisk_h2_requests_total counter\n");
         output.push_str(&format!(
             "pertisk_h2_requests_total {}\n",
@@ -205,16 +217,22 @@ impl ProxyMetrics {
         } else {
             0.0
         };
-        output.push_str("# HELP pertisk_h3_vs_h2_ratio Ratio of HTTP/3 requests to HTTP/2 requests\n");
+        output.push_str(
+            "# HELP pertisk_h3_vs_h2_ratio Ratio of HTTP/3 requests to HTTP/2 requests\n",
+        );
         output.push_str("# TYPE pertisk_h3_vs_h2_ratio gauge\n");
         output.push_str(&format!(
             "pertisk_h3_vs_h2_ratio {}\n",
             prometheus_float(h3_vs_h2_ratio)
         ));
 
-        output.push_str("# HELP pertisk_site_h2_requests_total Total number of HTTP/2 requests per host\n");
+        output.push_str(
+            "# HELP pertisk_site_h2_requests_total Total number of HTTP/2 requests per host\n",
+        );
         output.push_str("# TYPE pertisk_site_h2_requests_total counter\n");
-        output.push_str("# HELP pertisk_site_h3_requests_total Total number of HTTP/3 requests per host\n");
+        output.push_str(
+            "# HELP pertisk_site_h3_requests_total Total number of HTTP/3 requests per host\n",
+        );
         output.push_str("# TYPE pertisk_site_h3_requests_total counter\n");
         output.push_str("# HELP pertisk_site_h3_vs_h2_ratio Ratio of HTTP/3 requests to HTTP/2 requests per host\n");
         output.push_str("# TYPE pertisk_site_h3_vs_h2_ratio gauge\n");
@@ -257,7 +275,9 @@ impl ProxyMetrics {
             ));
         }
 
-        output.push_str("# HELP pertisk_grpc_requests_total Total number of gRPC requests processed\n");
+        output.push_str(
+            "# HELP pertisk_grpc_requests_total Total number of gRPC requests processed\n",
+        );
         output.push_str("# TYPE pertisk_grpc_requests_total counter\n");
         output.push_str(&format!(
             "pertisk_grpc_requests_total {}\n",
@@ -271,7 +291,9 @@ impl ProxyMetrics {
             self.upstream_errors_total.load(Ordering::Relaxed)
         ));
 
-        output.push_str("# HELP pertisk_geoip_blocked_total Total requests blocked by GeoIP policy\n");
+        output.push_str(
+            "# HELP pertisk_geoip_blocked_total Total requests blocked by GeoIP policy\n",
+        );
         output.push_str("# TYPE pertisk_geoip_blocked_total counter\n");
         output.push_str(&format!(
             "pertisk_geoip_blocked_total {}\n",
@@ -329,7 +351,9 @@ impl ProxyMetrics {
             self.bytes_sent_total.load(Ordering::Relaxed)
         ));
 
-        output.push_str("# HELP pertisk_bytes_received_total Total number of bytes received from clients\n");
+        output.push_str(
+            "# HELP pertisk_bytes_received_total Total number of bytes received from clients\n",
+        );
         output.push_str("# TYPE pertisk_bytes_received_total counter\n");
         output.push_str(&format!(
             "pertisk_bytes_received_total {}\n",
@@ -390,12 +414,7 @@ pub fn metrics_enabled_from_env() -> bool {
 #[cfg(feature = "admin")]
 pub async fn start_metrics_server(addr: SocketAddr, metrics: ProxyMetrics) -> anyhow::Result<()> {
     // tarpaulin::skip_start
-    use axum::{
-        extract::Extension,
-        response::IntoResponse,
-        routing::get,
-        Router,
-    };
+    use axum::{extract::Extension, response::IntoResponse, routing::get, Router};
 
     async fn metrics_handler(Extension(metrics): Extension<ProxyMetrics>) -> impl IntoResponse {
         (
@@ -417,15 +436,13 @@ pub async fn start_metrics_server(addr: SocketAddr, metrics: ProxyMetrics) -> an
         .route("/health", get(health_handler))
         .layer(Extension(metrics));
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "metrics port {} unavailable: {} (set PERTISK_METRICS_ADDR or free the port)",
-                addr,
-                e
-            )
-        })?;
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+        anyhow::anyhow!(
+            "metrics port {} unavailable: {} (set PERTISK_METRICS_ADDR or free the port)",
+            addr,
+            e
+        )
+    })?;
     info!("Prometheus metrics server listening on http://{addr}/metrics");
     axum::serve(listener, app)
         .with_graceful_shutdown(async {

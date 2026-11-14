@@ -62,7 +62,8 @@ pub fn effective_transport_config() -> QuinnTransportConfig {
         idle_timeout_secs: env_u64("PERTISK_HTTP3_IDLE_TIMEOUT_SECS", 300),
         keepalive_secs: env_u64("PERTISK_HTTP3_KEEPALIVE_SECS", 30),
         max_streams_bidi: env_u64("PERTISK_HTTP3_MAX_STREAMS", 1024) as u32,
-        stream_receive_window: env_u64("PERTISK_HTTP3_STREAM_RECEIVE_WINDOW", 8 * 1024 * 1024) as u32,
+        stream_receive_window: env_u64("PERTISK_HTTP3_STREAM_RECEIVE_WINDOW", 8 * 1024 * 1024)
+            as u32,
         conn_receive_window: env_u64("PERTISK_HTTP3_CONN_RECEIVE_WINDOW", 64 * 1024 * 1024) as u32,
         udp_buffer_bytes: UDP_BUFFER_BYTES,
     }
@@ -403,8 +404,7 @@ async fn handle_request_inner(
 
     let client_ip = remote_addr.ip().to_string();
     let edge = &plan.middleware.edge;
-    if edge.x4xx_limit_rps > 0
-        && crate::edge::x4xx_blocked(&client_ip, &host, edge.x4xx_limit_rps)
+    if edge.x4xx_limit_rps > 0 && crate::edge::x4xx_blocked(&client_ip, &host, edge.x4xx_limit_rps)
     {
         drain_and_send_h3_response(
             stream,
@@ -415,10 +415,7 @@ async fn handle_request_inner(
         return Ok(());
     }
     if edge.rate_limit_rps > 0
-        && crate::edge::rate_limited(
-            &format!("rps|{client_ip}|{host}"),
-            edge.rate_limit_rps,
-        )
+        && crate::edge::rate_limited(&format!("rps|{client_ip}|{host}"), edge.rate_limit_rps)
     {
         drain_and_send_h3_response(
             stream,
@@ -459,8 +456,7 @@ async fn handle_request_inner(
                     http::HeaderValue::from_static("application/octet-stream"),
                 );
                 if let Ok(value) = http::HeaderValue::from_str(mime) {
-                    resp.headers_mut()
-                        .insert(http::header::CONTENT_TYPE, value);
+                    resp.headers_mut().insert(http::header::CONTENT_TYPE, value);
                 }
                 drain_and_send_h3_response(stream, resp, bytes).await?;
             }
@@ -482,10 +478,7 @@ async fn handle_request_inner(
             .headers()
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok());
-        let x_real_ip = req
-            .headers()
-            .get("x-real-ip")
-            .and_then(|v| v.to_str().ok());
+        let x_real_ip = req.headers().get("x-real-ip").and_then(|v| v.to_str().ok());
         let client_ip = resolve_client_ip(Some(&socket_ip), xff, x_real_ip);
         match crate::geoip::evaluate_ip(&plan.middleware.geoip, client_ip.as_deref()) {
             crate::geoip::Decision::Allow => {}
@@ -520,10 +513,7 @@ async fn handle_request_inner(
         .headers()
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok());
-    let x_real_ip = req
-        .headers()
-        .get("x-real-ip")
-        .and_then(|v| v.to_str().ok());
+    let x_real_ip = req.headers().get("x-real-ip").and_then(|v| v.to_str().ok());
     let client_ip = resolve_client_ip(Some(&socket_ip), xff, x_real_ip);
     let ua = req
         .headers()
@@ -566,13 +556,10 @@ async fn handle_request_inner(
                 }
                 Err(_) => {
                     metrics.inc_captcha_failed();
-                    let (body, _) = crate::security::challenge_page(
-                        next.as_deref().unwrap_or("/"),
-                        "retry",
-                    );
+                    let (body, _) =
+                        crate::security::challenge_page(next.as_deref().unwrap_or("/"), "retry");
                     let bytes = Bytes::from(body);
-                    let mut resp =
-                        plain_response(http::StatusCode::FORBIDDEN, bytes.as_ref());
+                    let mut resp = plain_response(http::StatusCode::FORBIDDEN, bytes.as_ref());
                     resp.headers_mut().insert(
                         http::header::CONTENT_TYPE,
                         http::HeaderValue::from_static("text/html; charset=utf-8"),

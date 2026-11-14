@@ -56,3 +56,124 @@ pub fn build_upstream_client(runtime_cfg: &RuntimeConfig) -> Result<Client> {
         .build()
         .context("build H3 upstream client")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::RuntimeMode;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn runtime_config(resolved_mode: RuntimeMode) -> RuntimeConfig {
+        RuntimeConfig {
+            requested_mode: resolved_mode,
+            resolved_mode,
+            worker_threads: 2,
+            max_blocking_threads: 2,
+        }
+    }
+
+    fn restore_env_var(key: &str, previous: Option<String>) {
+        match previous {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    fn clear_pool_env() -> Vec<(&'static str, Option<String>)> {
+        let keys = [
+            "PERTISK_H3_UPSTREAM_POOL_MAX_IDLE",
+            "PERTISK_H3_UPSTREAM_POOL_IDLE_TIMEOUT_SECS",
+            "PERTISK_H3_UPSTREAM_TCP_KEEPALIVE_SECS",
+        ];
+        let previous = keys
+            .iter()
+            .map(|key| (*key, std::env::var(key).ok()))
+            .collect::<Vec<_>>();
+        for key in keys {
+            std::env::remove_var(key);
+        }
+        previous
+    }
+
+    fn restore_pool_env(previous: Vec<(&'static str, Option<String>)>) {
+        for (key, value) in previous {
+            restore_env_var(key, value);
+        }
+    }
+
+    #[test]
+    fn upstream_pool_config_uses_standard_defaults() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous = clear_pool_env();
+
+        let cfg = upstream_pool_config(&runtime_config(RuntimeMode::Standard));
+
+        assert_eq!(cfg.max_idle_per_host, 64);
+        assert_eq!(cfg.idle_timeout_secs, 90);
+        assert_eq!(cfg.tcp_keepalive_secs, 60);
+
+        restore_pool_env(previous);
+    }
+
+    #[test]
+    fn upstream_pool_config_uses_performance_defaults() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous = clear_pool_env();
+
+        let cfg = upstream_pool_config(&runtime_config(RuntimeMode::Performance));
+
+        assert_eq!(cfg.max_idle_per_host, 256);
+        assert_eq!(cfg.idle_timeout_secs, 120);
+        assert_eq!(cfg.tcp_keepalive_secs, 60);
+
+        restore_pool_env(previous);
+    }
+
+    #[test]
+    fn upstream_pool_config_uses_env_overrides() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous = clear_pool_env();
+        std::env::set_var("PERTISK_H3_UPSTREAM_POOL_MAX_IDLE", "10");
+        std::env::set_var("PERTISK_H3_UPSTREAM_POOL_IDLE_TIMEOUT_SECS", "11");
+        std::env::set_var("PERTISK_H3_UPSTREAM_TCP_KEEPALIVE_SECS", "12");
+
+        let cfg = upstream_pool_config(&runtime_config(RuntimeMode::Standard));
+
+        assert_eq!(cfg.max_idle_per_host, 10);
+        assert_eq!(cfg.idle_timeout_secs, 11);
+        assert_eq!(cfg.tcp_keepalive_secs, 12);
+
+        restore_pool_env(previous);
+    }
+
+    #[test]
+    fn upstream_pool_config_filters_invalid_and_zero_env_values() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous = clear_pool_env();
+        std::env::set_var("PERTISK_H3_UPSTREAM_POOL_MAX_IDLE", "0");
+        std::env::set_var("PERTISK_H3_UPSTREAM_POOL_IDLE_TIMEOUT_SECS", "invalid");
+        std::env::set_var("PERTISK_H3_UPSTREAM_TCP_KEEPALIVE_SECS", "0");
+
+        let cfg = upstream_pool_config(&runtime_config(RuntimeMode::Standard));
+
+        assert_eq!(cfg.max_idle_per_host, 64);
+        assert_eq!(cfg.idle_timeout_secs, 90);
+        assert_eq!(cfg.tcp_keepalive_secs, 60);
+
+        restore_pool_env(previous);
+    }
+
+    #[test]
+    fn build_upstream_client_succeeds() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous = clear_pool_env();
+
+        let client = build_upstream_client(&runtime_config(RuntimeMode::Standard));
+
+        assert!(client.is_ok());
+
+        restore_pool_env(previous);
+    }
+}

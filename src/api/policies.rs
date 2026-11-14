@@ -8,7 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{ApiError, AdminState};
+use super::{AdminState, ApiError};
 use crate::proxy_config::{AccessList, Config, NamedWafPolicy};
 
 #[derive(Deserialize)]
@@ -72,7 +72,11 @@ async fn save_and_activate(
     cfg: &Config,
 ) -> Result<(), (StatusCode, Json<ApiError>)> {
     if state.viewer_mode {
-        let mut stored = db.get_proxy_config().await.unwrap_or(None).unwrap_or_default();
+        let mut stored = db
+            .get_proxy_config()
+            .await
+            .unwrap_or(None)
+            .unwrap_or_default();
         stored.access_lists = cfg.access_lists.clone();
         stored.waf_policies = cfg.waf_policies.clone();
         db.save_proxy_config(&stored).await.map_err(|e| {
@@ -105,12 +109,7 @@ async fn save_and_activate(
     })?;
     crate::api::backup::activate_proxy_config(state, db, cfg)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ApiError { error: e }),
-            )
-        })?;
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(ApiError { error: e })))?;
     Ok(())
 }
 
@@ -236,7 +235,9 @@ pub(crate) async fn access_lists_delete(
     Ok(Json(OkResponse { ok: true }))
 }
 
-pub(crate) async fn waf_policies_list(State(state): State<AdminState>) -> Json<Vec<NamedWafPolicy>> {
+pub(crate) async fn waf_policies_list(
+    State(state): State<AdminState>,
+) -> Json<Vec<NamedWafPolicy>> {
     if let Some(db) = state.db.as_ref() {
         if let Ok(Some(stored)) = db.get_proxy_config().await {
             return Json(stored.waf_policies);

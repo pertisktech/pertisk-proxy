@@ -271,9 +271,7 @@ pub fn run() -> anyhow::Result<()> {
         ingress_env.server.tls_cert_path(),
         ingress_env.server.tls_key_path(),
     ) {
-        cert_store
-            .set_global_fallback(cert.into(), key.into())
-            .ok();
+        cert_store.set_global_fallback(cert.into(), key.into()).ok();
     }
 
     if ingress_env.server.enable_h3 {

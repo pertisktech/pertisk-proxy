@@ -109,7 +109,11 @@ impl ProxyLogEntry {
             upstream: Some(upstream.to_string()),
             status: None,
             duration_ms: None,
-            message: if ok { "healthy".into() } else { "unhealthy".into() },
+            message: if ok {
+                "healthy".into()
+            } else {
+                "unhealthy".into()
+            },
             entry_type: LogEntryType::HealthCheck,
             protocol: None,
             encoding: None,
@@ -151,11 +155,7 @@ impl ProxyLogEntry {
         }
     }
 
-    pub fn tracing_event(
-        level: LogLevel,
-        source: &str,
-        message: impl Into<String>,
-    ) -> Self {
+    pub fn tracing_event(level: LogLevel, source: &str, message: impl Into<String>) -> Self {
         Self {
             timestamp: Utc::now(),
             level,

@@ -24,7 +24,9 @@ fn cert_expires_within_days(expires_at: Option<&String>, days: i64) -> bool {
     }
     let expiry = chrono::DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&chrono::Utc))
-        .or_else(|_| chrono::DateTime::parse_from_rfc2822(s).map(|dt| dt.with_timezone(&chrono::Utc)));
+        .or_else(|_| {
+            chrono::DateTime::parse_from_rfc2822(s).map(|dt| dt.with_timezone(&chrono::Utc))
+        });
     let Ok(expiry) = expiry else {
         return false;
     };
@@ -114,9 +116,9 @@ fn find_acme_cert_for_hosts<'a>(
     cert_rows: &'a [CertificateRow],
     hosts: &[String],
 ) -> Option<&'a CertificateRow> {
-    cert_rows.iter().find(|row| {
-        row.source_type.eq_ignore_ascii_case("acme") && acme_cert_is_valid(row, hosts)
-    })
+    cert_rows
+        .iter()
+        .find(|row| row.source_type.eq_ignore_ascii_case("acme") && acme_cert_is_valid(row, hosts))
 }
 
 fn hosts_missing_from_store(cert_store: &CertStore, hosts: &[String]) -> Vec<String> {
@@ -141,7 +143,8 @@ async fn reload_acme_cert_into_store(
         .get_all_certificates_for_store()
         .await
         .map_err(|e| e.to_string())?;
-    let Some((id, _, cert_pem, key_pem)) = rows.into_iter().find(|(id, _, _, _)| id == &row.id) else {
+    let Some((id, _, cert_pem, key_pem)) = rows.into_iter().find(|(id, _, _, _)| id == &row.id)
+    else {
         return Err(format!("certificate {} not found in database", row.id));
     };
     cert_store
@@ -150,7 +153,8 @@ async fn reload_acme_cert_into_store(
 }
 
 fn acme_hosts_for_order(hosts: &[String], challenge: &str) -> Vec<String> {
-    let is_dns01 = challenge.eq_ignore_ascii_case("dns01") || challenge.eq_ignore_ascii_case("dns-01");
+    let is_dns01 =
+        challenge.eq_ignore_ascii_case("dns01") || challenge.eq_ignore_ascii_case("dns-01");
     let eligible: Vec<String> = if is_dns01 {
         let wildcards: Vec<String> = hosts
             .iter()
@@ -419,7 +423,10 @@ pub async fn spawn_auto_ssl_for_config(
         let host_label = hosts_for_acme.join(", ");
         spawned += 1;
 
-        tracing::info!("Auto-SSL (background): obtaining certificate for {}", host_label);
+        tracing::info!(
+            "Auto-SSL (background): obtaining certificate for {}",
+            host_label
+        );
 
         tokio::spawn(async move {
             #[cfg(feature = "dns-challenge")]
@@ -451,7 +458,8 @@ pub async fn spawn_auto_ssl_for_config(
                                 }
                             }
                         }
-                        match crate::tls::solver_for_provider(pty.as_deref().unwrap_or(""), &creds) {
+                        match crate::tls::solver_for_provider(pty.as_deref().unwrap_or(""), &creds)
+                        {
                             Ok(s) => Some(s),
                             Err(e) => {
                                 tracing::warn!(
@@ -488,26 +496,23 @@ pub async fn spawn_auto_ssl_for_config(
                         .await
                     {
                         Ok(id) => {
-                            if let Err(e) = store_clone.insert_pem_for_hosts(
-                                &hosts,
-                                &cert_pem,
-                                &key_pem,
-                                &certs_dir,
-                                &id,
-                            ) {
+                            if let Err(e) = store_clone
+                                .insert_pem_for_hosts(&hosts, &cert_pem, &key_pem, &certs_dir, &id)
+                            {
                                 tracing::error!(
                                     "Auto-SSL: cert saved to DB but load failed for {}: {}",
                                     host_label,
                                     e
                                 );
                             } else {
-                                tracing::info!(
-                                    "Auto-SSL: certificate obtained for {}",
-                                    host_label
-                                );
+                                tracing::info!("Auto-SSL: certificate obtained for {}", host_label);
                             }
                         }
-                        Err(e) => tracing::error!("Auto-SSL: failed to save cert for {}: {}", host_label, e),
+                        Err(e) => tracing::error!(
+                            "Auto-SSL: failed to save cert for {}: {}",
+                            host_label,
+                            e
+                        ),
                     }
                 }
                 Ok(Err(e)) => tracing::warn!("Auto-SSL failed for {}: {}", host_label, e),
@@ -520,11 +525,17 @@ pub async fn spawn_auto_ssl_for_config(
     if spawned == 0 {
         tracing::info!("Auto-SSL sweep: no new certificate tasks started");
     } else {
-        tracing::info!("Auto-SSL sweep: started {} background obtain task(s)", spawned);
+        tracing::info!(
+            "Auto-SSL sweep: started {} background obtain task(s)",
+            spawned
+        );
     }
 
     if let Err(e) = load_db_certs_into_store(db.as_ref(), cert_store.as_ref(), &certs_dir).await {
-        tracing::warn!("Auto-SSL: failed to sync certificates into memory store: {}", e);
+        tracing::warn!(
+            "Auto-SSL: failed to sync certificates into memory store: {}",
+            e
+        );
     }
 }
 

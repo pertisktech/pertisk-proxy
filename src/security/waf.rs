@@ -154,7 +154,10 @@ pub fn builtin_rules() -> Vec<WafRule> {
 }
 
 fn contains_ci(haystack: &str, needle: &str) -> bool {
-    !needle.is_empty() && haystack.to_ascii_lowercase().contains(&needle.to_ascii_lowercase())
+    !needle.is_empty()
+        && haystack
+            .to_ascii_lowercase()
+            .contains(&needle.to_ascii_lowercase())
 }
 
 /// Decode `%XX` and `+` (as space) so WAF needles match real attack payloads.
@@ -368,5 +371,216 @@ mod tests {
             client_ip: None,
         };
         assert!(evaluate_waf(&policy, &req).is_some());
+    }
+
+    #[test]
+    fn policy_helpers_report_default_active_and_normalize_rules() {
+        assert!(WafPolicy::default().is_default());
+        assert!(!WafPolicy::default().is_active());
+        assert!(!WafPolicy {
+            enabled: true,
+            use_builtin_rules: false,
+            rules: vec![WafRule {
+                id: "disabled".into(),
+                enabled: false,
+                action: WafAction::Block,
+                methods: vec![],
+                path_contains: Some("/admin".into()),
+                query_contains: None,
+                ua_contains: None,
+            }],
+        }
+        .is_active());
+
+        let policy = WafPolicy {
+            enabled: true,
+            use_builtin_rules: false,
+            rules: vec![
+                WafRule {
+                    id: " ".into(),
+                    enabled: true,
+                    action: WafAction::Block,
+                    methods: vec![],
+                    path_contains: None,
+                    query_contains: None,
+                    ua_contains: None,
+                },
+                WafRule {
+                    id: " custom ".into(),
+                    enabled: true,
+                    action: WafAction::Log,
+                    methods: vec![" post ".into(), "".into()],
+                    path_contains: Some(" /admin ".into()),
+                    query_contains: Some(" debug=true ".into()),
+                    ua_contains: Some(" curl ".into()),
+                },
+            ],
+        }
+        .normalized();
+
+        assert!(policy.is_active());
+        assert!(!policy.is_default());
+        assert_eq!(policy.rules.len(), 1);
+        assert_eq!(policy.rules[0].id, "custom");
+        assert_eq!(policy.rules[0].methods, vec!["POST"]);
+        assert_eq!(policy.rules[0].path_contains.as_deref(), Some("/admin"));
+        assert_eq!(
+            policy.rules[0].query_contains.as_deref(),
+            Some("debug=true")
+        );
+        assert_eq!(policy.rules[0].ua_contains.as_deref(), Some("curl"));
+    }
+
+    #[test]
+    fn custom_rules_match_paths_queries_user_agents_and_log_action() {
+        let policy = WafPolicy {
+            enabled: true,
+            use_builtin_rules: false,
+            rules: vec![
+                WafRule {
+                    id: "disabled".into(),
+                    enabled: false,
+                    action: WafAction::Block,
+                    methods: vec![],
+                    path_contains: Some("/admin".into()),
+                    query_contains: None,
+                    ua_contains: None,
+                },
+                WafRule {
+                    id: "log-post-admin".into(),
+                    enabled: true,
+                    action: WafAction::Log,
+                    methods: vec!["POST".into()],
+                    path_contains: Some("/admin".into()),
+                    query_contains: Some("debug=true".into()),
+                    ua_contains: Some("curl".into()),
+                },
+            ],
+        };
+        let req = RequestView {
+            method: "POST",
+            path: "/v1/admin",
+            query: "",
+            user_agent: Some("Mozilla"),
+            accept: None,
+            accept_language: None,
+            cookie: None,
+            client_ip: None,
+        };
+        let hit = evaluate_waf(&policy, &req).expect("path match");
+        assert_eq!(hit.rule_id, "log-post-admin");
+        assert_eq!(hit.action, WafAction::Log);
+
+        let query_req = RequestView {
+            method: "POST",
+            path: "/",
+            query: "debug=true",
+            user_agent: Some("Mozilla"),
+            accept: None,
+            accept_language: None,
+            cookie: None,
+            client_ip: None,
+        };
+        assert_eq!(
+            evaluate_waf(&policy, &query_req).map(|h| h.rule_id),
+            Some("log-post-admin".into())
+        );
+
+        let ua_req = RequestView {
+            method: "POST",
+            path: "/",
+            query: "",
+            user_agent: Some("curl/8.0"),
+            accept: None,
+            accept_language: None,
+            cookie: None,
+            client_ip: None,
+        };
+        assert_eq!(
+            evaluate_waf(&policy, &ua_req).map(|h| h.rule_id),
+            Some("log-post-admin".into())
+        );
+
+        let wrong_method = RequestView {
+            method: "GET",
+            path: "/v1/admin",
+            query: "debug=true",
+            user_agent: Some("curl/8.0"),
+            accept: None,
+            accept_language: None,
+            cookie: None,
+            client_ip: None,
+        };
+        assert!(evaluate_waf(&policy, &wrong_method).is_none());
+
+        let no_constraints = WafPolicy {
+            enabled: true,
+            use_builtin_rules: false,
+            rules: vec![WafRule {
+                id: "no-constraints".into(),
+                enabled: true,
+                action: WafAction::Block,
+                methods: vec![],
+                path_contains: None,
+                query_contains: None,
+                ua_contains: None,
+            }],
+        };
+        assert!(evaluate_waf(&no_constraints, &req).is_none());
+    }
+
+    #[test]
+    fn builtin_rules_handle_plus_decoding_and_invalid_percent_misses() {
+        let policy = WafPolicy {
+            enabled: true,
+            use_builtin_rules: true,
+            rules: vec![],
+        };
+        let plus_encoded = RequestView {
+            method: "GET",
+            path: "/",
+            query: "q=UNION+SELECT",
+            user_agent: None,
+            accept: None,
+            accept_language: None,
+            cookie: None,
+            client_ip: None,
+        };
+        assert_eq!(
+            evaluate_waf(&policy, &plus_encoded).map(|h| h.rule_id),
+            Some("builtin-sqli-union".into())
+        );
+
+        let invalid_percent = RequestView {
+            method: "GET",
+            path: "/%zz",
+            query: "q=%zz",
+            user_agent: None,
+            accept: None,
+            accept_language: None,
+            cookie: None,
+            client_ip: None,
+        };
+        assert!(evaluate_waf(&policy, &invalid_percent).is_none());
+
+        let trailing_percent = RequestView {
+            method: "GET",
+            path: "/%",
+            query: "q=%",
+            user_agent: None,
+            accept: None,
+            accept_language: None,
+            cookie: None,
+            client_ip: None,
+        };
+        assert!(evaluate_waf(&policy, &trailing_percent).is_none());
+    }
+
+    #[test]
+    fn waf_rule_serde_defaults_enabled_true() {
+        let rule: WafRule = serde_json::from_str(r#"{"id":"from-json"}"#).unwrap();
+        assert!(rule.enabled);
+        assert_eq!(rule.id, "from-json");
+        assert_eq!(default_true(), true);
     }
 }

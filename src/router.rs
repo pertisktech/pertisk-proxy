@@ -298,8 +298,7 @@ fn path_matches(path_type: &PathMatchType, rule_path: &str, request_path: &str) 
         PathMatchType::Exact => rule_path == request_path,
         PathMatchType::Prefix => {
             request_path == rule_path
-                || (rule_path.ends_with('/')
-                    && request_path.starts_with(rule_path))
+                || (rule_path.ends_with('/') && request_path.starts_with(rule_path))
                 || (!rule_path.ends_with('/')
                     && (request_path.starts_with(&format!("{rule_path}/"))
                         || request_path == rule_path))
@@ -392,11 +391,7 @@ pub fn build_route_table_from_ingresses(
 }
 
 fn add_ingress_to_table(by_host: &mut HashMap<String, Vec<Route>>, ingress: &Ingress) {
-    let namespace = ingress
-        .metadata
-        .namespace
-        .as_deref()
-        .unwrap_or("default");
+    let namespace = ingress.metadata.namespace.as_deref().unwrap_or("default");
 
     let Some(spec) = ingress.spec.as_ref() else {
         return;
@@ -501,6 +496,22 @@ pub fn ingress_matches_class(ingress: &Ingress, class: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_route(path: &str, path_type: PathMatchType, address: &str) -> Route {
+        Route {
+            path: path.into(),
+            path_type,
+            backend: Backend {
+                address: address.into(),
+                port: 80,
+                use_tls: false,
+            },
+            middlewares: vec![],
+            forward_client_ip: false,
+            geoip: Default::default(),
+            security: Default::default(),
+        }
+    }
 
     #[test]
     fn parse_upstream_localhost_uses_ipv4() {
@@ -724,7 +735,10 @@ mod tests {
             ],
         )]));
         assert_eq!(
-            table.match_route("app.example.com", "/api/v2/x").unwrap().address,
+            table
+                .match_route("app.example.com", "/api/v2/x")
+                .unwrap()
+                .address,
             "long:8080"
         );
     }
@@ -992,7 +1006,9 @@ mod tests {
                 security: Default::default(),
             }],
         )]));
-        assert!(table.match_route("app.example.com", "/custom/path").is_some());
+        assert!(table
+            .match_route("app.example.com", "/custom/path")
+            .is_some());
     }
 
     #[test]
@@ -1035,7 +1051,9 @@ mod tests {
         };
         let table = build_route_table_from_ingresses([ingress]);
         assert!(table.match_route("exact.example.com", "/exact").is_some());
-        assert!(table.match_route("exact.example.com", "/exact/more").is_none());
+        assert!(table
+            .match_route("exact.example.com", "/exact/more")
+            .is_none());
     }
 
     #[test]
@@ -1125,5 +1143,199 @@ mod tests {
         };
         let table = build_route_table_from_ingresses([ingress]);
         assert!(table.match_route("impl.example.com", "/anything").is_some());
+    }
+
+    #[test]
+    fn empty_host_does_not_match_routes() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "app.example.com".into(),
+            vec![test_route("/", PathMatchType::Prefix, "app:80")],
+        )]));
+        assert!(table.match_route("", "/").is_none());
+        assert!(!table.has_host(":443"));
+    }
+
+    #[test]
+    fn edge_for_matches_exact_wildcard_and_catchall_hosts() {
+        let mut table = RouteTable::from_routes(HashMap::from([
+            (
+                "*.example.com".into(),
+                vec![test_route("/wild", PathMatchType::Prefix, "wild:80")],
+            ),
+            (
+                "*".into(),
+                vec![test_route("/catch", PathMatchType::Prefix, "catch:80")],
+            ),
+        ]));
+        table.insert_edge(
+            "*.example.com",
+            "/wild",
+            crate::edge::EdgePolicy {
+                rate_limit_rps: 5,
+                ..Default::default()
+            },
+        );
+        table.insert_edge(
+            "*",
+            "/catch",
+            crate::edge::EdgePolicy {
+                x4xx_limit_rps: 7,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(table.edge_for("api.example.com", "/wild").rate_limit_rps, 5);
+        assert_eq!(table.edge_for("other.test", "/catch").x4xx_limit_rps, 7);
+        assert_eq!(
+            table.edge_for("missing.test", "/missing"),
+            Default::default()
+        );
+    }
+
+    #[test]
+    fn matched_host_key_prefers_most_specific_wildcard_edge() {
+        let mut table = RouteTable::default();
+        table.insert_edge(
+            "*.example.com",
+            "/",
+            crate::edge::EdgePolicy {
+                rate_limit_rps: 1,
+                ..Default::default()
+            },
+        );
+        table.insert_edge(
+            "*.apps.example.com",
+            "/",
+            crate::edge::EdgePolicy {
+                rate_limit_rps: 2,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            table.edge_for("git.apps.example.com", "/").rate_limit_rps,
+            2
+        );
+    }
+
+    #[test]
+    fn consul_services_dedupes_non_empty_service_names() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "svc.example.com".into(),
+            vec![
+                test_route("/", PathMatchType::Prefix, "consul:web"),
+                test_route("/v2", PathMatchType::Prefix, "consul:web"),
+                test_route("/empty", PathMatchType::Prefix, "consul:"),
+                test_route("/local", PathMatchType::Prefix, "local:80"),
+            ],
+        )]));
+
+        assert_eq!(table.consul_services(), vec!["web"]);
+    }
+
+    #[test]
+    fn accepts_jwt_secret_checks_globals_and_route_policies() {
+        let mut table = RouteTable::default();
+        assert!(!table.accepts_jwt_secret("secret"));
+        table.set_globals(crate::edge::EdgeGlobals {
+            jwt_secret: Some("global-secret".into()),
+            ..Default::default()
+        });
+        assert!(table.accepts_jwt_secret("global-secret"));
+
+        table.insert_edge(
+            "app.example.com",
+            "/",
+            crate::edge::EdgePolicy {
+                auth: Some(crate::edge::RouteAuth::Jwt {
+                    secret: "route-secret".into(),
+                }),
+                ..Default::default()
+            },
+        );
+        assert!(table.accepts_jwt_secret("route-secret"));
+    }
+
+    #[test]
+    fn parse_upstream_special_urls_and_invalid_ports() {
+        assert_eq!(parse_upstream("file://").unwrap().address, "file:/");
+        assert_eq!(
+            parse_upstream("consul:///api").unwrap().address,
+            "consul:api"
+        );
+        assert_eq!(
+            parse_upstream("auto://localhost").unwrap().address,
+            "auto:127.0.0.1:443"
+        );
+        assert!(parse_upstream("backend:not-a-port").is_none());
+        assert!(parse_upstream("consul://").is_none());
+        assert!(parse_upstream("consul:///").is_none());
+    }
+
+    #[test]
+    fn globals_accessor_and_unmatched_host_key() {
+        let mut table = RouteTable::default();
+        assert_eq!(table.globals().jwt_secret, None);
+        table.set_globals(crate::edge::EdgeGlobals {
+            jwt_secret: Some("g".into()),
+            ..Default::default()
+        });
+        assert_eq!(table.globals().jwt_secret.as_deref(), Some("g"));
+        // No routes / wildcards / catch-all → matched_host_key returns the host itself.
+        assert_eq!(
+            table.edge_for("solo.example.com", "/").rate_limit_rps,
+            0
+        );
+    }
+
+    #[test]
+    fn prefix_path_matching_does_not_match_partial_segment() {
+        let table = RouteTable::from_routes(HashMap::from([(
+            "app.example.com".into(),
+            vec![test_route("/api", PathMatchType::Prefix, "api:80")],
+        )]));
+        assert!(table.match_route("app.example.com", "/api").is_some());
+        assert!(table.match_route("app.example.com", "/api/v1").is_some());
+        assert!(table.match_route("app.example.com", "/apix").is_none());
+    }
+
+    #[test]
+    fn ingress_path_without_service_port_is_skipped() {
+        use k8s_openapi::api::networking::v1::{
+            HTTPIngressPath, HTTPIngressRuleValue, Ingress, IngressBackend, IngressRule,
+            IngressServiceBackend, IngressSpec, ServiceBackendPort,
+        };
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+        let ingress = Ingress {
+            metadata: ObjectMeta::default(),
+            spec: Some(IngressSpec {
+                rules: Some(vec![IngressRule {
+                    host: Some("skip-port.example.com".into()),
+                    http: Some(HTTPIngressRuleValue {
+                        paths: vec![HTTPIngressPath {
+                            path: Some("/".into()),
+                            path_type: "Prefix".into(),
+                            backend: IngressBackend {
+                                service: Some(IngressServiceBackend {
+                                    name: "svc".into(),
+                                    port: Some(ServiceBackendPort {
+                                        number: None,
+                                        ..Default::default()
+                                    }),
+                                }),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        }],
+                    }),
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let table = build_route_table_from_ingresses([ingress]);
+        assert_eq!(table.route_count(), 0);
     }
 }

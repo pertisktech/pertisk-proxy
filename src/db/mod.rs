@@ -142,9 +142,8 @@ impl Database {
         let username = username.to_string();
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
-            let mut stmt = conn.prepare_cached(
-                "SELECT password_hash FROM users WHERE username = ?1",
-            )?;
+            let mut stmt =
+                conn.prepare_cached("SELECT password_hash FROM users WHERE username = ?1")?;
             let mut rows = stmt.query(rusqlite::params![username])?;
             if let Some(row) = rows.next()? {
                 Ok(Some(row.get(0)?))
@@ -379,7 +378,9 @@ impl Database {
     ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let path = self.path.clone();
-        let cred_json = credentials.as_ref().and_then(|c| serde_json::to_string(c).ok());
+        let cred_json = credentials
+            .as_ref()
+            .and_then(|c| serde_json::to_string(c).ok());
         let created_at = chrono::Utc::now().to_rfc3339();
         let id_for_insert = id.clone();
         spawn_blocking(move || {
@@ -403,7 +404,9 @@ impl Database {
     ) -> Result<bool> {
         let path = self.path.clone();
         let id = id.to_string();
-        let cred_json = credentials.as_ref().and_then(|c| serde_json::to_string(c).ok());
+        let cred_json = credentials
+            .as_ref()
+            .and_then(|c| serde_json::to_string(c).ok());
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
             let n = conn.execute(
@@ -420,7 +423,10 @@ impl Database {
         let id = id.to_string();
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
-            let n = conn.execute("DELETE FROM dns_providers WHERE id = ?1", rusqlite::params![id])?;
+            let n = conn.execute(
+                "DELETE FROM dns_providers WHERE id = ?1",
+                rusqlite::params![id],
+            )?;
             Ok(n > 0)
         })
         .await?
@@ -518,7 +524,10 @@ impl Database {
         let id = id.to_string();
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
-            let n = conn.execute("DELETE FROM certificates WHERE id = ?1", rusqlite::params![id])?;
+            let n = conn.execute(
+                "DELETE FROM certificates WHERE id = ?1",
+                rusqlite::params![id],
+            )?;
             Ok(n > 0)
         })
         .await?
@@ -627,7 +636,10 @@ impl Database {
         .await?
     }
 
-    pub async fn update_smtp_settings(&self, update: SmtpSettingsUpdate) -> Result<SmtpSettingsRow> {
+    pub async fn update_smtp_settings(
+        &self,
+        update: SmtpSettingsUpdate,
+    ) -> Result<SmtpSettingsRow> {
         let path = self.path.clone();
         spawn_blocking(move || {
             let conn = Connection::open(path)?;

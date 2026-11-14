@@ -95,8 +95,12 @@ impl AsnTsvDb {
                 continue;
             }
             let mut cols = line.split('\t');
-            let start_s = cols.next().ok_or_else(|| format!("line {}: missing start", line_no + 1))?;
-            let end_s = cols.next().ok_or_else(|| format!("line {}: missing end", line_no + 1))?;
+            let start_s = cols
+                .next()
+                .ok_or_else(|| format!("line {}: missing start", line_no + 1))?;
+            let end_s = cols
+                .next()
+                .ok_or_else(|| format!("line {}: missing end", line_no + 1))?;
             let asn_s = cols.next().unwrap_or("0");
             let asn: u32 = asn_s.parse().unwrap_or(0);
             if asn == 0 {
@@ -262,10 +266,7 @@ impl GeoIpEngine {
         GeoIpStatus {
             country_db_loaded: self.country_loaded(),
             asn_db_loaded: self.asn_loaded(),
-            country_db_path: self
-                .country_path
-                .as_ref()
-                .map(|p| p.display().to_string()),
+            country_db_path: self.country_path.as_ref().map(|p| p.display().to_string()),
             asn_db_path: self.asn_path.as_ref().map(|p| p.display().to_string()),
         }
     }
@@ -563,11 +564,7 @@ pub fn apply_annotations(
 
 /// Parse comma/space-separated country codes from an annotation or form field.
 pub fn parse_countries(raw: &str) -> Vec<String> {
-    normalize_countries(
-        raw.split([',', ' ', ';'])
-            .map(|s| s.to_string())
-            .collect(),
-    )
+    normalize_countries(raw.split([',', ' ', ';']).map(|s| s.to_string()).collect())
 }
 
 /// Parse comma/space-separated ASNs (`AS13335` or `13335`).

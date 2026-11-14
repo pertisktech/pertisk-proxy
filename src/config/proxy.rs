@@ -31,8 +31,7 @@ impl ProxyConfig {
             .map(|v| env_bool_parse(&v))
             .unwrap_or(false);
 
-        let env_tls_configured =
-            server.tls_cert_path.is_some() && server.tls_key_path.is_some();
+        let env_tls_configured = server.tls_cert_path.is_some() && server.tls_key_path.is_some();
 
         if (server.tls_cert_path.is_some() || server.tls_key_path.is_some()) && !env_tls_configured
         {

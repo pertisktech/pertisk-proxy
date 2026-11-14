@@ -63,10 +63,7 @@ impl CertStore {
     }
 
     pub fn host_count(&self) -> usize {
-        self.inner
-            .read()
-            .map(|g| g.by_host.len())
-            .unwrap_or(0)
+        self.inner.read().map(|g| g.by_host.len()).unwrap_or(0)
     }
 
     /// Load a global fallback certificate from environment variables.
@@ -95,8 +92,9 @@ impl CertStore {
 
             match &entry.source {
                 TlsSource::File { cert, key } => {
-                    validate_tls_pair(cert, key)
-                        .with_context(|| format!("invalid TLS file config for {:?}", entry.hosts))?;
+                    validate_tls_pair(cert, key).with_context(|| {
+                        format!("invalid TLS file config for {:?}", entry.hosts)
+                    })?;
                     validate::warn_host_cert_mismatch(cert, &entry.hosts)?;
                     let paths = CertPaths {
                         cert: cert.clone(),
@@ -147,11 +145,7 @@ impl CertStore {
 
     pub fn default_paths(&self) -> Option<CertPaths> {
         let g = self.inner.read().ok()?;
-        match g
-            .default
-            .as_ref()
-            .or_else(|| g.by_host.values().next())
-        {
+        match g.default.as_ref().or_else(|| g.by_host.values().next()) {
             Some(StoredCert::File(paths)) => Some(paths.clone()),
             _ => None,
         }
@@ -176,11 +170,7 @@ impl CertStore {
 
     /// Populate expected hosts from proxy sites + TLS config.
     pub fn set_expected_from_config(&self, config: &crate::proxy_config::Config) {
-        let mut hosts: Vec<String> = config
-            .sites
-            .iter()
-            .map(|s| s.host.clone())
-            .collect();
+        let mut hosts: Vec<String> = config.sites.iter().map(|s| s.host.clone()).collect();
         for tls in &config.tls {
             hosts.extend(tls.hosts.iter().cloned());
         }
@@ -307,8 +297,7 @@ impl CertStore {
     }
 
     pub fn get(&self, host: &str) -> Option<StoredCert> {
-        self.lookup_sni(host)
-            .or_else(|| self.default_cert())
+        self.lookup_sni(host).or_else(|| self.default_cert())
     }
 }
 
@@ -319,14 +308,17 @@ fn normalize_host(host: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rcgen::{CertificateParams, KeyPair};
     use crate::tls::config::{TlsConfig, TlsSource};
+    use rcgen::{CertificateParams, KeyPair};
 
     fn test_pem() -> (Vec<u8>, Vec<u8>) {
         let key_pair = KeyPair::generate().unwrap();
         let params = CertificateParams::new(vec!["example.com".to_string()]).unwrap();
         let cert = params.self_signed(&key_pair).unwrap();
-        (cert.pem().into_bytes(), key_pair.serialize_pem().into_bytes())
+        (
+            cert.pem().into_bytes(),
+            key_pair.serialize_pem().into_bytes(),
+        )
     }
 
     #[test]
@@ -383,14 +375,13 @@ mod tests {
     fn has_any_cert_reflects_loaded_material() {
         let store = CertStore::new();
         assert!(!store.has_any_cert());
-        store
-            .insert_paths_for_hosts(
-                &["any.example.com".into()],
-                CertPaths {
-                    cert: "/c.pem".into(),
-                    key: "/k.key".into(),
-                },
-            );
+        store.insert_paths_for_hosts(
+            &["any.example.com".into()],
+            CertPaths {
+                cert: "/c.pem".into(),
+                key: "/k.key".into(),
+            },
+        );
         assert!(store.has_any_cert());
     }
 
@@ -399,11 +390,7 @@ mod tests {
         let (cert, key) = test_pem();
         let store = CertStore::new();
         store
-            .insert_pem_in_memory_for_hosts(
-                &["mem.example.com".into()],
-                &cert,
-                &key,
-            )
+            .insert_pem_in_memory_for_hosts(&["mem.example.com".into()], &cert, &key)
             .unwrap();
         let stored = store.lookup_sni("mem.example.com").unwrap();
         let (c, k) = stored.read_pem().unwrap();
@@ -540,5 +527,126 @@ mod tests {
         assert!(store.expects_host("minio.apps.example.com"));
         assert!(!store.expects_host("minio.apps.socket9.com"));
         assert!(!store.expects_host("proxy.arm.example.com"));
+    }
+
+    #[test]
+    fn stored_file_read_pem_reports_missing_file() {
+        let stored = StoredCert::File(CertPaths {
+            cert: "/missing-cert.pem".into(),
+            key: "/missing-key.pem".into(),
+        });
+        assert!(stored.read_pem().is_err());
+    }
+
+    #[test]
+    fn global_fallback_does_not_replace_existing_default() {
+        let (cert, key) = test_pem();
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, &cert).unwrap();
+        std::fs::write(&key_path, &key).unwrap();
+
+        let store = CertStore::new();
+        store.insert_paths_for_hosts(
+            &["first.example.com".into()],
+            CertPaths {
+                cert: "/first.pem".into(),
+                key: "/first.key".into(),
+            },
+        );
+        store
+            .set_global_fallback(cert_path.clone(), key_path.clone())
+            .unwrap();
+
+        assert_eq!(
+            store.default_paths().unwrap().cert,
+            PathBuf::from("/first.pem")
+        );
+    }
+
+    #[test]
+    fn set_expected_from_config_uses_sites_and_tls_hosts() {
+        let store = CertStore::new();
+        let mut config = crate::proxy_config::Config::default();
+        config.sites.push(crate::proxy_config::Site {
+            host: "site.example.com".into(),
+            routes: vec![],
+            backend: "api".into(),
+            security_headers: None,
+            ingress_namespace: None,
+            ingress_name: None,
+            k8s_resource_kind: None,
+            http3_alt_svc_enabled: true,
+            forward_client_ip: true,
+            access_list_id: None,
+            waf_policy_id: None,
+            geoip: Default::default(),
+            security: Default::default(),
+        });
+        config.tls.push(TlsConfig {
+            hosts: vec!["*.tls.example.com".into()],
+            source: TlsSource::Kubernetes,
+            expires_at: None,
+        });
+
+        store.set_expected_from_config(&config);
+        assert!(store.expects_host("site.example.com:443"));
+        assert!(store.expects_host("api.tls.example.com"));
+        assert!(!store.expects_host(""));
+    }
+
+    #[test]
+    fn lookup_sni_prefers_longest_wildcard_suffix() {
+        let store = CertStore::new();
+        store.insert_paths_for_hosts(
+            &["*.example.com".into()],
+            CertPaths {
+                cert: "/short.pem".into(),
+                key: "/short.key".into(),
+            },
+        );
+        store.insert_paths_for_hosts(
+            &["*.apps.example.com".into()],
+            CertPaths {
+                cert: "/long.pem".into(),
+                key: "/long.key".into(),
+            },
+        );
+
+        assert_eq!(
+            store.lookup_sni("git.apps.example.com").unwrap(),
+            StoredCert::File(CertPaths {
+                cert: "/long.pem".into(),
+                key: "/long.key".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn reload_from_configs_rejects_invalid_file_tls() {
+        let store = CertStore::new();
+        let err = store
+            .reload_from_configs(&[TlsConfig {
+                hosts: vec!["bad.example.com".into()],
+                source: TlsSource::File {
+                    cert: "/nope-cert.pem".into(),
+                    key: "/nope-key.pem".into(),
+                },
+                expires_at: None,
+            }])
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("invalid TLS file config"));
+    }
+
+    #[test]
+    fn expects_host_returns_false_when_lock_poisoned() {
+        let store = CertStore::new();
+        store.set_expected_hosts(["ok.example.com"]);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = store.inner.write().unwrap();
+            panic!("poison cert store lock");
+        }));
+        assert!(!store.expects_host("ok.example.com"));
     }
 }
