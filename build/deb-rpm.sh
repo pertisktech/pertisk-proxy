@@ -6,6 +6,10 @@ cd /work
 IFS=' ' read -r -a BINS <<< "${PACKAGE_BINARIES}"
 
 for BINARY_NAME in "${BINS[@]}"; do
+  # Helper binary is shipped inside the pertisk-proxy package.
+  if [ "$BINARY_NAME" = "migrate-sqlite-to-scylla" ]; then
+    continue
+  fi
   fpm -s dir -t deb --force \
     -n "$BINARY_NAME" \
     -v "$VERSION" \

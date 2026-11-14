@@ -1,9 +1,20 @@
-//! SQLite persistence for sites config, certificates, DNS providers, and admin users.
+//! Admin config persistence: SQLite (default) or optional ScyllaDB / Cassandra.
 
 mod schema;
+#[cfg(feature = "scylla-db")]
+mod migrate;
+#[cfg(feature = "scylla-db")]
+mod scylla_backend;
+#[cfg(feature = "scylla-db")]
+mod scylla_schema;
+
+#[cfg(feature = "scylla-db")]
+pub use migrate::{migrate_sqlite_to_scylla, MigrateStats};
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+#[cfg(feature = "scylla-db")]
+use std::sync::Arc;
 
 use anyhow::Result;
 use bcrypt::{hash, DEFAULT_COST};
@@ -17,6 +28,8 @@ pub use schema::init_schema;
 
 pub const DEFAULT_ADMIN_USERNAME: &str = "admin";
 pub const DEFAULT_ADMIN_PASSWORD: &str = "admin";
+
+pub(crate) const PROXY_CONFIG_KEY: &str = "current";
 
 fn seed_admin_user(conn: &Connection) -> Result<()> {
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
@@ -38,8 +51,20 @@ fn seed_admin_user(conn: &Connection) -> Result<()> {
 }
 
 #[derive(Clone)]
+enum DbBackend {
+    Sqlite {
+        path: PathBuf,
+    },
+    #[cfg(feature = "scylla-db")]
+    Scylla {
+        session: Arc<::scylla::client::session::Session>,
+        data_dir: PathBuf,
+    },
+}
+
+#[derive(Clone)]
 pub struct Database {
-    path: PathBuf,
+    backend: DbBackend,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,9 +149,8 @@ pub struct S3SettingsUpdate {
     pub force_path_style: bool,
 }
 
-const PROXY_CONFIG_KEY: &str = "current";
-
 impl Database {
+    /// Open SQLite admin DB at `path` (legacy helper).
     pub fn open(path: PathBuf) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -134,11 +158,95 @@ impl Database {
         let conn = Connection::open(&path)?;
         init_schema(&conn)?;
         seed_admin_user(&conn)?;
-        Ok(Self { path })
+        Ok(Self {
+            backend: DbBackend::Sqlite { path },
+        })
+    }
+
+    /// Open admin DB from `PERTISK_DB_BACKEND` / Scylla / SQLite env.
+    pub async fn open_from_env() -> Result<Self> {
+        use crate::config::{resolve_db_backend, resolve_db_path, DbBackendKind, ScyllaDbConfig};
+
+        match resolve_db_backend() {
+            DbBackendKind::Sqlite => Self::open(resolve_db_path()),
+            #[cfg(feature = "scylla-db")]
+            DbBackendKind::Scylla => {
+                let cfg = ScyllaDbConfig::from_env();
+                let session = scylla_backend::connect(&cfg).await?;
+                let data_dir = crate::config::default_data_dir();
+                std::fs::create_dir_all(&data_dir)?;
+                // Sentinel path so `path().parent()` remains the data dir (certs/, etc.).
+                let sentinel = data_dir.join("proxy.scylla");
+                Ok(Self {
+                    backend: DbBackend::Scylla {
+                        session,
+                        data_dir: sentinel,
+                    },
+                })
+            }
+            #[cfg(not(feature = "scylla-db"))]
+            DbBackendKind::Scylla => {
+                anyhow::bail!(
+                    "PERTISK_DB_BACKEND=scylla but this binary was built without the scylla-db feature"
+                )
+            }
+        }
+    }
+
+    /// SQLite file path, or a sentinel under the Scylla data dir.
+    pub fn path(&self) -> &PathBuf {
+        match &self.backend {
+            DbBackend::Sqlite { path } => path,
+            #[cfg(feature = "scylla-db")]
+            DbBackend::Scylla { data_dir, .. } => data_dir,
+        }
+    }
+
+    /// Directory for on-disk artifacts (certs PEM files, etc.).
+    pub fn data_dir(&self) -> &Path {
+        match &self.backend {
+            DbBackend::Sqlite { path } => path.parent().unwrap_or_else(|| Path::new(".")),
+            #[cfg(feature = "scylla-db")]
+            DbBackend::Scylla { data_dir, .. } => {
+                data_dir.parent().unwrap_or_else(|| Path::new("."))
+            }
+        }
+    }
+
+    pub fn is_scylla(&self) -> bool {
+        match &self.backend {
+            DbBackend::Sqlite { .. } => false,
+            #[cfg(feature = "scylla-db")]
+            DbBackend::Scylla { .. } => true,
+        }
+    }
+
+    fn sqlite_path(&self) -> Result<PathBuf> {
+        match &self.backend {
+            DbBackend::Sqlite { path } => Ok(path.clone()),
+            #[cfg(feature = "scylla-db")]
+            DbBackend::Scylla { .. } => {
+                anyhow::bail!("internal: SQLite path requested on Scylla backend")
+            }
+        }
+    }
+
+    #[cfg(feature = "scylla-db")]
+    fn scylla_session(&self) -> Result<&::scylla::client::session::Session> {
+        match &self.backend {
+            DbBackend::Scylla { session, .. } => Ok(session.as_ref()),
+            DbBackend::Sqlite { .. } => {
+                anyhow::bail!("internal: Scylla session requested on SQLite backend")
+            }
+        }
     }
 
     pub async fn get_user_password_hash(&self, username: &str) -> Result<Option<String>> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::get_user_password_hash(self.scylla_session()?, username).await;
+        }
+        let path = self.sqlite_path()?;
         let username = username.to_string();
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
@@ -156,7 +264,12 @@ impl Database {
 
     /// Update password hash for an existing user. Returns false if the user does not exist.
     pub async fn update_user_password(&self, username: &str, new_password: &str) -> Result<bool> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::update_user_password(self.scylla_session()?, username, new_password)
+                .await;
+        }
+        let path = self.sqlite_path()?;
         let username = username.to_string();
         let password_hash = hash(new_password, DEFAULT_COST)?;
         spawn_blocking(move || {
@@ -176,7 +289,12 @@ impl Database {
         username: &str,
         expires_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<()> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::insert_session(self.scylla_session()?, token, username, expires_at)
+                .await;
+        }
+        let path = self.sqlite_path()?;
         let token = token.to_string();
         let username = username.to_string();
         let expires_at = expires_at.to_rfc3339();
@@ -196,7 +314,11 @@ impl Database {
         &self,
         token: &str,
     ) -> Result<Option<(String, chrono::DateTime<chrono::Utc>)>> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::get_session(self.scylla_session()?, token).await;
+        }
+        let path = self.sqlite_path()?;
         let token = token.to_string();
         let now = chrono::Utc::now().to_rfc3339();
         spawn_blocking(move || {
@@ -222,7 +344,11 @@ impl Database {
     pub async fn load_active_sessions(
         &self,
     ) -> Result<Vec<(String, String, chrono::DateTime<chrono::Utc>)>> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::load_active_sessions(self.scylla_session()?).await;
+        }
+        let path = self.sqlite_path()?;
         let now = chrono::Utc::now().to_rfc3339();
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
@@ -245,15 +371,14 @@ impl Database {
         .await?
     }
 
-    pub fn path(&self) -> &PathBuf {
-        &self.path
-    }
-
     pub async fn get_proxy_config(&self) -> Result<Option<crate::proxy_config::Config>> {
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::get_proxy_config(self.scylla_session()?).await;
+        }
         if let Some(json) = self.get_config_json(PROXY_CONFIG_KEY).await? {
             return Ok(Some(serde_json::from_str(&json)?));
         }
-        // Migrate legacy "sites" JSON blob from earlier admin iteration.
         if let Some(json) = self.get_config_json("sites").await? {
             if let Ok(cfg) = serde_json::from_str::<crate::proxy_config::Config>(&json) {
                 self.save_proxy_config(&cfg).await?;
@@ -264,12 +389,20 @@ impl Database {
     }
 
     pub async fn save_proxy_config(&self, config: &crate::proxy_config::Config) -> Result<()> {
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::save_proxy_config(self.scylla_session()?, config).await;
+        }
         let json = serde_json::to_string(config)?;
         self.save_config_json(PROXY_CONFIG_KEY, &json).await
     }
 
     pub async fn get_config_json(&self, key: &str) -> Result<Option<String>> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::get_config_json(self.scylla_session()?, key).await;
+        }
+        let path = self.sqlite_path()?;
         let key = key.to_string();
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
@@ -285,7 +418,11 @@ impl Database {
     }
 
     pub async fn save_config_json(&self, key: &str, value: &str) -> Result<()> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::save_config_json(self.scylla_session()?, key, value).await;
+        }
+        let path = self.sqlite_path()?;
         let key = key.to_string();
         let value = value.to_string();
         let updated_at = chrono::Utc::now().to_rfc3339();
@@ -323,7 +460,11 @@ impl Database {
     }
 
     pub async fn list_dns_providers(&self) -> Result<Vec<DnsProviderRow>> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::list_dns_providers(self.scylla_session()?).await;
+        }
+        let path = self.sqlite_path()?;
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
             let mut stmt = conn.prepare_cached(
@@ -346,7 +487,11 @@ impl Database {
     }
 
     pub async fn get_dns_provider(&self, id: &str) -> Result<Option<DnsProviderRow>> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::get_dns_provider(self.scylla_session()?, id).await;
+        }
+        let path = self.sqlite_path()?;
         let id = id.to_string();
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
@@ -376,8 +521,18 @@ impl Database {
         provider_type: String,
         credentials: Option<HashMap<String, String>>,
     ) -> Result<String> {
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::create_dns_provider(
+                self.scylla_session()?,
+                name,
+                provider_type,
+                credentials,
+            )
+            .await;
+        }
         let id = Uuid::new_v4().to_string();
-        let path = self.path.clone();
+        let path = self.sqlite_path()?;
         let cred_json = credentials
             .as_ref()
             .and_then(|c| serde_json::to_string(c).ok());
@@ -402,7 +557,18 @@ impl Database {
         provider_type: String,
         credentials: Option<HashMap<String, String>>,
     ) -> Result<bool> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::put_dns_provider(
+                self.scylla_session()?,
+                id,
+                name,
+                provider_type,
+                credentials,
+            )
+            .await;
+        }
+        let path = self.sqlite_path()?;
         let id = id.to_string();
         let cred_json = credentials
             .as_ref()
@@ -419,7 +585,11 @@ impl Database {
     }
 
     pub async fn delete_dns_provider(&self, id: &str) -> Result<bool> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::delete_dns_provider(self.scylla_session()?, id).await;
+        }
+        let path = self.sqlite_path()?;
         let id = id.to_string();
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
@@ -433,7 +603,11 @@ impl Database {
     }
 
     pub async fn list_certificates(&self) -> Result<Vec<CertificateRow>> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::list_certificates(self.scylla_session()?).await;
+        }
+        let path = self.sqlite_path()?;
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
             let mut stmt = conn.prepare_cached(
@@ -457,7 +631,8 @@ impl Database {
                 }
                 out.push(CertificateRow {
                     id,
-                    hosts: serde_json::from_str(row.get::<_, String>(1)?.as_str()).unwrap_or_default(),
+                    hosts: serde_json::from_str(row.get::<_, String>(1)?.as_str())
+                        .unwrap_or_default(),
                     source_type: row.get(2)?,
                     created_at: row.get(3)?,
                     expires_at,
@@ -471,7 +646,11 @@ impl Database {
     pub async fn get_all_certificates_for_store(
         &self,
     ) -> Result<Vec<(String, Vec<String>, Vec<u8>, Vec<u8>)>> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::get_all_certificates_for_store(self.scylla_session()?).await;
+        }
+        let path = self.sqlite_path()?;
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
             let mut stmt =
@@ -498,9 +677,20 @@ impl Database {
         key_pem: Vec<u8>,
         source_type: &str,
     ) -> Result<String> {
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::add_certificate(
+                self.scylla_session()?,
+                hosts,
+                cert_pem,
+                key_pem,
+                source_type,
+            )
+            .await;
+        }
         let expires_at = cert_expiry_from_pem(&cert_pem);
         let id = Uuid::new_v4().to_string();
-        let path = self.path.clone();
+        let path = self.sqlite_path()?;
         let hosts_json = serde_json::to_string(&hosts)?;
         let cert_str = String::from_utf8(cert_pem)?;
         let key_str = String::from_utf8(key_pem)?;
@@ -520,7 +710,11 @@ impl Database {
     }
 
     pub async fn delete_certificate(&self, id: &str) -> Result<bool> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::delete_certificate(self.scylla_session()?, id).await;
+        }
+        let path = self.sqlite_path()?;
         let id = id.to_string();
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
@@ -532,79 +726,13 @@ impl Database {
         })
         .await?
     }
-}
 
-/// Parse first certificate in PEM and return its not_after as RFC2822 string.
-pub fn cert_expiry_from_pem(pem: &[u8]) -> Option<String> {
-    use std::io::Cursor;
-    use x509_parser::pem::Pem;
-    use x509_parser::prelude::{FromDer, X509Certificate};
-    let mut reader = Cursor::new(pem);
-    let (pem, _) = Pem::read(&mut reader).ok()?;
-    let (_, cert) = X509Certificate::from_der(&pem.contents).ok()?;
-    cert.validity()
-        .not_after
-        .to_rfc2822()
-        .ok()
-        .map(|s| s.to_string())
-}
-
-/// Parse CN and DNS SAN names from the first certificate in PEM.
-pub fn cert_hosts_from_pem(pem: &[u8]) -> Vec<String> {
-    use std::collections::HashSet;
-    use std::io::Cursor;
-    use x509_parser::pem::Pem;
-    use x509_parser::prelude::{FromDer, GeneralName, X509Certificate};
-    let mut reader = Cursor::new(pem);
-    let (pem, _) = match Pem::read(&mut reader) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-    let (_, cert) = match X509Certificate::from_der(&pem.contents) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-    let mut hosts = HashSet::new();
-    for cn in cert
-        .subject()
-        .iter_common_name()
-        .flat_map(|cn| cn.as_str().ok())
-    {
-        let cn = cn.trim();
-        if !cn.is_empty() {
-            hosts.insert(cn.to_string());
-        }
-    }
-    if let Ok(Some(san)) = cert.subject_alternative_name() {
-        for name in san.value.general_names.iter() {
-            if let GeneralName::DNSName(dns) = name {
-                let host = dns.trim();
-                if !host.is_empty() {
-                    hosts.insert(host.to_string());
-                }
-            }
-        }
-    }
-    hosts.into_iter().collect()
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct CertValidity {
-    pub issued_at: Option<String>,
-    pub expires_at: Option<String>,
-}
-
-/// Parse first certificate in PEM and return issued/expiry timestamps.
-pub fn cert_validity_from_pem(cert_pem: &[u8]) -> CertValidity {
-    CertValidity {
-        issued_at: None,
-        expires_at: cert_expiry_from_pem(cert_pem),
-    }
-}
-
-impl Database {
     pub async fn get_smtp_settings(&self) -> Result<SmtpSettingsRow> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::get_smtp_settings(self.scylla_session()?).await;
+        }
+        let path = self.sqlite_path()?;
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
             conn.query_row(
@@ -640,7 +768,11 @@ impl Database {
         &self,
         update: SmtpSettingsUpdate,
     ) -> Result<SmtpSettingsRow> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::update_smtp_settings(self.scylla_session()?, update).await;
+        }
+        let path = self.sqlite_path()?;
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
             let updated_at = chrono::Utc::now().to_rfc3339();
@@ -725,7 +857,11 @@ impl Database {
     }
 
     pub async fn get_s3_settings(&self) -> Result<S3SettingsRow> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::get_s3_settings(self.scylla_session()?).await;
+        }
+        let path = self.sqlite_path()?;
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
             conn.query_row(
@@ -753,7 +889,11 @@ impl Database {
     }
 
     pub async fn update_s3_settings(&self, update: S3SettingsUpdate) -> Result<S3SettingsRow> {
-        let path = self.path.clone();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            return scylla_backend::update_s3_settings(self.scylla_session()?, update).await;
+        }
+        let path = self.sqlite_path()?;
         spawn_blocking(move || {
             let conn = Connection::open(path)?;
             let updated_at = chrono::Utc::now().to_rfc3339();
@@ -819,5 +959,73 @@ impl Database {
             .map_err(Into::into)
         })
         .await?
+    }
+}
+
+/// Parse first certificate in PEM and return its not_after as RFC2822 string.
+pub fn cert_expiry_from_pem(pem: &[u8]) -> Option<String> {
+    use std::io::Cursor;
+    use x509_parser::pem::Pem;
+    use x509_parser::prelude::{FromDer, X509Certificate};
+    let mut reader = Cursor::new(pem);
+    let (pem, _) = Pem::read(&mut reader).ok()?;
+    let (_, cert) = X509Certificate::from_der(&pem.contents).ok()?;
+    cert.validity()
+        .not_after
+        .to_rfc2822()
+        .ok()
+        .map(|s| s.to_string())
+}
+
+/// Parse CN and DNS SAN names from the first certificate in PEM.
+pub fn cert_hosts_from_pem(pem: &[u8]) -> Vec<String> {
+    use std::collections::HashSet;
+    use std::io::Cursor;
+    use x509_parser::pem::Pem;
+    use x509_parser::prelude::{FromDer, GeneralName, X509Certificate};
+    let mut reader = Cursor::new(pem);
+    let (pem, _) = match Pem::read(&mut reader) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let (_, cert) = match X509Certificate::from_der(&pem.contents) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let mut hosts = HashSet::new();
+    for cn in cert
+        .subject()
+        .iter_common_name()
+        .flat_map(|cn| cn.as_str().ok())
+    {
+        let cn = cn.trim();
+        if !cn.is_empty() {
+            hosts.insert(cn.to_string());
+        }
+    }
+    if let Ok(Some(san)) = cert.subject_alternative_name() {
+        for name in san.value.general_names.iter() {
+            if let GeneralName::DNSName(dns) = name {
+                let host = dns.trim();
+                if !host.is_empty() {
+                    hosts.insert(host.to_string());
+                }
+            }
+        }
+    }
+    hosts.into_iter().collect()
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CertValidity {
+    pub issued_at: Option<String>,
+    pub expires_at: Option<String>,
+}
+
+/// Parse first certificate in PEM and return issued/expiry timestamps.
+pub fn cert_validity_from_pem(cert_pem: &[u8]) -> CertValidity {
+    CertValidity {
+        issued_at: None,
+        expires_at: cert_expiry_from_pem(cert_pem),
     }
 }

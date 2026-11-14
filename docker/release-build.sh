@@ -31,10 +31,14 @@ build_one() {
 }
 
 case "${PACKAGE_TARGET:-all}" in
-  proxy) build_one pertisk-proxy ;;
+  proxy)
+    build_one pertisk-proxy
+    build_one migrate-sqlite-to-scylla
+    ;;
   ingress) build_one pertisk-proxy-ingress ingress ;;
   *)
     build_one pertisk-proxy
+    build_one migrate-sqlite-to-scylla
     build_one pertisk-proxy-ingress ingress
     ;;
 esac

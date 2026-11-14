@@ -26,9 +26,9 @@ case "$ARCH" in
 esac
 
 case "$TARGET" in
-  proxy) PACKAGE_BINARIES=(pertisk-proxy) ;;
+  proxy) PACKAGE_BINARIES=(pertisk-proxy migrate-sqlite-to-scylla) ;;
   ingress) PACKAGE_BINARIES=(pertisk-proxy-ingress) ;;
-  all|*) PACKAGE_BINARIES=(pertisk-proxy pertisk-proxy-ingress) ;;
+  all|*) PACKAGE_BINARIES=(pertisk-proxy migrate-sqlite-to-scylla pertisk-proxy-ingress) ;;
 esac
 
 needs_admin=0
@@ -204,6 +204,7 @@ if [ "$need_rebuild" -eq 1 ]; then
         if [ ! -f "$artifact" ]; then
           case "$bin" in
             pertisk-proxy-ingress) build_native "$bin" ingress ;;
+            migrate-sqlite-to-scylla) build_native "$bin" ;;
             *) build_native "$bin" ;;
           esac
           echo "$VERSION" > "$version_stamp"
@@ -455,6 +456,14 @@ for bin in "${PACKAGE_BINARIES[@]}"; do
   case "$bin" in
     pertisk-proxy)
       make_pkg_layout pertisk-proxy build/pertisk-proxy.service build/pertisk-proxy.conf
+      if [ -f "migrate-sqlite-to-scylla-linux-${ARCH}" ]; then
+        cp "migrate-sqlite-to-scylla-linux-${ARCH}" \
+          "pkg-pertisk-proxy/usr/bin/migrate-sqlite-to-scylla"
+        chmod 0755 "pkg-pertisk-proxy/usr/bin/migrate-sqlite-to-scylla"
+      fi
+      ;;
+    migrate-sqlite-to-scylla)
+      # Shipped inside the pertisk-proxy package (see above).
       ;;
     pertisk-proxy-ingress)
       make_pkg_layout pertisk-proxy-ingress build/pertisk-proxy-ingress.service build/pertisk-proxy-ingress.conf
@@ -464,6 +473,7 @@ done
 
 if command -v xattr >/dev/null 2>&1; then
   for bin in "${PACKAGE_BINARIES[@]}"; do
+    [ "$bin" = "migrate-sqlite-to-scylla" ] && continue
     xattr -cr "pkg-${bin}" 2>/dev/null || true
   done
 fi
@@ -496,6 +506,7 @@ else
 
   if [ -n "$FPM_CMD" ]; then
     for bin in "${PACKAGE_BINARIES[@]}"; do
+      [ "$bin" = "migrate-sqlite-to-scylla" ] && continue
       $FPM_CMD -s dir -t deb --force \
         -n "$bin" -v "$VERSION" -a "$deb_arch" \
         --description "pertisk-proxy ($bin)" \
@@ -530,6 +541,7 @@ else
 fi
 
 for bin in "${PACKAGE_BINARIES[@]}"; do
+  [ "$bin" = "migrate-sqlite-to-scylla" ] && continue
   tar -czvf "$RELEASE_DIR/${bin}-v${VERSION}-linux-${ARCH}.tar.gz" \
     -C "pkg-${bin}" usr etc var lib 2>/dev/null || \
   tar -czvf "$RELEASE_DIR/${bin}-v${VERSION}-linux-${ARCH}.tar.gz" \

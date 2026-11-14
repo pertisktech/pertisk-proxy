@@ -1,6 +1,7 @@
 //! pertisk-proxy — standalone reverse proxy (proxy mode).
 //!
-//! Configuration and certificates are stored in SQLite (`PERTISK_DB_PATH`).
+//! Admin config DB defaults to SQLite (`PERTISK_DB_PATH`).
+//! Set `PERTISK_DB_BACKEND=scylla` for ScyllaDB / Cassandra (`PERTISK_SCYLLA_*`).
 //! Admin UI is the primary way to add sites, import certificates, and configure DNS providers.
 //! For Kubernetes Ingress control, use the `pertisk-proxy-ingress` binary.
 
@@ -33,24 +34,28 @@ fn main() -> Result<()> {
 
     // Apply DB-backed runtime env overrides before building the Tokio runtime.
     // Process environment always wins over stored overrides.
-    let db_path_early = pertisk_proxy::config::resolve_db_path();
-    match pertisk_proxy::runtime_env::load_overrides_from_db_path(&db_path_early) {
-        Ok(overrides) => {
-            let applied = pertisk_proxy::runtime_env::apply_overrides(&overrides);
-            if applied > 0 {
-                info!(
-                    applied,
-                    total = overrides.len(),
-                    "applied runtime env overrides from SQLite"
+    // SQLite only: Scylla overrides are applied after async DB open below.
+    let backend = pertisk_proxy::config::resolve_db_backend();
+    if backend == pertisk_proxy::config::DbBackendKind::Sqlite {
+        let db_path_early = pertisk_proxy::config::resolve_db_path();
+        match pertisk_proxy::runtime_env::load_overrides_from_db_path(&db_path_early) {
+            Ok(overrides) => {
+                let applied = pertisk_proxy::runtime_env::apply_overrides(&overrides);
+                if applied > 0 {
+                    info!(
+                        applied,
+                        total = overrides.len(),
+                        "applied runtime env overrides from SQLite"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    db = %db_path_early.display(),
+                    "failed to load runtime env overrides; continuing with process env only"
                 );
             }
-        }
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-                db = %db_path_early.display(),
-                "failed to load runtime env overrides; continuing with process env only"
-            );
         }
     }
 
@@ -62,13 +67,34 @@ fn main() -> Result<()> {
     info!(
         binary = "pertisk-proxy",
         mode = "proxy",
+        db_backend = backend.as_str(),
         db = %proxy_env.db_path.display(),
         requested_runtime = runtime_cfg.requested_mode.as_str(),
         resolved_runtime = runtime_cfg.resolved_mode.as_str(),
         "starting pertisk-proxy"
     );
 
-    let db = Arc::new(Database::open(proxy_env.db_path.clone())?);
+    let db = Arc::new(tokio_runtime.block_on(Database::open_from_env())?);
+    if db.is_scylla() {
+        match tokio_runtime.block_on(db.get_runtime_env_overrides()) {
+            Ok(overrides) => {
+                let applied = pertisk_proxy::runtime_env::apply_overrides(&overrides);
+                if applied > 0 {
+                    info!(
+                        applied,
+                        total = overrides.len(),
+                        "applied runtime env overrides from ScyllaDB"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "failed to load runtime env overrides from ScyllaDB; continuing with process env only"
+                );
+            }
+        }
+    }
     let certs_dir = pertisk_proxy::api::certs_dir_for_db(db.path());
 
     let mut runtime_config = tokio_runtime.block_on(async {

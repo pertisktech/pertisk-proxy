@@ -7,6 +7,7 @@
 # Optional env:
 #   INSTALL_PERTISK_VERSION=0.1.87     pin a release (with or without leading v)
 #   INSTALL_PERTISK_TYPE=deb|rpm|tar   skip distro detection
+#   INSTALL_PERTISK_DB=sqlite|scylla   admin config DB (default sqlite; scylla installs native ScyllaDB)
 #   INSTALL_PERTISK_SKIP_START=1       install only, do not start systemd
 #   INSTALL_PERTISK_SKIP_ENABLE=1      start now but do not enable on boot
 #   INSTALL_PERTISK_REPO=org/repo      default pertisktech/pertisk-proxy
@@ -18,10 +19,19 @@ REPO="${INSTALL_PERTISK_REPO:-pertisktech/pertisk-proxy}"
 GITHUB_BASE="${INSTALL_PERTISK_GITHUB:-https://github.com/${REPO}}"
 BIN="pertisk-proxy"
 UNIT="${BIN}.service"
+# Pinned ScyllaDB open-source series for apt/yum repos.
+SCYLLA_SERIES="${INSTALL_PERTISK_SCYLLA_SERIES:-6.2}"
 
 info() { printf '[INFO]  %s\n' "$*"; }
 warn() { printf '[WARN]  %s\n' "$*" >&2; }
 fatal() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+
+ADMIN_DB="$(printf '%s' "${INSTALL_PERTISK_DB:-sqlite}" | tr '[:upper:]' '[:lower:]')"
+case "$ADMIN_DB" in
+  ""|sqlite|rusqlite) ADMIN_DB="sqlite" ;;
+  scylla|scylladb|cassandra) ADMIN_DB="scylla" ;;
+  *) fatal "INSTALL_PERTISK_DB must be sqlite or scylla (got ${INSTALL_PERTISK_DB})" ;;
+esac
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fatal "missing required command: $1"
@@ -266,12 +276,46 @@ install_tar() {
     fi
     rm -rf "${_extract}"
   fi
-  if [ ! -f /etc/pertisk-proxy/${BIN}.conf ] || [ "${INSTALL_PERTISK_DRY_RUN:-}" = "1" ]; then
-    info "writing /etc/pertisk-proxy/${BIN}.conf"
-    if [ "${INSTALL_PERTISK_DRY_RUN:-}" != "1" ]; then
-      _conf="$(mktemp)"
-      cat > "${_conf}" <<'CONF'
+  write_proxy_conf
+  write_proxy_unit
+  run chown -R pertisk-proxy:pertisk-proxy /var/lib/pertisk-proxy /var/log/pertisk-proxy || true
+  if command -v setcap >/dev/null 2>&1; then
+    run setcap 'cap_net_bind_service=+ep' "/usr/bin/${BIN}" || warn "setcap failed; systemd AmbientCapabilities still apply"
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    run systemctl daemon-reload
+  fi
+}
+
+write_proxy_conf() {
+  _conf_path="/etc/pertisk-proxy/${BIN}.conf"
+  if [ -f "${_conf_path}" ] && [ "${INSTALL_PERTISK_DRY_RUN:-}" != "1" ] && [ "${ADMIN_DB}" = "sqlite" ]; then
+    info "keeping existing ${_conf_path}"
+    return 0
+  fi
+  info "writing ${_conf_path} (admin DB=${ADMIN_DB})"
+  if [ "${INSTALL_PERTISK_DRY_RUN:-}" = "1" ]; then
+    return 0
+  fi
+  _conf="$(mktemp)"
+  if [ "${ADMIN_DB}" = "scylla" ]; then
+    cat > "${_conf}" <<'CONF'
+# pertisk-proxy (proxy mode) — ScyllaDB admin config backend
+PERTISK_DB_BACKEND=scylla
+PERTISK_SCYLLA_HOSTS=127.0.0.1:9042
+PERTISK_SCYLLA_KEYSPACE=pertisk_proxy
+LISTEN_HTTP=[::]:80
+LISTEN_HTTPS=[::]:443
+LISTEN_H3_UDP=[::]:443
+ENABLE_H3=true
+PERTISK_MANAGEMENT_ADDR=127.0.0.1:9080
+PERTISK_PROXY_MODE=auto
+PERTISK_LOG_LEVEL=info
+CONF
+  else
+    cat > "${_conf}" <<'CONF'
 # pertisk-proxy (proxy mode)
+PERTISK_DB_BACKEND=sqlite
 PERTISK_DB_PATH=/var/lib/pertisk-proxy/proxy.sqlite
 LISTEN_HTTP=[::]:80
 LISTEN_HTTPS=[::]:443
@@ -281,13 +325,51 @@ PERTISK_MANAGEMENT_ADDR=127.0.0.1:9080
 PERTISK_PROXY_MODE=auto
 PERTISK_LOG_LEVEL=info
 CONF
-      run cp "${_conf}" /etc/pertisk-proxy/${BIN}.conf
-      rm -f "${_conf}"
-    fi
   fi
+  run cp "${_conf}" "${_conf_path}"
+  rm -f "${_conf}"
+}
+
+write_proxy_unit() {
   info "writing systemd unit ${UNIT}"
-  if [ "${INSTALL_PERTISK_DRY_RUN:-}" != "1" ]; then
-    _unit="$(mktemp)"
+  if [ "${INSTALL_PERTISK_DRY_RUN:-}" = "1" ]; then
+    return 0
+  fi
+  _unit="$(mktemp)"
+  if [ "${ADMIN_DB}" = "scylla" ]; then
+    cat > "${_unit}" <<'UNIT'
+[Unit]
+Description=pertisk-proxy reverse proxy
+After=network.target
+After=network-online.target
+Wants=network-online.target
+After=scylla-server.service
+Wants=scylla-server.service
+
+[Service]
+Type=simple
+User=pertisk-proxy
+Group=pertisk-proxy
+WorkingDirectory=/var/lib/pertisk-proxy
+EnvironmentFile=-/etc/pertisk-proxy/pertisk-proxy.conf
+ExecStart=/usr/bin/pertisk-proxy
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=1048576
+TasksMax=infinity
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/pertisk-proxy /var/log/pertisk-proxy
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  else
     cat > "${_unit}" <<'UNIT'
 [Unit]
 Description=pertisk-proxy reverse proxy
@@ -318,15 +400,96 @@ NoNewPrivileges=true
 [Install]
 WantedBy=multi-user.target
 UNIT
-    run cp "${_unit}" /lib/systemd/system/${UNIT}
-    rm -f "${_unit}"
   fi
-  run chown -R pertisk-proxy:pertisk-proxy /var/lib/pertisk-proxy /var/log/pertisk-proxy || true
-  if command -v setcap >/dev/null 2>&1; then
-    run setcap 'cap_net_bind_service=+ep' "/usr/bin/${BIN}" || warn "setcap failed; systemd AmbientCapabilities still apply"
+  run cp "${_unit}" /lib/systemd/system/${UNIT}
+  rm -f "${_unit}"
+}
+
+# Install native ScyllaDB packages from official apt/yum repos (same-host admin DB).
+install_scylladb() {
+  if [ "${ADMIN_DB}" != "scylla" ]; then
+    return 0
   fi
+  info "INSTALL_PERTISK_DB=scylla: installing native ScyllaDB ${SCYLLA_SERIES}"
+
+  if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+  else
+    ID=""
+  fi
+
+  case "${ID:-}" in
+    debian|ubuntu)
+      need_cmd apt-get
+      run apt-get update -qq || true
+      run apt-get install -y curl gnupg apt-transport-https ca-certificates
+      run mkdir -p /etc/apt/keyrings
+      if [ "${INSTALL_PERTISK_DRY_RUN:-}" != "1" ]; then
+        curl -fsSL "https://downloads.scylladb.com/downloads/scylla/deb/debian/scylladb-${SCYLLA_SERIES}/dsa_key.pub" \
+          | gpg --dearmor | ${SUDO} tee /etc/apt/keyrings/scylladb.gpg >/dev/null
+        printf 'deb [signed-by=/etc/apt/keyrings/scylladb.gpg] https://downloads.scylladb.com/downloads/scylla/deb/debian/scylladb-%s stable main\n' \
+          "${SCYLLA_SERIES}" | ${SUDO} tee /etc/apt/sources.list.d/scylla.list >/dev/null
+      else
+        printf '[DRY]   add Scylla apt repo scylladb-%s\n' "${SCYLLA_SERIES}"
+      fi
+      run apt-get update -qq
+      run apt-get install -y scylla
+      ;;
+    rhel|centos|rocky|almalinux|fedora|amzn)
+      _mgr=""
+      if command -v dnf >/dev/null 2>&1; then
+        _mgr=dnf
+      elif command -v yum >/dev/null 2>&1; then
+        _mgr=yum
+      else
+        fatal "need dnf or yum to install ScyllaDB on ${ID}"
+      fi
+      if [ "${INSTALL_PERTISK_DRY_RUN:-}" != "1" ]; then
+        curl -fsSL "https://downloads.scylladb.com/rpm/centos/scylladb-${SCYLLA_SERIES}.repo" \
+          | ${SUDO} tee /etc/yum.repos.d/scylla.repo >/dev/null
+      else
+        printf '[DRY]   add Scylla yum repo scylladb-%s\n' "${SCYLLA_SERIES}"
+      fi
+      run "${_mgr}" install -y scylla
+      ;;
+    *)
+      fatal "INSTALL_PERTISK_DB=scylla: unsupported distro '${ID:-unknown}' (need Debian/Ubuntu or RHEL-like)"
+      ;;
+  esac
+
+  # Developer / single-node defaults suitable for same-host admin DB.
+  if [ "${INSTALL_PERTISK_DRY_RUN:-}" != "1" ] && [ -f /etc/scylla/scylla.yaml ]; then
+    if ! grep -q '^developer_mode:' /etc/scylla/scylla.yaml 2>/dev/null; then
+      info "enabling Scylla developer_mode for single-node admin DB"
+      printf '\ndeveloper_mode: true\n' | ${SUDO} tee -a /etc/scylla/scylla.yaml >/dev/null
+    fi
+  fi
+  if command -v scylla_setup >/dev/null 2>&1; then
+    info "running scylla_setup (non-interactive / developer-mode)"
+    run scylla_setup --no-raid-setup --no-ec2-check --no-kernel-check \
+      --no-verify-package --no-enable-service --no-selinux-setup \
+      --no-bootparam-setup --no-ntp-setup --no-coredump-setup \
+      --no-sysconfig-setup --no-io-setup --no-version-check \
+      --developer-mode 1 || warn "scylla_setup returned non-zero; continuing"
+  fi
+
   if command -v systemctl >/dev/null 2>&1; then
-    run systemctl daemon-reload
+    run systemctl enable scylla-server || true
+    run systemctl start scylla-server || warn "scylla-server failed to start; check journalctl -u scylla-server"
+  fi
+}
+
+# For deb/rpm installs: ensure conf/unit reflect ADMIN_DB (packages ship SQLite defaults).
+configure_admin_db_after_pkg() {
+  if [ "${ADMIN_DB}" = "scylla" ]; then
+    write_proxy_conf
+    write_proxy_unit
+    if command -v systemctl >/dev/null 2>&1; then
+      run systemctl daemon-reload
+    fi
+  elif [ ! -f "/etc/pertisk-proxy/${BIN}.conf" ]; then
+    write_proxy_conf
   fi
 }
 
@@ -359,12 +522,18 @@ start_service() {
 
 print_next_steps() {
   _ver="${TAG#v}"
+  if [ "${ADMIN_DB}" = "scylla" ]; then
+    _db_line="Admin DB:   ScyllaDB (PERTISK_DB_BACKEND=scylla, keyspace pertisk_proxy)"
+  else
+    _db_line="Admin DB:   SQLite (/var/lib/pertisk-proxy/proxy.sqlite)"
+  fi
   cat <<EOF
 
 pertisk-proxy ${_ver} is installed.
 
   Admin UI:   http://127.0.0.1:9080   (login admin / admin — change this)
   Config:     /etc/pertisk-proxy/${BIN}.conf
+  ${_db_line}
   Data:       /var/lib/pertisk-proxy
   Status:     ${SUDO:+sudo }systemctl status ${BIN}
   Logs:       ${SUDO:+sudo }journalctl -u ${BIN} -f
@@ -421,6 +590,11 @@ case "$PKG_TYPE" in
   deb) install_deb "${_asset}" ;;
   rpm) install_rpm "${_asset}" ;;
   tar) install_tar "${_asset}" ;;
+esac
+
+install_scylladb
+case "$PKG_TYPE" in
+  deb|rpm) configure_admin_db_after_pkg ;;
 esac
 
 start_service

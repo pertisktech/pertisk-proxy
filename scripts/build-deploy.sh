@@ -13,6 +13,8 @@ cd "$REPO_ROOT"
 export VERSION="${VERSION:-$(git describe --tags --always 2>/dev/null | sed 's/^v//' || echo '0.1.0')}"
 DEPLOY_HOST="${DEPLOY_HOST:?Set DEPLOY_HOST, e.g. user@proxy.example.com}"
 export DEPLOY_HOST
+# Set MIGRATE_TO_SCYLLA=1 to migrate SQLite admin DB → Scylla after RPM install.
+export MIGRATE_TO_SCYLLA="${MIGRATE_TO_SCYLLA:-0}"
 
 if [[ "$(id -u)" -eq 0 ]]; then
   make fix-perms

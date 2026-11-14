@@ -14,13 +14,15 @@ cd "$REPO_ROOT"
 export VERSION="${VERSION:-$(git describe --tags --always 2>/dev/null | sed 's/^v//' || echo '0.1.0')}"
 export PACKAGE_BUILD="${PACKAGE_BUILD:-0}"
 export PACKAGE_CLEAN="${PACKAGE_CLEAN:-0}"
+export MIGRATE_TO_SCYLLA="${MIGRATE_TO_SCYLLA:-0}"
 
 DEPLOY_HOST="${DEPLOY_HOST:?Set DEPLOY_HOST, e.g. user@proxy.example.com}"
 
 deploy() {
-  make "$@" VERSION="$VERSION" PACKAGE_BUILD="$PACKAGE_BUILD" PACKAGE_CLEAN="$PACKAGE_CLEAN"
+  make "$@" VERSION="$VERSION" PACKAGE_BUILD="$PACKAGE_BUILD" PACKAGE_CLEAN="$PACKAGE_CLEAN" \
+    MIGRATE_TO_SCYLLA="$MIGRATE_TO_SCYLLA"
 }
 
-echo "==> Deploying v${VERSION} to ${DEPLOY_HOST} (PACKAGE_BUILD=${PACKAGE_BUILD})"
+echo "==> Deploying v${VERSION} to ${DEPLOY_HOST} (PACKAGE_BUILD=${PACKAGE_BUILD} MIGRATE_TO_SCYLLA=${MIGRATE_TO_SCYLLA})"
 deploy deploy-rpm DEPLOY_HOST="${DEPLOY_HOST}"
 echo "==> Deploy complete."

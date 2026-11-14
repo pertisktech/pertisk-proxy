@@ -1,8 +1,13 @@
 //! DB-backed runtime environment overrides (admin UI).
 //!
 //! Process environment always wins over stored overrides. Overrides are applied
-//! at process start (before the Tokio runtime is built) and require a restart
-//! to take effect after saving from the admin UI.
+//! at process start and require a restart to take effect after saving from the
+//! admin UI.
+//!
+//! SQLite: [`load_overrides_from_db_path`] runs before the Tokio runtime (sync).
+//! ScyllaDB: set env/Helm for bootstrap values, or load via
+//! [`crate::db::Database::get_runtime_env_overrides`] after async DB open
+//! (see `main` / ingress).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -181,8 +186,9 @@ pub fn apply_overrides(overrides: &HashMap<String, String>) -> usize {
     applied
 }
 
-/// Load overrides from SQLite if the DB file already exists.
+/// Load overrides from a SQLite admin DB if the file already exists.
 /// Returns an empty map when the DB is missing or the key is unset.
+/// Not used for ScyllaDB — see module docs.
 #[cfg(feature = "admin")]
 pub fn load_overrides_from_db_path(path: &Path) -> anyhow::Result<HashMap<String, String>> {
     if !path.exists() {

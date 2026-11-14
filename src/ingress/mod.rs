@@ -132,24 +132,36 @@ pub fn run() -> anyhow::Result<()> {
         .unwrap_or_else(|_| std::env::temp_dir().join("pertisk-proxy-certs"));
     std::fs::create_dir_all(&certs_dir).ok();
 
-    // Ingress mode: routes/TLS come from Kubernetes. SQLite is optional (only if
-    // PERTISK_DB_PATH is set explicitly for Access Control / WAF named policies).
-    let db = if std::env::var_os("PERTISK_DB_PATH").is_none() {
-        info!("ingress mode: SQLite disabled (set PERTISK_DB_PATH to enable named policies)");
+    // Ingress mode: routes/TLS come from Kubernetes. Admin DB is optional
+    // (PERTISK_DB_PATH for SQLite, or PERTISK_DB_BACKEND=scylla) for named policies.
+    let want_db = std::env::var_os("PERTISK_DB_PATH").is_some()
+        || matches!(
+            crate::config::resolve_db_backend(),
+            crate::config::DbBackendKind::Scylla
+        );
+    let db = if !want_db {
+        info!(
+            "ingress mode: admin DB disabled (set PERTISK_DB_PATH or PERTISK_DB_BACKEND=scylla for named policies)"
+        );
         None
     } else {
-        match crate::db::Database::open(api::resolve_db_path()) {
+        match tokio_runtime.block_on(crate::db::Database::open_from_env()) {
             Ok(database) => {
                 info!(
+                    backend = if database.is_scylla() {
+                        "scylla"
+                    } else {
+                        "sqlite"
+                    },
                     path = %database.path().display(),
-                    "opened SQLite for Access Control / WAF policies"
+                    "opened admin DB for Access Control / WAF policies"
                 );
                 Some(Arc::new(database))
             }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    "PERTISK_DB_PATH set but SQLite unavailable; named policies disabled"
+                    "admin DB requested but unavailable; named policies disabled"
                 );
                 None
             }

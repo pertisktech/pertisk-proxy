@@ -51,6 +51,7 @@ PACKAGE_NAME ?= pertisk-proxy
 REMOTE_PATH ?= /tmp
 PACKAGE_CLEAN ?= 1
 PACKAGE_BUILD ?= 1
+MIGRATE_TO_SCYLLA ?= 0
 
 build:
 	$(CARGO) build --release --bin pertisk-proxy --features admin
@@ -413,7 +414,7 @@ deploy-rpm:
 		VERSION="$(VERSION)" PACKAGE_NAME="$(PACKAGE_NAME)" \
 		REMOTE_PATH="$(REMOTE_PATH)" PACKAGE_CLEAN="$(PACKAGE_CLEAN)" \
 		PACKAGE_BUILD="$(PACKAGE_BUILD)" DEPLOY_ARCH="$(DEPLOY_ARCH)" \
-		DEPLOY_SSH_OPTS="$(DEPLOY_SSH_OPTS)" \
+		DEPLOY_SSH_OPTS="$(DEPLOY_SSH_OPTS)" MIGRATE_TO_SCYLLA="$(MIGRATE_TO_SCYLLA)" \
 		./build/deploy-rpm.sh
 
 deploy-rpm-ingress:

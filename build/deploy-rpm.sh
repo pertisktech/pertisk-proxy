@@ -118,15 +118,24 @@ if [[ ! -f "release/${RPM_FILE}" ]]; then
   fi
 fi
 
+MIGRATE_TO_SCYLLA="${MIGRATE_TO_SCYLLA:-0}"
+
 log_info "Copying package to ${REMOTE_USER}@${REMOTE_HOST}..."
 # shellcheck disable=SC2086
 scp $DEPLOY_SSH_OPTS "release/${RPM_FILE}" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}/"
+if [ "$MIGRATE_TO_SCYLLA" = "1" ] && [ "$PACKAGE_NAME" = "pertisk-proxy" ]; then
+  log_info "Copying switch-to-scylla.sh (MIGRATE_TO_SCYLLA=1)..."
+  # shellcheck disable=SC2086
+  scp $DEPLOY_SSH_OPTS "${ROOT_DIR}/scripts/switch-to-scylla.sh" \
+    "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}/switch-to-scylla.sh"
+fi
 
 log_info "Installing package on remote server..."
 # shellcheck disable=SC2086
 ssh $DEPLOY_SSH_OPTS "${REMOTE_USER}@${REMOTE_HOST}" <<EOF
 set -euo pipefail
 PKG_PATH="${REMOTE_PATH}/${RPM_FILE}"
+MIGRATE_TO_SCYLLA="${MIGRATE_TO_SCYLLA}"
 
 if command -v dnf >/dev/null 2>&1; then
   sudo dnf install -y "\${PKG_PATH}"
@@ -147,6 +156,16 @@ Environment=PERTISK_PROXY_MODE=auto
 DROPIN
   sudo systemctl daemon-reload
   sudo systemctl restart "${PACKAGE_NAME}"
+fi
+
+if [ "${PACKAGE_NAME}" = "pertisk-proxy" ] && [ "\${MIGRATE_TO_SCYLLA}" = "1" ]; then
+  echo "MIGRATE_TO_SCYLLA=1: switching admin DB SQLite → Scylla"
+  chmod +x "${REMOTE_PATH}/switch-to-scylla.sh"
+  if [ ! -x /usr/bin/migrate-sqlite-to-scylla ]; then
+    echo "migrate-sqlite-to-scylla missing from package" >&2
+    exit 1
+  fi
+  sudo bash "${REMOTE_PATH}/switch-to-scylla.sh"
 fi
 
 sudo systemctl is-active --quiet "${PACKAGE_NAME}"

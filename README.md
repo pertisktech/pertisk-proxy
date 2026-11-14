@@ -43,6 +43,14 @@ curl -sfL https://github.com/pertisktech/pertisk-proxy/releases/latest/download/
 
 Optional: `INSTALL_PERTISK_VERSION=0.1.87` pins a release. `INSTALL_PERTISK_SKIP_START=1` installs without starting systemd. Default admin login is `admin` / `admin`.
 
+Admin config DB defaults to **SQLite**. To install native ScyllaDB on the same host and point the proxy at it:
+
+```bash
+curl -sfL https://github.com/pertisktech/pertisk-proxy/releases/latest/download/get.sh | INSTALL_PERTISK_DB=scylla sh -
+```
+
+`INSTALL_PERTISK_DB=sqlite` (or unset) keeps the SQLite file under `/var/lib/pertisk-proxy/`. `INSTALL_PERTISK_DB=scylla` adds the Scylla apt/yum repo, installs `scylla`, enables `scylla-server`, and writes `PERTISK_DB_BACKEND=scylla` into `/etc/pertisk-proxy/pertisk-proxy.conf`.
+
 ## Quick start (from source)
 
 ```bash
@@ -216,6 +224,31 @@ routes:
 | `WATCH_ALL_NAMESPACES` | `true` | Watch cluster-wide |
 | `LISTEN_HTTP` | `0.0.0.0:8080` | HTTP listen address |
 | `PERTISK_INGRESS_MODE` | `auto` | Runtime tuning |
+
+### Admin config DB
+
+Sites, TLS metadata, DNS providers, users/sessions, SMTP, and S3 settings live in the admin config DB (not upstream S3 object storage).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PERTISK_DB_BACKEND` | `sqlite` | `sqlite` or `scylla` (also accepts `scylladb` / `cassandra`) |
+| `PERTISK_DB_PATH` | `/var/lib/pertisk-proxy/proxy.sqlite` | SQLite file path |
+| `PERTISK_SCYLLA_HOSTS` | `127.0.0.1:9042` | Comma-separated Scylla/Cassandra contact points |
+| `PERTISK_SCYLLA_KEYSPACE` | `pertisk_proxy` | CQL keyspace (created on first connect) |
+| `PERTISK_SCYLLA_USER` / `PERTISK_SCYLLA_PASSWORD` | — | Optional auth |
+| `PERTISK_SCYLLA_DC` | — | Optional local datacenter hint |
+
+Migrate an existing SQLite file after install (on the host, or via deploy):
+
+```bash
+# After RPM install that includes migrate-sqlite-to-scylla:
+sudo bash scripts/switch-to-scylla.sh
+
+# Or one-shot deploy + migrate:
+MIGRATE_TO_SCYLLA=1 VERSION=0.2.20 DEPLOY_HOST=root@host ./scripts/build-deploy.sh
+```
+
+`switch-to-scylla.sh` backs up SQLite, migrates all admin tables, writes `PERTISK_DB_BACKEND=scylla` into the conf, and restarts the service.
 
 ### Shared
 
