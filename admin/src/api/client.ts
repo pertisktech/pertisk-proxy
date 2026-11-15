@@ -513,10 +513,25 @@ export const api = {
         streams?: number;
       }[];
     }>('/tunnel/status'),
-  logs: (params?: { type?: 'system' | 'proxy' | 'http' | 'all'; host?: string }) => {
+  logs: (params?: {
+    type?: 'system' | 'proxy' | 'http' | 'all';
+    host?: string;
+    level?: string;
+    method?: string;
+    status?: string;
+    path?: string;
+    q?: string;
+    limit?: number;
+  }) => {
     const search = new URLSearchParams();
     if (params?.type && params.type !== 'all') search.set('type', params.type === 'http' ? 'proxy' : params.type);
     if (params?.host) search.set('host', params.host);
+    if (params?.level) search.set('level', params.level);
+    if (params?.method) search.set('method', params.method);
+    if (params?.status) search.set('status', params.status);
+    if (params?.path) search.set('path', params.path);
+    if (params?.q) search.set('q', params.q);
+    if (params?.limit != null) search.set('limit', String(params.limit));
     const q = search.toString();
     return request<LogEntry[]>(q ? `/logs?${q}` : '/logs');
   },

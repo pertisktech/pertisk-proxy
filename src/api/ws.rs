@@ -48,6 +48,11 @@ pub struct LiveSseQuery {
     #[serde(rename = "logs_type")]
     logs_type: Option<String>,
     logs_host: Option<String>,
+    logs_level: Option<String>,
+    logs_method: Option<String>,
+    logs_status: Option<String>,
+    logs_path: Option<String>,
+    logs_q: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -112,6 +117,11 @@ enum ClientMsg {
         #[serde(rename = "type")]
         log_type: Option<String>,
         host: Option<String>,
+        level: Option<String>,
+        method: Option<String>,
+        status: Option<String>,
+        path: Option<String>,
+        q: Option<String>,
     },
 }
 
@@ -209,6 +219,12 @@ pub async fn live_sse_handler(
     let logs_filter = LogsQuery {
         log_type: q.logs_type,
         host: q.logs_host,
+        level: q.logs_level,
+        method: q.logs_method,
+        status: q.logs_status,
+        path: q.logs_path,
+        q: q.logs_q,
+        limit: None,
     };
 
     Sse::new(sse_stream(state, channels, logs_filter))
@@ -398,10 +414,27 @@ async fn handle_client_text(
                 }
             }
         }
-        ClientMsg::LogsFilter { log_type, host } => {
+        ClientMsg::LogsFilter {
+            log_type,
+            host,
+            level,
+            method,
+            status,
+            path,
+            q,
+        } => {
             {
                 let mut guard = conn.lock().await;
-                guard.logs_filter = LogsQuery { log_type, host };
+                guard.logs_filter = LogsQuery {
+                    log_type,
+                    host,
+                    level,
+                    method,
+                    status,
+                    path,
+                    q,
+                    limit: None,
+                };
                 guard.last_payload.remove(&Channel::Logs);
                 guard.last_sent_at.remove(&Channel::Logs);
             }

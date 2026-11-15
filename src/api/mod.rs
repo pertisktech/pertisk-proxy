@@ -1485,20 +1485,63 @@ fn gather_system_info() -> (
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub(crate) struct LogsQuery {
     #[serde(rename = "type")]
-    log_type: Option<String>,
-    host: Option<String>,
+    pub log_type: Option<String>,
+    pub host: Option<String>,
+    /// Exact level: `debug` / `info` / `warn` / `error`.
+    pub level: Option<String>,
+    /// Exact HTTP method (case-insensitive), e.g. `GET`.
+    pub method: Option<String>,
+    /// Exact status (`404`) or class (`2xx` / `3xx` / `4xx` / `5xx`).
+    pub status: Option<String>,
+    /// Path substring (case-insensitive).
+    pub path: Option<String>,
+    /// Free-text search across host / path / upstream / message / method.
+    pub q: Option<String>,
+    /// Max entries after filter (default 500, capped at 5000).
+    pub limit: Option<usize>,
+}
+
+fn logs_status_matches(status: Option<u16>, want: &str) -> bool {
+    let want = want.trim().to_ascii_lowercase();
+    if want.is_empty() {
+        return true;
+    }
+    let Some(code) = status else {
+        return false;
+    };
+    match want.as_str() {
+        "2xx" => (200..300).contains(&code),
+        "3xx" => (300..400).contains(&code),
+        "4xx" => (400..500).contains(&code),
+        "5xx" => (500..600).contains(&code),
+        _ => want.parse::<u16>().ok() == Some(code),
+    }
+}
+
+fn logs_level_matches(level: crate::log::LogLevel, want: &str) -> bool {
+    let want = want.trim().to_ascii_lowercase();
+    if want.is_empty() {
+        return true;
+    }
+    match want.as_str() {
+        "debug" => level == crate::log::LogLevel::Debug,
+        "info" => level == crate::log::LogLevel::Info,
+        "warn" | "warning" => level == crate::log::LogLevel::Warn,
+        "error" => level == crate::log::LogLevel::Error,
+        _ => false,
+    }
 }
 
 pub(crate) async fn build_logs_entries(state: &AdminState, q: &LogsQuery) -> Vec<ProxyLogEntry> {
-    let mut entries = state.proxy_log.recent(500).await;
+    let take = q.limit.unwrap_or(500).clamp(1, 5000);
+    let mut entries = state.proxy_log.recent(take.max(500).min(10_000)).await;
     entries.retain(|e| e.entry_type != crate::log::LogEntryType::Request);
     entries.retain(|e| crate::log::ui_log_enabled(e.level));
 
     if let Some(ref t) = q.log_type {
-        match t.as_str() {
+        match t.trim().to_ascii_lowercase().as_str() {
             "system" => entries.retain(ProxyLogEntry::is_system),
             "proxy" | "domain" | "http" => entries.retain(ProxyLogEntry::has_domain),
             _ => {}
@@ -1520,11 +1563,66 @@ pub(crate) async fn build_logs_entries(state: &AdminState, q: &LogsQuery) -> Vec
         }
     }
 
+    if let Some(ref level) = q.level {
+        let level = level.clone();
+        entries.retain(|e| logs_level_matches(e.level, &level));
+    }
+
+    if let Some(ref method) = q.method {
+        let method = method.trim().to_ascii_uppercase();
+        if !method.is_empty() {
+            entries.retain(|e| {
+                e.method
+                    .as_ref()
+                    .is_some_and(|m| m.trim().eq_ignore_ascii_case(&method))
+            });
+        }
+    }
+
+    if let Some(ref status) = q.status {
+        let status = status.clone();
+        entries.retain(|e| logs_status_matches(e.status, &status));
+    }
+
+    if let Some(ref path) = q.path {
+        let needle = path.trim().to_ascii_lowercase();
+        if !needle.is_empty() {
+            entries.retain(|e| {
+                e.path
+                    .as_ref()
+                    .is_some_and(|p| p.to_ascii_lowercase().contains(&needle))
+            });
+        }
+    }
+
+    if let Some(ref qtext) = q.q {
+        let needle = qtext.trim().to_ascii_lowercase();
+        if !needle.is_empty() {
+            entries.retain(|e| {
+                [
+                    e.host.as_deref(),
+                    e.path.as_deref(),
+                    e.upstream.as_deref(),
+                    e.method.as_deref(),
+                    Some(e.message.as_str()),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|s| s.to_ascii_lowercase().contains(&needle))
+            });
+        }
+    }
+
     if q.log_type
         .as_deref()
         .is_some_and(|t| t.eq_ignore_ascii_case("system"))
     {
         entries = dedupe_consecutive_system_logs(entries);
+    }
+
+    if entries.len() > take {
+        let skip = entries.len() - take;
+        entries = entries.into_iter().skip(skip).collect();
     }
 
     entries

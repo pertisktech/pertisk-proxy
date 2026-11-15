@@ -13,6 +13,11 @@ export type LiveChannel =
 export type LogsFilter = {
   type?: 'proxy' | 'system' | 'http' | '';
   host?: string;
+  level?: string;
+  method?: string;
+  status?: string;
+  path?: string;
+  q?: string;
 };
 
 type ChannelHandler = (data: unknown) => void;
@@ -34,6 +39,11 @@ function liveUrl(channels: LiveChannel[], logsFilter: LogsFilter): string {
   params.set('channels', channels.join(','));
   if (logsFilter.type) params.set('logs_type', logsFilter.type);
   if (logsFilter.host) params.set('logs_host', logsFilter.host);
+  if (logsFilter.level) params.set('logs_level', logsFilter.level);
+  if (logsFilter.method) params.set('logs_method', logsFilter.method);
+  if (logsFilter.status) params.set('logs_status', logsFilter.status);
+  if (logsFilter.path) params.set('logs_path', logsFilter.path);
+  if (logsFilter.q) params.set('logs_q', logsFilter.q);
   return `/api/live?${params.toString()}`;
 }
 
@@ -61,9 +71,11 @@ class LiveClient {
   }
 
   setLogsFilter(filter: LogsFilter) {
-    const prev = `${this.logsFilter.type ?? ''}|${this.logsFilter.host ?? ''}`;
+    const key = (f: LogsFilter) =>
+      [f.type, f.host, f.level, f.method, f.status, f.path, f.q].map((v) => v ?? '').join('|');
+    const prev = key(this.logsFilter);
     this.logsFilter = filter;
-    const next = `${filter.type ?? ''}|${filter.host ?? ''}`;
+    const next = key(filter);
     if (prev !== next && (this.refCounts.get('logs') ?? 0) > 0) {
       this.syncConnection(true);
     }

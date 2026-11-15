@@ -1,13 +1,63 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, Globe, RefreshCw } from 'lucide-react';
+import { Activity, Filter, Globe, RefreshCw, Search, X } from 'lucide-react';
 import { api, type LogEntry } from '@/api/client';
 import { Card } from '@/components/Card';
 import { Checkbox } from '@/components/Checkbox';
+import { Pagination } from '@/components/Pagination';
 import { formatDateTime } from '@/utils/dateFormat';
 import { useLiveChannel } from '@/utils/useLiveChannel';
+import { usePageSize } from '@/utils/usePageSize';
 import { cn } from '@/utils';
 
 type LogKind = 'system' | 'http';
+
+type LogFilters = {
+  host: string;
+  level: string;
+  method: string;
+  status: string;
+  path: string;
+  q: string;
+};
+
+const EMPTY_FILTERS: LogFilters = {
+  host: '',
+  level: '',
+  method: '',
+  status: '',
+  path: '',
+  q: '',
+};
+
+const LEVEL_OPTIONS = [
+  { value: '', label: 'All levels' },
+  { value: 'debug', label: 'Debug' },
+  { value: 'info', label: 'Info' },
+  { value: 'warn', label: 'Warn' },
+  { value: 'error', label: 'Error' },
+];
+
+const METHOD_OPTIONS = [
+  { value: '', label: 'All methods' },
+  { value: 'GET', label: 'GET' },
+  { value: 'POST', label: 'POST' },
+  { value: 'PUT', label: 'PUT' },
+  { value: 'PATCH', label: 'PATCH' },
+  { value: 'DELETE', label: 'DELETE' },
+  { value: 'HEAD', label: 'HEAD' },
+  { value: 'OPTIONS', label: 'OPTIONS' },
+];
+
+const STATUS_OPTIONS = [
+  { value: '', label: 'All status' },
+  { value: '2xx', label: '2xx' },
+  { value: '3xx', label: '3xx' },
+  { value: '4xx', label: '4xx' },
+  { value: '5xx', label: '5xx' },
+];
+
+const fieldCls =
+  'w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-text outline-none focus:border-primary';
 
 function levelClass(level?: string) {
   const l = level?.toLowerCase();
@@ -40,6 +90,28 @@ function protocolLabel(raw?: string | null) {
   if (p === '2' || p === 'HTTP/2') return 'HTTP/2';
   if (p === '3' || p === 'HTTP/3') return 'HTTP/3';
   return p;
+}
+
+function statusMatches(status: number | null | undefined, want: string) {
+  const w = want.trim().toLowerCase();
+  if (!w) return true;
+  if (status == null) return false;
+  if (w === '2xx') return status >= 200 && status < 300;
+  if (w === '3xx') return status >= 300 && status < 400;
+  if (w === '4xx') return status >= 400 && status < 500;
+  if (w === '5xx') return status >= 500 && status < 600;
+  return String(status) === w;
+}
+
+function activeFilterChips(kind: LogKind, filters: LogFilters): { key: keyof LogFilters; label: string }[] {
+  const chips: { key: keyof LogFilters; label: string }[] = [];
+  if (filters.q.trim()) chips.push({ key: 'q', label: `Search: ${filters.q.trim()}` });
+  if (filters.level) chips.push({ key: 'level', label: `Level: ${filters.level}` });
+  if (kind === 'http' && filters.method) chips.push({ key: 'method', label: `Method: ${filters.method}` });
+  if (kind === 'http' && filters.status) chips.push({ key: 'status', label: `Status: ${filters.status}` });
+  if (kind === 'http' && filters.host.trim()) chips.push({ key: 'host', label: `Host: ${filters.host.trim()}` });
+  if (kind === 'http' && filters.path.trim()) chips.push({ key: 'path', label: `Path: ${filters.path.trim()}` });
+  return chips;
 }
 
 function LogsTable({ kind, entries }: { kind: LogKind; entries: LogEntry[] }) {
@@ -99,7 +171,10 @@ function LogsTable({ kind, entries }: { kind: LogKind; entries: LogEntry[] }) {
               ) : (
                 <>
                   <td className="px-3 py-2">{typeLabel(entry)}</td>
-                  <td className="max-w-[12rem] truncate px-3 py-2 font-mono text-xs" title={entry.upstream ?? entry.host ?? undefined}>
+                  <td
+                    className="max-w-[12rem] truncate px-3 py-2 font-mono text-xs"
+                    title={entry.upstream ?? entry.host ?? undefined}
+                  >
                     {entry.upstream ?? entry.host ?? '—'}
                   </td>
                 </>
@@ -118,20 +193,41 @@ function LogsTable({ kind, entries }: { kind: LogKind; entries: LogEntry[] }) {
 export function Logs() {
   const [kind, setKind] = useState<LogKind>('http');
   const [entries, setEntries] = useState<LogEntry[]>([]);
-  const [hostFilter, setHostFilter] = useState('');
+  const [filters, setFilters] = useState<LogFilters>(EMPTY_FILTERS);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [page, setPage] = useState(1);
+  const pageSize = usePageSize(44, 340);
+
+  const setFilter = <K extends keyof LogFilters>(key: K, value: LogFilters[K]) => {
+    setFilters((prev) => ({ ...prev, [key]: value }));
+    setPage(1);
+  };
+
+  const clearFilters = () => {
+    setFilters(EMPTY_FILTERS);
+    setPage(1);
+  };
+
+  // Discrete selects go to API/SSE; text fields stay client-side so typing stays snappy.
+  const apiParams = useMemo(
+    () => ({
+      type: (kind === 'http' ? 'proxy' : 'system') as 'proxy' | 'system',
+      level: filters.level || undefined,
+      method: kind === 'http' && filters.method ? filters.method : undefined,
+      status: kind === 'http' && filters.status ? filters.status : undefined,
+      limit: 2000,
+    }),
+    [kind, filters.level, filters.method, filters.status],
+  );
 
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
       try {
-        const data = await api.logs({
-          type: kind === 'http' ? 'proxy' : 'system',
-          host: kind === 'http' && hostFilter.trim() ? hostFilter.trim() : undefined,
-        });
+        const data = await api.logs(apiParams);
         if (!cancelled) {
           setEntries([...data].reverse());
           setError('');
@@ -150,14 +246,16 @@ export function Logs() {
     return () => {
       cancelled = true;
     };
-  }, [kind, hostFilter]);
+  }, [apiParams]);
 
   const logsFilter = useMemo(
     () => ({
-      type: (kind === 'http' ? 'proxy' : 'system') as 'proxy' | 'system',
-      host: kind === 'http' && hostFilter.trim() ? hostFilter.trim() : '',
+      type: apiParams.type,
+      level: apiParams.level ?? '',
+      method: apiParams.method ?? '',
+      status: apiParams.status ?? '',
     }),
-    [kind, hostFilter],
+    [apiParams],
   );
 
   useLiveChannel<LogEntry[]>('logs', {
@@ -167,13 +265,59 @@ export function Logs() {
       setEntries([...data].reverse());
       setError('');
       setLoading(false);
+      // Keep live view on the newest page unless the user navigated away.
+      setPage((p) => (p === 1 ? 1 : p));
     },
   });
 
+  // Extra client-side pass keeps typing snappy if SSE lags; mirrors API rules.
+  const filteredEntries = useMemo(() => {
+    const q = filters.q.trim().toLowerCase();
+    const path = filters.path.trim().toLowerCase();
+    const host = filters.host.trim().toLowerCase();
+    return entries.filter((e) => {
+      if (filters.level && e.level?.toLowerCase() !== filters.level) return false;
+      if (kind === 'http' && filters.method) {
+        if ((e.method ?? '').toUpperCase() !== filters.method) return false;
+      }
+      if (kind === 'http' && filters.status && !statusMatches(e.status, filters.status)) return false;
+      if (kind === 'http' && host) {
+        const h = (e.host ?? '').toLowerCase();
+        if (h !== host && !h.endsWith(`.${host}`)) return false;
+      }
+      if (kind === 'http' && path && !(e.path ?? '').toLowerCase().includes(path)) return false;
+      if (q) {
+        const hay = [e.host, e.path, e.upstream, e.method, e.message]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [entries, filters, kind]);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(filteredEntries.length / pageSize));
+    if (page > totalPages) setPage(totalPages);
+  }, [filteredEntries.length, page, pageSize]);
+
+  const pagedEntries = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filteredEntries.slice(start, start + pageSize);
+  }, [filteredEntries, page, pageSize]);
+
+  const chips = activeFilterChips(kind, filters);
+  const hasFilters = chips.length > 0;
+
   const emptyMessage =
     kind === 'http'
-      ? 'No HTTP log entries yet. Proxied requests will appear here when proxy_log is enabled.'
-      : 'No system log entries yet. Startup, config reload, and internal events appear here.';
+      ? hasFilters
+        ? 'No HTTP log entries match the current filters.'
+        : 'No HTTP log entries yet. Proxied requests will appear here when proxy_log is enabled.'
+      : hasFilters
+        ? 'No system log entries match the current filters.'
+        : 'No system log entries yet. Startup, config reload, and internal events appear here.';
 
   return (
     <div className="space-y-4">
@@ -198,13 +342,16 @@ export function Logs() {
           />
         </div>
 
-        <div className="flex flex-wrap items-end gap-4">
+        <div className="flex flex-wrap items-end gap-3">
           <div className="tab-bar" role="tablist" aria-label="Log type">
             <button
               type="button"
               role="tab"
               aria-selected={kind === 'http'}
-              onClick={() => setKind('http')}
+              onClick={() => {
+                setKind('http');
+                setPage(1);
+              }}
               className={cn('tab-item', kind === 'http' && 'active')}
             >
               <Globe size={15} />
@@ -214,7 +361,10 @@ export function Logs() {
               type="button"
               role="tab"
               aria-selected={kind === 'system'}
-              onClick={() => setKind('system')}
+              onClick={() => {
+                setKind('system');
+                setPage(1);
+              }}
               className={cn('tab-item', kind === 'system' && 'active')}
             >
               <Activity size={15} />
@@ -222,16 +372,124 @@ export function Logs() {
             </button>
           </div>
 
-          {kind === 'http' ? (
-            <div className="min-w-[12rem] flex-1 sm:max-w-xs">
-              <label className="mb-1 block text-xs font-medium text-text-secondary">Host filter</label>
-              <input
-                type="text"
-                value={hostFilter}
-                onChange={(e) => setHostFilter(e.target.value)}
-                placeholder="example.com"
-                className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm outline-none focus:border-primary"
-              />
+          <p className="pb-2 text-xs text-text-secondary">
+            {filteredEntries.length === entries.length
+              ? `${filteredEntries.length} entr${filteredEntries.length === 1 ? 'y' : 'ies'}`
+              : `${filteredEntries.length} of ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}`}
+          </p>
+        </div>
+
+        <div className="space-y-3 rounded-lg border border-border bg-surface-elevated/40 p-3">
+          <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-text-secondary">
+            <Filter size={14} />
+            Filters
+          </div>
+
+          <div className="relative">
+            <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+            <input
+              type="search"
+              value={filters.q}
+              onChange={(e) => setFilter('q', e.target.value)}
+              placeholder="Search host, path, upstream, message…"
+              className={cn(fieldCls, 'pl-9')}
+              aria-label="Search logs"
+            />
+          </div>
+
+          <div className={cn('grid gap-3', kind === 'http' ? 'sm:grid-cols-2 lg:grid-cols-5' : 'sm:grid-cols-2')}>
+            <label className="block text-xs font-medium text-text-secondary">
+              Level
+              <select
+                className={cn(fieldCls, 'mt-1')}
+                value={filters.level}
+                onChange={(e) => setFilter('level', e.target.value)}
+              >
+                {LEVEL_OPTIONS.map((o) => (
+                  <option key={o.value || 'all'} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {kind === 'http' ? (
+              <>
+                <label className="block text-xs font-medium text-text-secondary">
+                  Method
+                  <select
+                    className={cn(fieldCls, 'mt-1')}
+                    value={filters.method}
+                    onChange={(e) => setFilter('method', e.target.value)}
+                  >
+                    {METHOD_OPTIONS.map((o) => (
+                      <option key={o.value || 'all'} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block text-xs font-medium text-text-secondary">
+                  Status
+                  <select
+                    className={cn(fieldCls, 'mt-1')}
+                    value={filters.status}
+                    onChange={(e) => setFilter('status', e.target.value)}
+                  >
+                    {STATUS_OPTIONS.map((o) => (
+                      <option key={o.value || 'all'} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block text-xs font-medium text-text-secondary">
+                  Host
+                  <input
+                    type="text"
+                    value={filters.host}
+                    onChange={(e) => setFilter('host', e.target.value)}
+                    placeholder="example.com"
+                    className={cn(fieldCls, 'mt-1')}
+                  />
+                </label>
+
+                <label className="block text-xs font-medium text-text-secondary">
+                  Path
+                  <input
+                    type="text"
+                    value={filters.path}
+                    onChange={(e) => setFilter('path', e.target.value)}
+                    placeholder="/api"
+                    className={cn(fieldCls, 'mt-1')}
+                  />
+                </label>
+              </>
+            ) : null}
+          </div>
+
+          {hasFilters ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {chips.map((chip) => (
+                <button
+                  key={chip.key}
+                  type="button"
+                  onClick={() => setFilter(chip.key, '')}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-bg px-2.5 py-1 text-xs text-text hover:bg-hover"
+                >
+                  {chip.label}
+                  <X size={12} className="text-muted" />
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="text-xs font-medium text-primary hover:underline"
+              >
+                Clear all
+              </button>
             </div>
           ) : null}
         </div>
@@ -241,12 +499,20 @@ export function Logs() {
 
       {loading && entries.length === 0 ? (
         <p className="text-text-secondary">Loading…</p>
-      ) : entries.length === 0 ? (
+      ) : filteredEntries.length === 0 ? (
         <Card>
           <p className="text-sm text-text-secondary">{emptyMessage}</p>
         </Card>
       ) : (
-        <LogsTable kind={kind} entries={entries} />
+        <div className="space-y-3">
+          <LogsTable kind={kind} entries={pagedEntries} />
+          <Pagination
+            totalItems={filteredEntries.length}
+            pageSize={pageSize}
+            page={page}
+            onPageChange={setPage}
+          />
+        </div>
       )}
     </div>
   );
