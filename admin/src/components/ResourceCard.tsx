@@ -30,11 +30,11 @@ export function ResourceCard({
 }) {
   return (
     <article className={cn('resource-card', className)}>
-      <div className="resource-card-head">
+      <header className="resource-card-head">
         <div className="resource-card-title-row">
           {icon ? <div className="resource-card-icon">{icon}</div> : null}
-          <div className="resource-card-title-block min-w-0 flex-1">
-            <div className="flex items-start justify-between gap-2">
+          <div className="resource-card-title-block">
+            <div className="resource-card-title-line">
               <h3 className="resource-card-title">{title}</h3>
               {badge}
             </div>
@@ -42,7 +42,7 @@ export function ResourceCard({
             {subtitle ? <div className="resource-card-subtitle">{subtitle}</div> : null}
           </div>
         </div>
-      </div>
+      </header>
 
       {tags ? <div className="resource-card-tags">{tags}</div> : null}
 
@@ -59,7 +59,7 @@ export function ResourceCard({
 
       {children ? <div className="resource-card-body">{children}</div> : null}
 
-      {actions ? <div className="resource-card-actions icon-actions">{actions}</div> : null}
+      {actions ? <footer className="resource-card-actions icon-actions">{actions}</footer> : null}
     </article>
   );
 }

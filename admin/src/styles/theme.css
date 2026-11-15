@@ -202,7 +202,7 @@
   color: var(--color-text);
 }
 
-/* Modern resource cards (Sites / Certificates / DNS) */
+/* Resource cards (Sites / Certificates / DNS) — console Panel language */
 .resource-card-grid {
   display: grid;
   gap: 1rem;
@@ -225,22 +225,16 @@
   display: flex;
   flex-direction: column;
   min-height: 100%;
+  overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  background:
-    linear-gradient(
-      165deg,
-      color-mix(in srgb, var(--color-surface-elevated) 55%, transparent) 0%,
-      transparent 42%
-    ),
-    var(--color-surface);
-  padding: 1rem 1rem 0.85rem;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  background: var(--color-card);
+  padding: 1.125rem 1.25rem;
+  transition: border-color 0.15s ease;
 }
 
 .resource-card:hover {
-  border-color: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
-  box-shadow: 0 10px 28px color-mix(in srgb, var(--color-bg) 40%, transparent);
+  border-color: color-mix(in srgb, var(--color-primary) 40%, var(--color-border));
 }
 
 .resource-card-head {
@@ -261,15 +255,28 @@
   height: 2.25rem;
   flex-shrink: 0;
   border-radius: var(--radius-md);
-  border: 1px solid color-mix(in srgb, var(--color-primary) 22%, var(--color-border));
-  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
-  color: var(--color-primary);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+}
+
+.resource-card-title-block {
+  min-width: 0;
+  flex: 1;
+}
+
+.resource-card-title-line {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .resource-card-title {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: 0.875rem;
   font-weight: 600;
+  letter-spacing: -0.01em;
   line-height: 1.35;
   color: var(--color-text);
   word-break: break-word;
@@ -288,6 +295,7 @@
   margin-top: 0.35rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
+  line-height: 1.4;
   color: var(--color-text-secondary);
   word-break: break-all;
 }
@@ -303,8 +311,8 @@
   display: inline-flex;
   align-items: center;
   max-width: 100%;
-  padding: 0.2rem 0.5rem;
-  border-radius: 9999px;
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--color-border);
   background: var(--color-surface-elevated);
   color: var(--color-text-secondary);
@@ -317,28 +325,33 @@
 
 .resource-card-meta {
   display: grid;
-  gap: 0.45rem;
-  margin: 0.9rem 0 0;
-  padding: 0.75rem 0 0;
-  border-top: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 1rem;
+  margin: 0.95rem 0 0;
+  padding: 0.85rem 0 0;
+  border-top: 1px solid var(--color-border);
 }
 
 .resource-card-meta-row {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.75rem;
-  font-size: 0.8125rem;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
 }
 
 .resource-card-meta-row dt {
-  color: var(--color-muted);
+  margin: 0;
+  font-size: 0.6875rem;
   font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-muted);
 }
 
 .resource-card-meta-row dd {
   margin: 0;
-  text-align: right;
+  font-size: 0.8125rem;
+  line-height: 1.35;
   color: var(--color-text);
   word-break: break-word;
 }
@@ -346,23 +359,24 @@
 .resource-card-body {
   margin-top: 0.85rem;
   padding-top: 0.75rem;
-  border-top: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  border-top: 1px solid var(--color-border);
 }
 
 .resource-card-actions {
   margin-top: auto;
   padding-top: 0.85rem;
+  border-top: 1px solid var(--color-border);
 }
 
 .resource-badge {
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
-  padding: 0.15rem 0.55rem;
-  border-radius: 9999px;
-  font-size: 0.7rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.6875rem;
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.02em;
   border: 1px solid transparent;
 }
 
