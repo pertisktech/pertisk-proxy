@@ -1499,7 +1499,7 @@ pub(crate) struct LogsQuery {
     pub path: Option<String>,
     /// Free-text search across host / path / upstream / message / method.
     pub q: Option<String>,
-    /// Max entries after filter (default 500, capped at 5000).
+    /// Max entries after filter (default 500, capped at 2000).
     pub limit: Option<usize>,
 }
 
@@ -1535,8 +1535,9 @@ fn logs_level_matches(level: crate::log::LogLevel, want: &str) -> bool {
 }
 
 pub(crate) async fn build_logs_entries(state: &AdminState, q: &LogsQuery) -> Vec<ProxyLogEntry> {
-    let take = q.limit.unwrap_or(500).clamp(1, 5000);
-    let mut entries = state.proxy_log.recent(take.max(500).min(10_000)).await;
+    // Keep snapshots small: live SSE re-serializes this every few seconds.
+    let take = q.limit.unwrap_or(500).clamp(1, 2000);
+    let mut entries = state.proxy_log.recent(take).await;
     entries.retain(|e| e.entry_type != crate::log::LogEntryType::Request);
     entries.retain(|e| crate::log::ui_log_enabled(e.level));
 
@@ -1618,11 +1619,6 @@ pub(crate) async fn build_logs_entries(state: &AdminState, q: &LogsQuery) -> Vec
         .is_some_and(|t| t.eq_ignore_ascii_case("system"))
     {
         entries = dedupe_consecutive_system_logs(entries);
-    }
-
-    if entries.len() > take {
-        let skip = entries.len() - take;
-        entries = entries.into_iter().skip(skip).collect();
     }
 
     entries

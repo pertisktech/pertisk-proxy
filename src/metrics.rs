@@ -32,7 +32,9 @@ pub struct ProxyMetrics {
     pub active_connections: Arc<AtomicU64>,
     pub bytes_sent_total: Arc<AtomicU64>,
     pub bytes_received_total: Arc<AtomicU64>,
-    site_protocol_requests: Arc<Mutex<HashMap<String, SiteProtocolCounters>>>,
+    /// Per-host protocol counters. Values are `Arc` so the hot path can release the
+    /// map mutex before doing the atomic increment (avoids serializing all H3/H2 TPS).
+    site_protocol_requests: Arc<Mutex<HashMap<String, Arc<SiteProtocolCounters>>>>,
 }
 
 impl ProxyMetrics {
@@ -75,21 +77,38 @@ impl ProxyMetrics {
     }
 
     pub fn inc_site_protocol_requests(&self, host: &str, version: http::Version) {
-        let host = host.trim().to_lowercase();
+        let host = host.trim();
         if host.is_empty() {
             return;
         }
-        let mut map = self
-            .site_protocol_requests
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let entry = map.entry(host).or_default();
+        // Avoid allocating when Host is already lowercase (common on the H3 hot path).
+        let host_owned;
+        let host_key: &str = if host.bytes().any(|b| b.is_ascii_uppercase()) {
+            host_owned = host.to_ascii_lowercase();
+            &host_owned
+        } else {
+            host
+        };
+
+        let counters = {
+            let mut map = self
+                .site_protocol_requests
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(existing) = map.get(host_key) {
+                Arc::clone(existing)
+            } else {
+                let created = Arc::new(SiteProtocolCounters::default());
+                map.insert(host_key.to_owned(), Arc::clone(&created));
+                created
+            }
+        };
         match version {
             http::Version::HTTP_2 => {
-                entry.h2_requests_total.fetch_add(1, Ordering::Relaxed);
+                counters.h2_requests_total.fetch_add(1, Ordering::Relaxed);
             }
             http::Version::HTTP_3 => {
-                entry.h3_requests_total.fetch_add(1, Ordering::Relaxed);
+                counters.h3_requests_total.fetch_add(1, Ordering::Relaxed);
             }
             _ => {}
         }

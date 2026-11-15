@@ -1,5 +1,10 @@
 //! In-memory proxy and system log for the management UI.
+//!
+//! Hot-path notes: `push_sync` must stay cheap. The buffer is a ring (`VecDeque`) so
+//! eviction is O(1), and the lock is `try_lock` so a busy admin reader never stalls
+//! request workers (log line is dropped instead).
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -251,14 +256,15 @@ pub struct ProxyLog {
 }
 
 struct ProxyLogInner {
-    entries: Vec<ProxyLogEntry>,
+    entries: VecDeque<ProxyLogEntry>,
 }
 
 impl ProxyLog {
     pub fn new(max_entries: usize) -> Self {
+        let max_entries = max_entries.max(1);
         Self {
             inner: Arc::new(Mutex::new(ProxyLogInner {
-                entries: Vec::with_capacity(max_entries.min(4096)),
+                entries: VecDeque::with_capacity(max_entries.min(4096)),
             })),
             max_entries,
         }
@@ -268,26 +274,27 @@ impl ProxyLog {
         self.push_sync(entry);
     }
 
+    /// Append one entry. Never blocks: if the mutex is busy, the line is dropped.
     pub fn push_sync(&self, entry: ProxyLogEntry) {
         if !ui_log_enabled(entry.level) {
             return;
         }
-        if let Ok(mut g) = self.inner.lock() {
-            g.entries.push(entry);
-            if g.entries.len() > self.max_entries {
-                let drop_count = g.entries.len() - self.max_entries;
-                g.entries.drain(..drop_count);
-            }
+        let Ok(mut g) = self.inner.try_lock() else {
+            return;
+        };
+        if g.entries.len() >= self.max_entries {
+            g.entries.pop_front();
         }
+        g.entries.push_back(entry);
     }
 
     pub async fn recent(&self, limit: usize) -> Vec<ProxyLogEntry> {
-        if let Ok(g) = self.inner.lock() {
-            let start = g.entries.len().saturating_sub(limit);
-            g.entries[start..].to_vec()
-        } else {
-            vec![]
-        }
+        let Ok(g) = self.inner.lock() else {
+            return vec![];
+        };
+        let len = g.entries.len();
+        let take = limit.min(len);
+        g.entries.iter().skip(len - take).cloned().collect()
     }
 
     pub fn len(&self) -> usize {
@@ -323,5 +330,19 @@ mod tests {
         log.push_sync(ProxyLogEntry::error("boom"));
         assert_eq!(log.len(), 1);
         set_min_ui_log_level(LogLevel::Info);
+    }
+
+    #[test]
+    fn ring_buffer_evicts_oldest_in_constant_space() {
+        let _guard = UI_LOG_LEVEL_TEST_LOCK.lock().unwrap();
+        set_min_ui_log_level(LogLevel::Info);
+        let log = ProxyLog::new(3);
+        for i in 0..5 {
+            log.push_sync(ProxyLogEntry::config_reload(format!("n{i}")));
+        }
+        assert_eq!(log.len(), 3);
+        let g = log.inner.lock().unwrap();
+        let msgs: Vec<&str> = g.entries.iter().map(|e| e.message.as_str()).collect();
+        assert_eq!(msgs, vec!["n2", "n3", "n4"]);
     }
 }

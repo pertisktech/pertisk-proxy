@@ -199,11 +199,23 @@ pub fn pingora_service_threads(cfg: &RuntimeConfig) -> usize {
 
 /// Worker threads for the dedicated HTTP/3 runtime.
 ///
-/// QUIC already runs one listener thread per H3 bind address; on small hosts,
-/// a full copy of the Pingora worker count is wasteful, while on larger hosts
-/// half the available workers is a reasonable default for this auxiliary runtime.
+/// Override with `PERTISK_H3_WORKER_THREADS`. In performance mode, default to the
+/// full `worker_threads` count (H3 is often the primary load). Otherwise use half
+/// so the auxiliary Quinn runtime does not mirror Pingora on small standard hosts.
 pub fn h3_worker_threads(cfg: &RuntimeConfig) -> usize {
-    std::cmp::max(1, cfg.worker_threads / 2)
+    if let Ok(raw) = std::env::var("PERTISK_H3_WORKER_THREADS") {
+        if let Ok(value) = raw.trim().parse::<usize>() {
+            if value > 0 {
+                return value;
+            }
+        }
+    }
+
+    if is_performance_mode(cfg) {
+        cfg.worker_threads.max(1)
+    } else {
+        std::cmp::max(1, cfg.worker_threads / 2)
+    }
 }
 
 /// Parallel accept tasks per listener fd.

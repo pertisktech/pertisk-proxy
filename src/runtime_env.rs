@@ -59,6 +59,14 @@ pub fn editable_fields() -> &'static [RuntimeEnvField] {
             options: &[],
         },
         RuntimeEnvField {
+            key: "PERTISK_H3_WORKER_THREADS",
+            label: "HTTP/3 worker threads",
+            description:
+                "Quinn HTTP/3 Tokio workers. Empty = worker_threads in performance, else half.",
+            kind: FieldKind::Number,
+            options: &[],
+        },
+        RuntimeEnvField {
             key: "PERTISK_PINGORA_LISTENER_TASKS",
             label: "Listener accept tasks",
             description: "Parallel accept tasks per listener; performance default is 4.",

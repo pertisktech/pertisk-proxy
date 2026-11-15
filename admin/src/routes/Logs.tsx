@@ -217,7 +217,7 @@ export function Logs() {
       level: filters.level || undefined,
       method: kind === 'http' && filters.method ? filters.method : undefined,
       status: kind === 'http' && filters.status ? filters.status : undefined,
-      limit: 2000,
+      limit: 500,
     }),
     [kind, filters.level, filters.method, filters.status],
   );
