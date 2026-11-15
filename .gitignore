@@ -11,6 +11,7 @@
 /release/
 /pertisk-proxy-linux-*
 /pertisk-proxy-ingress-linux-*
+/migrate-sqlite-to-scylla-linux-*
 /.buildx-cache/
 /pkg-*
 /preinstall.sh
