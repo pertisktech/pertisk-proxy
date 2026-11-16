@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState, FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Info, Lock, Mail, Cloud, Shield, Zap, Gauge, Terminal } from 'lucide-react';
+import { Info, Lock, Mail, Cloud, Shield, Zap, Gauge, Terminal, ScrollText } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, type ManagementInfo, type ProxyConfig } from '@/api/client';
 import { Card } from '@/components/Card';
 import { SmtpSettingsPanel } from '@/components/SmtpSettingsPanel';
 import { S3SettingsPanel } from '@/components/S3SettingsPanel';
+import { LoggingSettingsPanel } from '@/components/LoggingSettingsPanel';
 import { EnvironmentPanel } from '@/components/settings/EnvironmentPanel';
 import { PerformancePanel } from '@/components/settings/PerformancePanel';
 import { useManagementInfo } from '@/context/ManagementContext';
@@ -18,6 +19,7 @@ type SettingsTab =
   | 'edge'
   | 'notifications'
   | 'storage'
+  | 'logging'
   | 'environment'
   | 'performance';
 
@@ -38,6 +40,7 @@ function tabFromHash(hash: string, proxyOnly: boolean): SettingsTab {
     return 'notifications';
   }
   if (proxyOnly && (id === 'storage' || id === 's3' || id === 'backup')) return 'storage';
+  if (proxyOnly && (id === 'logging' || id === 'logs' || id === 'access-log')) return 'logging';
   return 'general';
 }
 
@@ -186,6 +189,7 @@ export function Settings() {
           { id: 'edge' as const, label: 'Edge', icon: Gauge },
           { id: 'notifications' as const, label: 'Notifications', icon: Mail },
           { id: 'storage' as const, label: 'Storage', icon: Cloud },
+          { id: 'logging' as const, label: 'Logging', icon: ScrollText },
         ]
       : []),
     { id: 'environment' as const, label: 'Environment', icon: Terminal },
@@ -389,6 +393,8 @@ export function Settings() {
       {tab === 'notifications' && showProxyConfig ? <SmtpSettingsPanel /> : null}
 
       {tab === 'storage' && showProxyConfig ? <S3SettingsPanel /> : null}
+
+      {tab === 'logging' && showProxyConfig ? <LoggingSettingsPanel /> : null}
 
       {tab === 'environment' ? <EnvironmentPanel isIngress={isIngress} /> : null}
 

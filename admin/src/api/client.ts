@@ -762,6 +762,17 @@ export const api = {
         ),
     },
   },
+
+  logging: {
+    settings: {
+      get: () => request<LoggingSettings>('/logging/settings'),
+      update: (body: UpdateLoggingSettingsBody) =>
+        request<LoggingSettings>('/logging/settings', {
+          method: 'PUT',
+          body: JSON.stringify(body),
+        }),
+    },
+  },
 };
 
 export type SmtpSettings = {
@@ -816,4 +827,20 @@ export type UpdateS3SettingsBody = {
   access_key_id: string;
   secret_access_key?: string;
   force_path_style: boolean;
+};
+
+export type LoggingSettings = {
+  enabled: boolean;
+  storage: 'memory' | 'scylla';
+  ttl_days: number;
+  updated_at: string;
+  scylla_available?: boolean;
+  scylla_hosts?: string;
+  scylla_keyspace?: string;
+};
+
+export type UpdateLoggingSettingsBody = {
+  enabled: boolean;
+  storage: 'memory' | 'scylla';
+  ttl_days: number;
 };

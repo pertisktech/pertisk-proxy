@@ -252,6 +252,7 @@ pub async fn run(
     cert_store: Arc<CertStore>,
     runtime_cfg: &RuntimeConfig,
     metrics: ProxyMetrics,
+    access_log: crate::access_log::AccessLogSink,
 ) -> Result<()> {
     while !cert_store.has_any_cert() {
         tracing::info!(
@@ -276,14 +277,21 @@ pub async fn run(
                 let router = Arc::clone(&router);
                 let client = client.clone();
                 let metrics = metrics.clone();
+                let access_log = access_log.clone();
                 tokio::spawn(async move {
                     match connecting.await {
                         Ok(connection) => {
                             let remote_addr = connection.remote_address();
                             let h3_conn = h3_quinn::Connection::new(connection);
-                            if let Err(err) =
-                                serve_h3_connection(router, client, h3_conn, remote_addr, metrics)
-                                    .await
+                            if let Err(err) = serve_h3_connection(
+                                router,
+                                client,
+                                h3_conn,
+                                remote_addr,
+                                metrics,
+                                access_log,
+                            )
+                            .await
                             {
                                 if is_benign_h3_disconnect(&err) {
                                     tracing::debug!(error = %err, "HTTP/3 client closed connection");
@@ -314,6 +322,7 @@ async fn serve_h3_connection(
     conn: h3_quinn::Connection,
     remote_addr: SocketAddr,
     metrics: ProxyMetrics,
+    access_log: crate::access_log::AccessLogSink,
 ) -> Result<()> {
     let mut h3 = h3::server::Connection::new(conn)
         .await
@@ -324,12 +333,20 @@ async fn serve_h3_connection(
                 let router = Arc::clone(&router);
                 let client = client.clone();
                 let metrics = metrics.clone();
+                let access_log = access_log.clone();
                 tokio::spawn(async move {
                     match resolver.resolve_request().await {
                         Ok((req, stream)) => {
-                            if let Err(err) =
-                                handle_request(router, client, req, stream, remote_addr, metrics)
-                                    .await
+                            if let Err(err) = handle_request(
+                                router,
+                                client,
+                                req,
+                                stream,
+                                remote_addr,
+                                metrics,
+                                access_log,
+                            )
+                            .await
                             {
                                 warn!(error = %err, "HTTP/3 request failed");
                             }
@@ -352,10 +369,19 @@ async fn handle_request(
     mut stream: h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
     remote_addr: SocketAddr,
     metrics: ProxyMetrics,
+    access_log: crate::access_log::AccessLogSink,
 ) -> Result<()> {
     metrics.inc_active_connections();
-    let result =
-        handle_request_inner(router, client, req, &mut stream, remote_addr, &metrics).await;
+    let result = handle_request_inner(
+        router,
+        client,
+        req,
+        &mut stream,
+        remote_addr,
+        &metrics,
+        &access_log,
+    )
+    .await;
     metrics.dec_active_connections();
     result
 }
@@ -367,7 +393,9 @@ async fn handle_request_inner(
     stream: &mut h3::server::RequestStream<h3_quinn::BidiStream<Bytes>, Bytes>,
     remote_addr: SocketAddr,
     metrics: &ProxyMetrics,
+    access_log: &crate::access_log::AccessLogSink,
 ) -> Result<()> {
+    let started = std::time::Instant::now();
     if try_serve_health(&req, stream, metrics).await? {
         return Ok(());
     }
@@ -677,6 +705,7 @@ async fn handle_request_inner(
 
     let path = req.uri().path();
     let oci_registry = crate::proxy::registry::is_oci_registry_path(path);
+    let upstream_url = plan.upstream_url.clone();
     let mut upstream_req = client.request(req.method().clone(), plan.upstream_url);
     for (name, value) in req.headers().iter() {
         if name == HOST {
@@ -743,6 +772,15 @@ async fn handle_request_inner(
             )
             .await?;
             record_h3_request(metrics, &host, bytes_received, 0, true, is_grpc);
+            emit_h3_access_log(
+                access_log,
+                &host,
+                path_q,
+                req.method().as_str(),
+                &upstream_url,
+                502,
+                started.elapsed().as_millis() as u64,
+            );
             return Ok(());
         }
     };
@@ -796,7 +834,40 @@ async fn handle_request_inner(
         false,
         is_grpc,
     );
+    emit_h3_access_log(
+        access_log,
+        &host,
+        path_q,
+        req.method().as_str(),
+        &upstream_url,
+        status.as_u16(),
+        started.elapsed().as_millis() as u64,
+    );
     Ok(())
+}
+
+fn emit_h3_access_log(
+    access_log: &crate::access_log::AccessLogSink,
+    host: &str,
+    path: &str,
+    method: &str,
+    upstream: &str,
+    status: u16,
+    duration_ms: u64,
+) {
+    if host.is_empty() || (!access_log.enabled()) {
+        return;
+    }
+    access_log.emit(crate::log::ProxyLogEntry::response(
+        host,
+        path,
+        upstream,
+        status,
+        duration_ms,
+        Some("h3"),
+        None,
+        Some(method),
+    ));
 }
 
 fn record_h3_request(

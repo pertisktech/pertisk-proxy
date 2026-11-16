@@ -97,6 +97,7 @@ pub struct AdminState {
     pub http01_store: Arc<Http01ChallengeStore>,
     pub proxy_log: Arc<ProxyLog>,
     pub proxy_log_enabled: Arc<AtomicBool>,
+    pub access_log: crate::access_log::AccessLogSink,
     pub metrics: ProxyMetrics,
     pub viewer_mode: bool,
     #[cfg(feature = "ingress")]
@@ -237,6 +238,10 @@ pub fn router(state: AdminState) -> Router {
         )
         .route("/api/backup/s3/test", post(backup::s3_settings_test))
         .route("/api/backup/export-s3", post(backup::backup_export_s3))
+        .route(
+            "/api/logging/settings",
+            get(logging_settings_get).put(logging_settings_put),
+        )
         .route(
             "/api/notifications/smtp",
             get(notifications::smtp_get).put(notifications::smtp_put),
@@ -1537,7 +1542,48 @@ fn logs_level_matches(level: crate::log::LogLevel, want: &str) -> bool {
 pub(crate) async fn build_logs_entries(state: &AdminState, q: &LogsQuery) -> Vec<ProxyLogEntry> {
     // Keep snapshots small: live SSE re-serializes this every few seconds.
     let take = q.limit.unwrap_or(500).clamp(1, 2000);
-    let mut entries = state.proxy_log.recent(take).await;
+    let want_http = q
+        .log_type
+        .as_ref()
+        .map(|t| {
+            matches!(
+                t.trim().to_ascii_lowercase().as_str(),
+                "proxy" | "domain" | "http" | ""
+            )
+        })
+        .unwrap_or(true);
+    let want_system = q
+        .log_type
+        .as_ref()
+        .map(|t| t.trim().eq_ignore_ascii_case("system"))
+        .unwrap_or(false);
+
+    let mut entries = if want_http
+        && !want_system
+        && state.access_log.storage() == crate::db::LogStorageBackend::Scylla
+    {
+        #[cfg(feature = "scylla-db")]
+        {
+            if let Some(db) = state.db.as_ref() {
+                let buckets = crate::access_log::recent_buckets(chrono::Utc::now(), 6);
+                match db.query_access_logs(&buckets, take).await {
+                    Ok(rows) => rows,
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to query Scylla access_logs; falling back to memory");
+                        state.proxy_log.recent(take).await
+                    }
+                }
+            } else {
+                state.proxy_log.recent(take).await
+            }
+        }
+        #[cfg(not(feature = "scylla-db"))]
+        {
+            state.proxy_log.recent(take).await
+        }
+    } else {
+        state.proxy_log.recent(take).await
+    };
     entries.retain(|e| e.entry_type != crate::log::LogEntryType::Request);
     entries.retain(|e| crate::log::ui_log_enabled(e.level));
 
@@ -1629,6 +1675,96 @@ async fn get_logs(
     Query(q): Query<LogsQuery>,
 ) -> Json<Vec<ProxyLogEntry>> {
     Json(build_logs_entries(&state, &q).await)
+}
+
+#[derive(Debug, Deserialize)]
+struct LoggingSettingsPutBody {
+    enabled: bool,
+    storage: String,
+    ttl_days: i32,
+}
+
+async fn logging_settings_get(
+    State(state): State<AdminState>,
+) -> Result<Json<crate::db::LoggingSettingsRow>, (StatusCode, Json<ApiError>)> {
+    let Some(db) = &state.db else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "database not configured".into(),
+            }),
+        ));
+    };
+    db.get_logging_settings().await.map(Json).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+    })
+}
+
+async fn logging_settings_put(
+    State(state): State<AdminState>,
+    Json(body): Json<LoggingSettingsPutBody>,
+) -> Result<Json<crate::db::LoggingSettingsRow>, (StatusCode, Json<ApiError>)> {
+    let Some(db) = &state.db else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "database not configured".into(),
+            }),
+        ));
+    };
+    let storage = crate::db::LogStorageBackend::parse(&body.storage);
+    let update = crate::db::LoggingSettingsUpdate {
+        enabled: body.enabled,
+        storage,
+        ttl_days: body.ttl_days,
+    };
+    let row = db.update_logging_settings(update).await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    state.access_log.set_enabled(row.enabled);
+    state
+        .proxy_log_enabled
+        .store(row.enabled, Ordering::Relaxed);
+    state.access_log.set_storage(row.storage);
+    #[cfg(feature = "scylla-db")]
+    if row.storage == crate::db::LogStorageBackend::Scylla {
+        if let Some(session) = db.scylla_session_arc() {
+            state.access_log.start_scylla_writer(session);
+        }
+    }
+
+    // Keep Config.proxy_log aligned for dashboard / sites UI.
+    {
+        let mut cfg = state.runtime_config.write().await;
+        if cfg.proxy_log != row.enabled {
+            cfg.proxy_log = row.enabled;
+            if let Err(err) = db.save_proxy_config(&cfg).await {
+                tracing::warn!(error = %err, "failed to sync proxy_log flag into config");
+            }
+        }
+    }
+
+    state
+        .proxy_log
+        .push(ProxyLogEntry::config_reload(format!(
+            "logging settings updated (enabled={}, storage={})",
+            row.enabled,
+            row.storage.as_str()
+        )))
+        .await;
+
+    Ok(Json(row))
 }
 
 #[derive(Serialize)]
@@ -1895,7 +2031,9 @@ async fn reload_config(
     *state.runtime_config.write().await = cfg.clone();
     state
         .proxy_log_enabled
-        .store(cfg.proxy_log, Ordering::Relaxed);
+        .store(cfg.proxy_log || state.access_log.enabled(), Ordering::Relaxed);
+    // Do not flip the access-log warehouse/H3 sink from legacy proxy_log alone.
+    // That sink is controlled by GET/PUT /api/logging/settings.
     state
         .proxy_log
         .push(ProxyLogEntry::config_reload(format!(
@@ -2554,6 +2692,7 @@ pub fn build_state(
     sessions: Option<Sessions>,
     proxy_log: Arc<ProxyLog>,
     proxy_log_enabled: Arc<AtomicBool>,
+    access_log: crate::access_log::AccessLogSink,
     metrics: ProxyMetrics,
 ) -> AdminState {
     let env_password = admin_password();
@@ -2584,6 +2723,7 @@ pub fn build_state(
         http01_store,
         proxy_log,
         proxy_log_enabled,
+        access_log,
         metrics,
         viewer_mode: false,
         #[cfg(feature = "ingress")]
@@ -2617,6 +2757,7 @@ pub fn build_ingress_state(
     http01_store: Arc<Http01ChallengeStore>,
     proxy_log: Arc<ProxyLog>,
     proxy_log_enabled: Arc<AtomicBool>,
+    access_log: crate::access_log::AccessLogSink,
     certs_dir: PathBuf,
     metrics: ProxyMetrics,
     db: Option<Arc<Database>>,
@@ -2656,6 +2797,7 @@ pub fn build_ingress_state(
         http01_store,
         proxy_log,
         proxy_log_enabled,
+        access_log,
         metrics,
         viewer_mode: true,
         kube_client,

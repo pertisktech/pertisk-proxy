@@ -25,6 +25,7 @@ pub struct PendingH3 {
     pub configs: Vec<H3Config>,
     pub runtime_cfg: RuntimeConfig,
     pub metrics: ProxyMetrics,
+    pub access_log: crate::access_log::AccessLogSink,
 }
 
 /// Start the Pingora reverse proxy. HTTP/3 is started on the Tokio runtime after TCP/TLS bind.
@@ -44,6 +45,7 @@ pub fn run(
     pending_h3: Option<PendingH3>,
     log: Arc<ProxyLog>,
     proxy_log_enabled: Arc<std::sync::atomic::AtomicBool>,
+    access_log: crate::access_log::AccessLogSink,
     metrics: ProxyMetrics,
 ) -> Result<()> {
     let https_enabled = https_should_listen(
@@ -102,6 +104,7 @@ pub fn run(
         http01_store,
         log,
         proxy_log_enabled,
+        access_log,
         metrics.clone(),
     );
     let mut proxy = http_proxy_service(&server.configuration, gateway);
@@ -163,6 +166,7 @@ pub fn run(
             let cert_store = Arc::clone(&h3.cert_store);
             let runtime_cfg = h3.runtime_cfg.clone();
             let metrics = h3.metrics.clone();
+            let access_log = h3.access_log.clone();
             let udp = config.udp_listen.clone();
             let udp_err = udp.clone();
             // Dedicated thread + runtime: sharing the main Tokio runtime with Pingora
@@ -183,8 +187,15 @@ pub fn run(
                         }
                     };
                     rt.block_on(async move {
-                        if let Err(err) =
-                            crate::h3::run(router, config, cert_store, &runtime_cfg, metrics).await
+                        if let Err(err) = crate::h3::run(
+                            router,
+                            config,
+                            cert_store,
+                            &runtime_cfg,
+                            metrics,
+                            access_log,
+                        )
+                        .await
                         {
                             tracing::error!(error = %err, udp = %udp, "HTTP/3 listener stopped");
                         }

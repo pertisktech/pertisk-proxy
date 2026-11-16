@@ -5,7 +5,7 @@
 //! Admin UI is the primary way to add sites, import certificates, and configure DNS providers.
 //! For Kubernetes Ingress control, use the `pertisk-proxy-ingress` binary.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -30,6 +30,7 @@ fn main() -> Result<()> {
     pertisk_proxy::tls::init_crypto_provider();
 
     let proxy_log = Arc::new(ProxyLog::new(10_000));
+    let access_log = pertisk_proxy::AccessLogSink::new(Arc::clone(&proxy_log));
     logging::init(Some(Arc::clone(&proxy_log)));
 
     // Apply DB-backed runtime env overrides before building the Tokio runtime.
@@ -108,6 +109,40 @@ fn main() -> Result<()> {
     let http01_store = Arc::new(Http01ChallengeStore::new());
     let proxy_log_enabled = Arc::new(AtomicBool::new(runtime_config.proxy_log));
     let metrics = pertisk_proxy::ProxyMetrics::new();
+
+    // Apply logging storage settings (memory vs Scylla access-log warehouse).
+    {
+        let logging = tokio_runtime.block_on(async { db.get_logging_settings().await });
+        match logging {
+            Ok(settings) => {
+                // Warehouse / H3 access-log sink follows logging_settings.enabled only.
+                // Legacy `proxy_log` still drives Pingora → memory ring (see Gateway::logging).
+                access_log.set_enabled(settings.enabled);
+                proxy_log_enabled
+                    .store(settings.enabled || runtime_config.proxy_log, Ordering::Relaxed);
+                access_log.set_storage(settings.storage);
+                #[cfg(feature = "scylla-db")]
+                if settings.storage == pertisk_proxy::db::LogStorageBackend::Scylla {
+                    if let Some(session) = db.scylla_session_arc() {
+                        access_log.start_scylla_writer(session);
+                        info!(
+                            ttl_days = settings.ttl_days,
+                            "access log warehouse: ScyllaDB"
+                        );
+                    } else {
+                        tracing::warn!(
+                            "logging storage=scylla but no Scylla session; falling back to memory"
+                        );
+                        access_log.set_storage(pertisk_proxy::db::LogStorageBackend::Memory);
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to load logging settings; H3 warehouse off");
+                access_log.set_enabled(false);
+            }
+        }
+    }
 
     apply::apply_config(&router, &runtime_config)?;
     cert_store.reload_from_configs(&runtime_config.tls)?;
@@ -251,6 +286,7 @@ fn main() -> Result<()> {
             Some(sessions),
             Arc::clone(&proxy_log),
             Arc::clone(&proxy_log_enabled),
+            access_log.clone(),
             metrics.clone(),
         );
         let admin_addr = pertisk_proxy::api::management_addr();
@@ -292,6 +328,7 @@ fn main() -> Result<()> {
             configs,
             runtime_cfg: runtime_cfg.clone(),
             metrics: metrics.clone(),
+            access_log: access_log.clone(),
         })
     } else {
         None
@@ -309,6 +346,7 @@ fn main() -> Result<()> {
         pending_h3,
         proxy_log,
         proxy_log_enabled,
+        access_log,
         metrics,
     )
 }

@@ -91,6 +91,7 @@ pub struct Gateway {
     http01_store: Option<Arc<crate::tls::Http01ChallengeStore>>,
     log: Arc<ProxyLog>,
     proxy_log_enabled: Arc<AtomicBool>,
+    access_log: crate::access_log::AccessLogSink,
     metrics: ProxyMetrics,
 }
 
@@ -105,6 +106,7 @@ impl Gateway {
         http01_store: Option<Arc<crate::tls::Http01ChallengeStore>>,
         log: Arc<ProxyLog>,
         proxy_log_enabled: Arc<AtomicBool>,
+        access_log: crate::access_log::AccessLogSink,
         metrics: ProxyMetrics,
     ) -> Self {
         Self {
@@ -117,6 +119,7 @@ impl Gateway {
             http01_store,
             log,
             proxy_log_enabled,
+            access_log,
             metrics,
         }
     }
@@ -943,7 +946,9 @@ impl ProxyHttp for Gateway {
             ctx.metrics_counted = false;
         }
 
-        if !self.proxy_log_enabled.load(Ordering::Relaxed) {
+        let sink_on = self.access_log.enabled();
+        let ui_on = self.proxy_log_enabled.load(Ordering::Relaxed);
+        if !sink_on && !ui_on {
             return;
         }
 
@@ -969,15 +974,18 @@ impl ProxyHttp for Gateway {
             if self.suppress_error_log(session, ctx, err) {
                 return;
             }
-            let _ = self
-                .log
-                .push(ProxyLogEntry::error_with_context(
-                    &host,
-                    &path,
-                    &upstream,
-                    err.to_string(),
-                ))
-                .await;
+            let entry = ProxyLogEntry::error_with_context(
+                &host,
+                &path,
+                &upstream,
+                err.to_string(),
+            );
+            if sink_on {
+                self.access_log.emit(entry);
+            } else {
+                // Legacy proxy_log: memory ring only (do not enable H3 warehouse path).
+                self.access_log.emit_system(entry);
+            }
             return;
         }
 
@@ -991,19 +999,21 @@ impl ProxyHttp for Gateway {
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
-        let _ = self
-            .log
-            .push(ProxyLogEntry::response(
-                &host,
-                &path,
-                &upstream,
-                status,
-                duration_ms,
-                Some(protocol),
-                encoding.as_deref(),
-                Some(&method),
-            ))
-            .await;
+        let entry = ProxyLogEntry::response(
+            &host,
+            &path,
+            &upstream,
+            status,
+            duration_ms,
+            Some(protocol),
+            encoding.as_deref(),
+            Some(&method),
+        );
+        if sink_on {
+            self.access_log.emit(entry);
+        } else {
+            self.access_log.emit_system(entry);
+        }
     }
 
     async fn fail_to_proxy(

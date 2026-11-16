@@ -3,6 +3,9 @@ pub mod api;
 pub mod config;
 #[cfg(feature = "admin")]
 pub mod db;
+pub mod access_log;
+#[cfg(all(feature = "admin", feature = "scylla-db"))]
+mod access_log_scylla;
 pub mod deny;
 pub mod edge;
 #[cfg(feature = "admin")]
@@ -29,6 +32,7 @@ pub mod storage;
 pub mod tls;
 
 pub use config::{IngressConfig, ProxyConfig, ServerConfig};
+pub use access_log::AccessLogSink;
 pub use log::{ProxyLog, ProxyLogEntry};
 pub use metrics::ProxyMetrics;
 pub use proxy::Gateway;

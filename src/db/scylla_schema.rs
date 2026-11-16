@@ -34,6 +34,7 @@ pub async fn init_schema(session: &Session, keyspace: &str, local_dc: Option<&st
 
     seed_smtp_settings(session).await?;
     seed_s3_settings(session).await?;
+    seed_logging_settings(session).await?;
     Ok(())
 }
 
@@ -128,6 +129,32 @@ const TABLE_DDL: &[&str] = &[
         force_path_style boolean,
         updated_at text
     )",
+    "CREATE TABLE IF NOT EXISTS logging_settings (
+        id int PRIMARY KEY,
+        enabled boolean,
+        storage text,
+        ttl_days int,
+        updated_at text
+    )",
+    // Hour-bucketed access logs (TTL applied via default_time_to_live; ALTER on settings change).
+    "CREATE TABLE IF NOT EXISTS access_logs (
+        bucket text,
+        written_at timestamp,
+        id uuid,
+        level text,
+        host text,
+        path text,
+        method text,
+        status int,
+        duration_ms bigint,
+        upstream text,
+        protocol text,
+        encoding text,
+        message text,
+        entry_type text,
+        PRIMARY KEY ((bucket), written_at, id)
+    ) WITH CLUSTERING ORDER BY (written_at DESC, id DESC)
+      AND default_time_to_live = 604800",
 ];
 
 async fn seed_smtp_settings(session: &Session) -> Result<()> {
@@ -173,6 +200,48 @@ async fn seed_s3_settings(session: &Session) -> Result<()> {
     Ok(())
 }
 
+async fn seed_logging_settings(session: &Session) -> Result<()> {
+    let result = session
+        .query_unpaged("SELECT id FROM logging_settings WHERE id = 1", &[])
+        .await?
+        .into_rows_result()?;
+    if result.rows_num() > 0 {
+        return Ok(());
+    }
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    let storage = std::env::var("PERTISK_LOG_STORAGE")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| v == "memory" || v == "scylla")
+        .unwrap_or_else(|| "memory".into());
+    let ttl_days: i32 = std::env::var("PERTISK_LOG_TTL_DAYS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|n: &i32| *n > 0)
+        .unwrap_or(7);
+    session
+        .query_unpaged(
+            "INSERT INTO logging_settings (id, enabled, storage, ttl_days, updated_at)
+             VALUES (1, false, ?, ?, ?)",
+            (&storage, ttl_days, &updated_at),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Update `access_logs` default TTL (seconds). Best-effort; ignores errors on unsupported ALTERs.
+pub async fn set_access_logs_ttl_secs(session: &Session, ttl_secs: i32) -> Result<()> {
+    let ttl_secs = ttl_secs.max(3600);
+    session
+        .query_unpaged(
+            format!("ALTER TABLE access_logs WITH default_time_to_live = {ttl_secs}"),
+            &[],
+        )
+        .await
+        .context("alter access_logs TTL")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +269,7 @@ mod tests {
         assert!(!TABLE_DDL.is_empty());
         assert!(TABLE_DDL.iter().any(|s| s.contains("proxy_config")));
         assert!(TABLE_DDL.iter().any(|s| s.contains("users")));
+        assert!(TABLE_DDL.iter().any(|s| s.contains("logging_settings")));
+        assert!(TABLE_DDL.iter().any(|s| s.contains("access_logs")));
     }
 }

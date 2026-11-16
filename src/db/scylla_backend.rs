@@ -13,7 +13,8 @@ use uuid::Uuid;
 use crate::config::ScyllaDbConfig;
 
 use super::{
-    cert_expiry_from_pem, DnsProviderRow, S3SettingsRow, S3SettingsUpdate, SmtpSettingsRow,
+    cert_expiry_from_pem, DnsProviderRow, LogStorageBackend, LoggingSettingsRow,
+    LoggingSettingsUpdate, S3SettingsRow, S3SettingsUpdate, SmtpSettingsRow,
     SmtpSettingsUpdate, CertificateRow, DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USERNAME,
     PROXY_CONFIG_KEY,
 };
@@ -573,4 +574,192 @@ pub async fn update_s3_settings(
         )
         .await?;
     get_s3_settings(session).await
+}
+
+pub async fn set_access_logs_ttl_secs(session: &Session, ttl_secs: i32) -> Result<()> {
+    super::scylla_schema::set_access_logs_ttl_secs(session, ttl_secs).await
+}
+
+pub async fn get_logging_settings(session: &Session) -> Result<LoggingSettingsRow> {
+    let result = session
+        .query_unpaged(
+            "SELECT enabled, storage, ttl_days, updated_at FROM logging_settings WHERE id = 1",
+            &[],
+        )
+        .await?
+        .into_rows_result()?;
+    let row = result
+        .maybe_first_row::<(bool, String, i32, String)>()?
+        .context("logging_settings row missing")?;
+    Ok(LoggingSettingsRow {
+        enabled: row.0,
+        storage: LogStorageBackend::parse(&row.1),
+        ttl_days: row.2,
+        updated_at: row.3,
+        scylla_available: true,
+        scylla_hosts: None,
+        scylla_keyspace: None,
+    })
+}
+
+pub async fn update_logging_settings(
+    session: &Session,
+    update: LoggingSettingsUpdate,
+) -> Result<LoggingSettingsRow> {
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    session
+        .query_unpaged(
+            "INSERT INTO logging_settings (id, enabled, storage, ttl_days, updated_at)
+             VALUES (1, ?, ?, ?, ?)",
+            (
+                update.enabled,
+                update.storage.as_str(),
+                update.ttl_days,
+                &updated_at,
+            ),
+        )
+        .await?;
+    get_logging_settings(session).await
+}
+
+pub async fn insert_access_log(
+    session: &Session,
+    bucket: &str,
+    written_at: chrono::DateTime<chrono::Utc>,
+    id: Uuid,
+    entry: &crate::log::ProxyLogEntry,
+) -> Result<()> {
+    use crate::log::{LogEntryType, LogLevel};
+    use scylla::value::CqlTimestamp;
+    let level = match entry.level {
+        LogLevel::Debug => "debug",
+        LogLevel::Info => "info",
+        LogLevel::Warn => "warn",
+        LogLevel::Error => "error",
+    };
+    let entry_type = match entry.entry_type {
+        LogEntryType::Request => "request",
+        LogEntryType::Response => "response",
+        LogEntryType::HealthCheck => "health_check",
+        LogEntryType::ConfigReload => "config_reload",
+        LogEntryType::Tracing => "tracing",
+        LogEntryType::Error => "error",
+    };
+    let status = entry.status.map(|s| s as i32);
+    let duration_ms = entry.duration_ms.map(|d| d as i64);
+    let written_ts = CqlTimestamp(written_at.timestamp_millis());
+    session
+        .query_unpaged(
+            "INSERT INTO access_logs (
+                bucket, written_at, id, level, host, path, method, status,
+                duration_ms, upstream, protocol, encoding, message, entry_type
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                bucket,
+                written_ts,
+                id,
+                level,
+                entry.host.as_deref(),
+                entry.path.as_deref(),
+                entry.method.as_deref(),
+                status,
+                duration_ms,
+                entry.upstream.as_deref(),
+                entry.protocol.as_deref(),
+                entry.encoding.as_deref(),
+                entry.message.as_str(),
+                entry_type,
+            ),
+        )
+        .await
+        .context("insert access_logs")?;
+    Ok(())
+}
+
+pub async fn query_access_logs(
+    session: &Session,
+    buckets: &[String],
+    limit: usize,
+) -> Result<Vec<crate::log::ProxyLogEntry>> {
+    use crate::log::{LogEntryType, LogLevel, ProxyLogEntry};
+    let mut out = Vec::new();
+    for bucket in buckets {
+        if out.len() >= limit {
+            break;
+        }
+        let remaining = limit - out.len();
+        let result = session
+            .query_unpaged(
+                "SELECT written_at, level, host, path, method, status, duration_ms,
+                        upstream, protocol, encoding, message, entry_type
+                 FROM access_logs WHERE bucket = ? LIMIT ?",
+                (bucket, remaining as i32),
+            )
+            .await?
+            .into_rows_result()?;
+        for row in result.rows::<(
+            scylla::value::CqlTimestamp,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<i32>,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+        )>()? {
+            let (
+                written_ts,
+                level,
+                host,
+                path,
+                method,
+                status,
+                duration_ms,
+                upstream,
+                protocol,
+                encoding,
+                message,
+                entry_type,
+            ) = row?;
+            let written_at = chrono::DateTime::from_timestamp_millis(written_ts.0)
+                .unwrap_or_else(chrono::Utc::now);
+            let level = match level.as_str() {
+                "debug" => LogLevel::Debug,
+                "warn" | "warning" => LogLevel::Warn,
+                "error" => LogLevel::Error,
+                _ => LogLevel::Info,
+            };
+            let entry_type = match entry_type.as_str() {
+                "request" => LogEntryType::Request,
+                "health_check" => LogEntryType::HealthCheck,
+                "config_reload" => LogEntryType::ConfigReload,
+                "tracing" => LogEntryType::Tracing,
+                "error" => LogEntryType::Error,
+                _ => LogEntryType::Response,
+            };
+            out.push(ProxyLogEntry {
+                timestamp: written_at,
+                level,
+                host,
+                path,
+                upstream,
+                status: status.map(|s| s as u16),
+                duration_ms: duration_ms.map(|d| d as u64),
+                message,
+                entry_type,
+                protocol,
+                encoding,
+                method,
+            });
+        }
+    }
+    out.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    if out.len() > limit {
+        out.truncate(limit);
+    }
+    Ok(out)
 }

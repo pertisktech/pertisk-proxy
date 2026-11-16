@@ -26,6 +26,7 @@ exclude-files = [
     "src/proxy/mod.rs",
     "src/proxy/apply.rs",
     "src/proxy/routes.rs",
+    "src/access_log_scylla.rs",
     "src/h3/config.rs",
     "src/h3/headers.rs",
     "src/h3/health.rs",

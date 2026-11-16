@@ -31,6 +31,13 @@ pub const DEFAULT_ADMIN_PASSWORD: &str = "admin";
 
 pub(crate) const PROXY_CONFIG_KEY: &str = "current";
 
+#[cfg(feature = "scylla-db")]
+async fn attach_sqlite_logs_session(
+) -> Result<Arc<::scylla::client::session::Session>> {
+    let cfg = crate::config::ScyllaDbConfig::from_env();
+    scylla_backend::connect(&cfg).await
+}
+
 fn seed_admin_user(conn: &Connection) -> Result<()> {
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
     if count > 0 {
@@ -65,6 +72,10 @@ enum DbBackend {
 #[derive(Clone)]
 pub struct Database {
     backend: DbBackend,
+    /// Optional Scylla session for access-log warehouse when config backend is SQLite
+    /// but `PERTISK_SCYLLA_*` is set (same cluster).
+    #[cfg(feature = "scylla-db")]
+    logs_session: Option<Arc<::scylla::client::session::Session>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +160,54 @@ pub struct S3SettingsUpdate {
     pub force_path_style: bool,
 }
 
+/// Access-log storage backend for the Logs UI / warehouse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LogStorageBackend {
+    #[default]
+    Memory,
+    Scylla,
+}
+
+impl LogStorageBackend {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Memory => "memory",
+            Self::Scylla => "scylla",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "scylla" | "scylladb" | "cassandra" => Self::Scylla,
+            _ => Self::Memory,
+        }
+    }
+}
+
+/// Singleton logging settings (`id = 1`).
+#[derive(Debug, Clone, Serialize)]
+pub struct LoggingSettingsRow {
+    pub enabled: bool,
+    pub storage: LogStorageBackend,
+    pub ttl_days: i32,
+    pub updated_at: String,
+    /// True when a Scylla session is available for access-log warehouse writes.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub scylla_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scylla_hosts: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scylla_keyspace: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoggingSettingsUpdate {
+    pub enabled: bool,
+    pub storage: LogStorageBackend,
+    pub ttl_days: i32,
+}
+
 impl Database {
     /// Open SQLite admin DB at `path` (legacy helper).
     pub fn open(path: PathBuf) -> Result<Self> {
@@ -160,6 +219,8 @@ impl Database {
         seed_admin_user(&conn)?;
         Ok(Self {
             backend: DbBackend::Sqlite { path },
+            #[cfg(feature = "scylla-db")]
+            logs_session: None,
         })
     }
 
@@ -168,7 +229,28 @@ impl Database {
         use crate::config::{resolve_db_backend, resolve_db_path, DbBackendKind, ScyllaDbConfig};
 
         match resolve_db_backend() {
-            DbBackendKind::Sqlite => Self::open(resolve_db_path()),
+            DbBackendKind::Sqlite => {
+                let mut db = Self::open(resolve_db_path())?;
+                #[cfg(feature = "scylla-db")]
+                {
+                    let hosts = std::env::var("PERTISK_SCYLLA_HOSTS").unwrap_or_default();
+                    if !hosts.trim().is_empty() {
+                        match attach_sqlite_logs_session().await {
+                            Ok(session) => {
+                                info!("attached Scylla session for access-log warehouse (SQLite config backend)");
+                                db.logs_session = Some(session);
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    error = %err,
+                                    "PERTISK_SCYLLA_HOSTS set but could not open logs session"
+                                );
+                            }
+                        }
+                    }
+                }
+                Ok(db)
+            }
             #[cfg(feature = "scylla-db")]
             DbBackendKind::Scylla => {
                 let cfg = ScyllaDbConfig::from_env();
@@ -182,6 +264,7 @@ impl Database {
                         session,
                         data_dir: sentinel,
                     },
+                    logs_session: None,
                 })
             }
             #[cfg(not(feature = "scylla-db"))]
@@ -231,6 +314,36 @@ impl Database {
         }
     }
 
+    /// Shared Scylla session for access-log warehouse (config backend or SQLite side session).
+    #[cfg(feature = "scylla-db")]
+    pub fn scylla_session_arc(&self) -> Option<Arc<::scylla::client::session::Session>> {
+        match &self.backend {
+            DbBackend::Scylla { session, .. } => Some(Arc::clone(session)),
+            DbBackend::Sqlite { .. } => self.logs_session.clone(),
+        }
+    }
+
+    #[cfg(feature = "scylla-db")]
+    pub async fn query_access_logs(
+        &self,
+        buckets: &[String],
+        limit: usize,
+    ) -> Result<Vec<crate::log::ProxyLogEntry>> {
+        let session = self.access_log_session()?;
+        scylla_backend::query_access_logs(session, buckets, limit).await
+    }
+
+    #[cfg(feature = "scylla-db")]
+    pub async fn insert_access_log_row(
+        session: &::scylla::client::session::Session,
+        bucket: &str,
+        written_at: chrono::DateTime<chrono::Utc>,
+        id: uuid::Uuid,
+        entry: &crate::log::ProxyLogEntry,
+    ) -> Result<()> {
+        scylla_backend::insert_access_log(session, bucket, written_at, id, entry).await
+    }
+
     #[cfg(feature = "scylla-db")]
     fn scylla_session(&self) -> Result<&::scylla::client::session::Session> {
         match &self.backend {
@@ -238,6 +351,18 @@ impl Database {
             DbBackend::Sqlite { .. } => {
                 anyhow::bail!("internal: Scylla session requested on SQLite backend")
             }
+        }
+    }
+
+    #[cfg(feature = "scylla-db")]
+    fn access_log_session(&self) -> Result<&::scylla::client::session::Session> {
+        match &self.backend {
+            DbBackend::Scylla { session, .. } => Ok(session.as_ref()),
+            DbBackend::Sqlite { .. } => self
+                .logs_session
+                .as_ref()
+                .map(|s| s.as_ref())
+                .ok_or_else(|| anyhow::anyhow!("Scylla access-log session not available")),
         }
     }
 
@@ -960,6 +1085,121 @@ impl Database {
         })
         .await?
     }
+
+    pub fn logging_scylla_meta(&self) -> (bool, Option<String>, Option<String>) {
+        #[cfg(feature = "scylla-db")]
+        {
+            let available = self.scylla_session_arc().is_some();
+            if available {
+                let hosts = std::env::var("PERTISK_SCYLLA_HOSTS").ok();
+                let keyspace = std::env::var("PERTISK_SCYLLA_KEYSPACE")
+                    .ok()
+                    .or_else(|| Some("pertisk_proxy".into()));
+                return (true, hosts, keyspace);
+            }
+            return (false, None, None);
+        }
+        #[cfg(not(feature = "scylla-db"))]
+        {
+            (false, None, None)
+        }
+    }
+
+    pub async fn get_logging_settings(&self) -> Result<LoggingSettingsRow> {
+        let (scylla_available, scylla_hosts, scylla_keyspace) = self.logging_scylla_meta();
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            let mut row = scylla_backend::get_logging_settings(self.scylla_session()?).await?;
+            row.scylla_available = scylla_available;
+            row.scylla_hosts = scylla_hosts;
+            row.scylla_keyspace = scylla_keyspace;
+            return Ok(row);
+        }
+        let path = self.sqlite_path()?;
+        spawn_blocking(move || {
+            let conn = Connection::open(path)?;
+            conn.query_row(
+                "SELECT enabled, storage, ttl_days, updated_at FROM logging_settings WHERE id = 1",
+                [],
+                |row| {
+                    Ok(LoggingSettingsRow {
+                        enabled: row.get::<_, i64>(0)? != 0,
+                        storage: LogStorageBackend::parse(&row.get::<_, String>(1)?),
+                        ttl_days: row.get::<_, i64>(2)? as i32,
+                        updated_at: row.get(3)?,
+                        scylla_available,
+                        scylla_hosts: scylla_hosts.clone(),
+                        scylla_keyspace: scylla_keyspace.clone(),
+                    })
+                },
+            )
+            .map_err(Into::into)
+        })
+        .await?
+    }
+
+    pub async fn update_logging_settings(
+        &self,
+        update: LoggingSettingsUpdate,
+    ) -> Result<LoggingSettingsRow> {
+        let ttl_days = update.ttl_days.clamp(1, 365);
+        #[cfg(feature = "scylla-db")]
+        if self.is_scylla() {
+            let session = self.scylla_session()?;
+            let row = scylla_backend::update_logging_settings(
+                session,
+                LoggingSettingsUpdate {
+                    enabled: update.enabled,
+                    storage: update.storage,
+                    ttl_days,
+                },
+            )
+            .await?;
+            if update.storage == LogStorageBackend::Scylla {
+                let ttl_secs = ttl_days.saturating_mul(86400);
+                if let Err(err) =
+                    scylla_backend::set_access_logs_ttl_secs(session, ttl_secs).await
+                {
+                    tracing::warn!(error = %err, "failed to alter access_logs TTL");
+                }
+            }
+            let (scylla_available, scylla_hosts, scylla_keyspace) = self.logging_scylla_meta();
+            return Ok(LoggingSettingsRow {
+                scylla_available,
+                scylla_hosts,
+                scylla_keyspace,
+                ..row
+            });
+        }
+        if update.storage == LogStorageBackend::Scylla && !self.logging_scylla_meta().0 {
+            anyhow::bail!("ScyllaDB is not configured (set PERTISK_SCYLLA_HOSTS)");
+        }
+        let path = self.sqlite_path()?;
+        let storage = update.storage.as_str().to_string();
+        spawn_blocking(move || {
+            let conn = Connection::open(path)?;
+            let updated_at = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "UPDATE logging_settings SET enabled = ?1, storage = ?2, ttl_days = ?3, updated_at = ?4
+                 WHERE id = 1",
+                rusqlite::params![update.enabled as i64, storage, ttl_days, updated_at],
+            )?;
+            Ok::<_, rusqlite::Error>(())
+        })
+        .await??;
+        #[cfg(feature = "scylla-db")]
+        if update.storage == LogStorageBackend::Scylla {
+            if let Some(session) = self.scylla_session_arc() {
+                let ttl_secs = ttl_days.saturating_mul(86400);
+                if let Err(err) =
+                    scylla_backend::set_access_logs_ttl_secs(session.as_ref(), ttl_secs).await
+                {
+                    tracing::warn!(error = %err, "failed to alter access_logs TTL");
+                }
+            }
+        }
+        self.get_logging_settings().await
+    }
 }
 
 /// Parse first certificate in PEM and return its not_after as RFC2822 string.
@@ -1027,5 +1267,44 @@ pub fn cert_validity_from_pem(cert_pem: &[u8]) -> CertValidity {
     CertValidity {
         issued_at: None,
         expires_at: cert_expiry_from_pem(cert_pem),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn logging_settings_round_trip_sqlite() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let db = Database::open(path).unwrap();
+        let row = db.get_logging_settings().await.unwrap();
+        assert!(!row.enabled);
+        assert_eq!(row.storage, LogStorageBackend::Memory);
+        assert_eq!(row.ttl_days, 7);
+
+        let updated = db
+            .update_logging_settings(LoggingSettingsUpdate {
+                enabled: true,
+                storage: LogStorageBackend::Memory,
+                ttl_days: 14,
+            })
+            .await
+            .unwrap();
+        assert!(updated.enabled);
+        assert_eq!(updated.storage, LogStorageBackend::Memory);
+        assert_eq!(updated.ttl_days, 14);
+
+        let again = db.get_logging_settings().await.unwrap();
+        assert!(again.enabled);
+        assert_eq!(again.ttl_days, 14);
+    }
+
+    #[test]
+    fn log_storage_backend_parse() {
+        assert_eq!(LogStorageBackend::parse("scylla"), LogStorageBackend::Scylla);
+        assert_eq!(LogStorageBackend::parse("memory"), LogStorageBackend::Memory);
+        assert_eq!(LogStorageBackend::parse("other"), LogStorageBackend::Memory);
     }
 }

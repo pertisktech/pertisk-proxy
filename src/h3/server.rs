@@ -89,6 +89,7 @@ pub async fn run(
     cert_store: Arc<CertStore>,
     runtime_cfg: &RuntimeConfig,
     _metrics: ProxyMetrics,
+    _access_log: crate::access_log::AccessLogSink,
 ) -> Result<()> {
     while cert_store.default_paths().is_none() {
         tracing::info!(

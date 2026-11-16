@@ -186,6 +186,26 @@ pub fn run() -> anyhow::Result<()> {
             })
             .unwrap_or(false),
     ));
+    let access_log = crate::access_log::AccessLogSink::new(Arc::clone(&proxy_log));
+    access_log.set_enabled(false);
+    if let Some(ref database) = db {
+        if let Ok(settings) = tokio_runtime.block_on(database.get_logging_settings()) {
+            // H3/warehouse sink follows logging_settings only; legacy proxy_log stays Pingora UI.
+            access_log.set_enabled(settings.enabled);
+            proxy_log_enabled.store(
+                settings.enabled
+                    || proxy_log_enabled.load(std::sync::atomic::Ordering::Relaxed),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            access_log.set_storage(settings.storage);
+            #[cfg(feature = "scylla-db")]
+            if settings.storage == crate::db::LogStorageBackend::Scylla {
+                if let Some(session) = database.scylla_session_arc() {
+                    access_log.start_scylla_writer(session);
+                }
+            }
+        }
+    }
     let metrics = crate::metrics::ProxyMetrics::new();
 
     let controller = Arc::new(IngressController::new(
@@ -233,6 +253,7 @@ pub fn run() -> anyhow::Result<()> {
         Arc::clone(&http01_store),
         Arc::clone(&proxy_log),
         Arc::clone(&proxy_log_enabled),
+        access_log.clone(),
         certs_dir,
         metrics.clone(),
         db,
@@ -292,6 +313,7 @@ pub fn run() -> anyhow::Result<()> {
         let cert_store_h3 = Arc::clone(&cert_store);
         let runtime_cfg_h3 = runtime_cfg.clone();
         let metrics_h3 = metrics.clone();
+        let access_log_h3 = access_log.clone();
         tokio_runtime.spawn(async move {
             let mut logged_wait = false;
             loop {
@@ -303,6 +325,7 @@ pub fn run() -> anyhow::Result<()> {
                         Arc::clone(&cert_store_h3),
                         &runtime_cfg_h3,
                         metrics_h3.clone(),
+                        access_log_h3.clone(),
                     )
                     .await
                     {
@@ -336,6 +359,7 @@ pub fn run() -> anyhow::Result<()> {
         None,
         proxy_log,
         proxy_log_enabled,
+        access_log,
         metrics,
     )
 }

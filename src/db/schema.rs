@@ -1,4 +1,5 @@
-//! SQLite schema: proxy_config, dns_providers, users, sessions, certificates, smtp_settings, s3_settings.
+//! SQLite schema: proxy_config, dns_providers, users, sessions, certificates,
+//! smtp_settings, s3_settings, logging_settings.
 
 use rusqlite::Connection;
 
@@ -66,12 +67,20 @@ pub fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
             force_path_style INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS logging_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            enabled INTEGER NOT NULL DEFAULT 0,
+            storage TEXT NOT NULL DEFAULT 'memory',
+            ttl_days INTEGER NOT NULL DEFAULT 7,
+            updated_at TEXT NOT NULL
+        );
         ",
     )?;
     migrate_certificates_expires_at(conn)?;
     migrate_smtp_notify_flags(conn)?;
     seed_smtp_settings(conn)?;
     seed_s3_settings(conn)?;
+    seed_logging_settings(conn)?;
     Ok(())
 }
 
@@ -108,6 +117,33 @@ fn seed_s3_settings(conn: &Connection) -> Result<(), rusqlite::Error> {
             access_key_id, secret_access_key, force_path_style, updated_at
          ) VALUES (1, 0, '', 'us-east-1', '', '', '', '', 0, ?1)",
         rusqlite::params![updated_at],
+    )?;
+    Ok(())
+}
+
+fn seed_logging_settings(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM logging_settings WHERE id = 1", [], |r| {
+            r.get(0)
+        })?;
+    if count > 0 {
+        return Ok(());
+    }
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    let storage = std::env::var("PERTISK_LOG_STORAGE")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| v == "memory" || v == "scylla")
+        .unwrap_or_else(|| "memory".into());
+    let ttl_days: i64 = std::env::var("PERTISK_LOG_TTL_DAYS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(7);
+    conn.execute(
+        "INSERT INTO logging_settings (id, enabled, storage, ttl_days, updated_at)
+         VALUES (1, 0, ?1, ?2, ?3)",
+        rusqlite::params![storage, ttl_days, updated_at],
     )?;
     Ok(())
 }
