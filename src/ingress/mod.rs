@@ -189,22 +189,25 @@ pub fn run() -> anyhow::Result<()> {
     let access_log = crate::access_log::AccessLogSink::new(Arc::clone(&proxy_log));
     access_log.set_enabled(false);
     if let Some(ref database) = db {
-        if let Ok(settings) = tokio_runtime.block_on(database.get_logging_settings()) {
-            // H3/warehouse sink follows logging_settings only; legacy proxy_log stays Pingora UI.
-            access_log.set_enabled(settings.enabled);
-            proxy_log_enabled.store(
-                settings.enabled
-                    || proxy_log_enabled.load(std::sync::atomic::Ordering::Relaxed),
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            access_log.set_storage(settings.storage);
-            #[cfg(feature = "scylla-db")]
-            if settings.storage == crate::db::LogStorageBackend::Scylla {
-                if let Some(session) = database.scylla_session_arc() {
-                    access_log.start_scylla_writer(session);
+        // start_scylla_writer uses tokio::spawn — must run inside the runtime.
+        tokio_runtime.block_on(async {
+            if let Ok(settings) = database.get_logging_settings().await {
+                // H3/warehouse sink follows logging_settings only; legacy proxy_log stays Pingora UI.
+                access_log.set_enabled(settings.enabled);
+                proxy_log_enabled.store(
+                    settings.enabled
+                        || proxy_log_enabled.load(std::sync::atomic::Ordering::Relaxed),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                access_log.set_storage(settings.storage);
+                #[cfg(feature = "scylla-db")]
+                if settings.storage == crate::db::LogStorageBackend::Scylla {
+                    if let Some(session) = database.scylla_session_arc() {
+                        access_log.start_scylla_writer(session);
+                    }
                 }
             }
-        }
+        });
     }
     let metrics = crate::metrics::ProxyMetrics::new();
 

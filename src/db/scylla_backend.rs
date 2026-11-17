@@ -430,7 +430,7 @@ pub async fn get_smtp_settings(session: &Session) -> Result<SmtpSettingsRow> {
     let result = session
         .query_unpaged(
             "SELECT enabled, host, port, username, password, from_email, from_name,
-                    use_tls, alert_to, notify_login_failure, notify_login,
+                    use_tls, alert_to, dashboard_url, notify_login_failure, notify_login,
                     notify_password_change, updated_at
              FROM smtp_settings WHERE id = 1",
             &[],
@@ -448,6 +448,7 @@ pub async fn get_smtp_settings(session: &Session) -> Result<SmtpSettingsRow> {
             String,
             bool,
             String,
+            Option<String>,
             bool,
             bool,
             bool,
@@ -464,10 +465,11 @@ pub async fn get_smtp_settings(session: &Session) -> Result<SmtpSettingsRow> {
         from_name: row.6,
         use_tls: row.7,
         alert_to: row.8,
-        notify_login_failure: row.9,
-        notify_login: row.10,
-        notify_password_change: row.11,
-        updated_at: row.12,
+        dashboard_url: row.9.unwrap_or_default(),
+        notify_login_failure: row.10,
+        notify_login: row.11,
+        notify_password_change: row.12,
+        updated_at: row.13,
     })
 }
 
@@ -485,9 +487,9 @@ pub async fn update_smtp_settings(
         .query_unpaged(
             "INSERT INTO smtp_settings (
                 id, enabled, host, port, username, password, from_email, from_name,
-                use_tls, alert_to, notify_login_failure, notify_login,
+                use_tls, alert_to, dashboard_url, notify_login_failure, notify_login,
                 notify_password_change, updated_at
-             ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 update.enabled,
                 &update.host,
@@ -498,6 +500,7 @@ pub async fn update_smtp_settings(
                 &update.from_name,
                 update.use_tls,
                 &update.alert_to,
+                &update.dashboard_url,
                 update.notify_login_failure,
                 update.notify_login,
                 update.notify_password_change,

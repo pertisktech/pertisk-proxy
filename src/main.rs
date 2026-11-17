@@ -111,9 +111,9 @@ fn main() -> Result<()> {
     let metrics = pertisk_proxy::ProxyMetrics::new();
 
     // Apply logging storage settings (memory vs Scylla access-log warehouse).
-    {
-        let logging = tokio_runtime.block_on(async { db.get_logging_settings().await });
-        match logging {
+    // Must run inside the Tokio runtime: start_scylla_writer uses tokio::spawn.
+    tokio_runtime.block_on(async {
+        match db.get_logging_settings().await {
             Ok(settings) => {
                 // Warehouse / H3 access-log sink follows logging_settings.enabled only.
                 // Legacy `proxy_log` still drives Pingora → memory ring (see Gateway::logging).
@@ -142,7 +142,7 @@ fn main() -> Result<()> {
                 access_log.set_enabled(false);
             }
         }
-    }
+    });
 
     apply::apply_config(&router, &runtime_config)?;
     cert_store.reload_from_configs(&runtime_config.tls)?;

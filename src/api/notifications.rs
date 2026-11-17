@@ -24,6 +24,7 @@ pub struct SmtpSettingsResponse {
     pub from_name: String,
     pub use_tls: bool,
     pub alert_to: String,
+    pub dashboard_url: String,
     pub notify_login_failure: bool,
     pub notify_login: bool,
     pub notify_password_change: bool,
@@ -46,6 +47,8 @@ pub struct UpdateSmtpSettingsRequest {
     pub use_tls: bool,
     #[serde(default)]
     pub alert_to: String,
+    #[serde(default)]
+    pub dashboard_url: String,
     #[serde(default)]
     pub notify_login_failure: bool,
     #[serde(default)]
@@ -144,11 +147,35 @@ fn row_to_response(row: &SmtpSettingsRow) -> SmtpSettingsResponse {
         from_name: row.from_name.clone(),
         use_tls: row.use_tls,
         alert_to: row.alert_to.clone(),
+        dashboard_url: row.dashboard_url.clone(),
         notify_login_failure: row.notify_login_failure,
         notify_login: row.notify_login,
         notify_password_change: row.notify_password_change,
         updated_at: row.updated_at.clone(),
     }
+}
+
+fn content_with_dashboard(
+    content: templates::EmailContent,
+    dashboard_url: &str,
+) -> templates::EmailContent {
+    templates::with_dashboard_link(content, dashboard_url)
+}
+
+/// For previews only: if no dashboard URL is configured, still show a sample CTA
+/// so the template shape is visible in Settings.
+fn content_for_preview(
+    content: templates::EmailContent,
+    dashboard_url: &str,
+) -> templates::EmailContent {
+    let linked = content_with_dashboard(content, dashboard_url);
+    if linked.action.is_some() {
+        return linked;
+    }
+    linked.with_action(
+        "Open management UI",
+        "https://admin.example.com",
+    )
 }
 
 pub(crate) async fn smtp_get(
@@ -190,6 +217,8 @@ pub(crate) async fn smtp_put(
             from_name: body.from_name.trim().to_string(),
             use_tls: body.use_tls,
             alert_to: body.alert_to.trim().to_string(),
+            dashboard_url: templates::normalize_http_url(&body.dashboard_url)
+                .unwrap_or_else(|| body.dashboard_url.trim().to_string()),
             notify_login_failure: body.notify_login_failure,
             notify_login: body.notify_login,
             notify_password_change: body.notify_password_change,
@@ -237,6 +266,7 @@ pub(crate) async fn smtp_test(
     }
 
     let (subject, content) = templates::sample_content("test");
+    let content = content_with_dashboard(content, &settings.dashboard_url);
     smtp::send_email(&settings, &to, &subject, content, false)
         .await
         .map_err(|e| {
@@ -279,6 +309,7 @@ pub(crate) async fn smtp_preview(
         settings.from_name.trim()
     };
     let (_subject, content) = templates::sample_content(kind);
+    let content = content_for_preview(content, &settings.dashboard_url);
     Ok(Json(PreviewResponse {
         html: templates::render_html_preview(from_name, &content),
     }))
@@ -318,12 +349,15 @@ pub fn notify_auth_event(
         let occurred_at = chrono::Utc::now()
             .format("%Y-%m-%d %H:%M:%S UTC")
             .to_string();
-        let content = kind.content(&templates::AuthEventDetails {
-            username: username.clone(),
-            ip_address,
-            occurred_at,
-            user_agent,
-        });
+        let content = content_with_dashboard(
+            kind.content(&templates::AuthEventDetails {
+                username: username.clone(),
+                ip_address,
+                occurred_at,
+                user_agent,
+            }),
+            &settings.dashboard_url,
+        );
         if let Err(err) = smtp::send_email(&settings, to, kind.subject(), content, true).await {
             tracing::warn!(
                 error = %err,

@@ -110,6 +110,8 @@ pub struct SmtpSettingsRow {
     pub from_name: String,
     pub use_tls: bool,
     pub alert_to: String,
+    /// Public management UI URL used as the CTA link in notification emails.
+    pub dashboard_url: String,
     pub notify_login_failure: bool,
     pub notify_login: bool,
     pub notify_password_change: bool,
@@ -128,6 +130,7 @@ pub struct SmtpSettingsUpdate {
     pub from_name: String,
     pub use_tls: bool,
     pub alert_to: String,
+    pub dashboard_url: String,
     pub notify_login_failure: bool,
     pub notify_login: bool,
     pub notify_password_change: bool,
@@ -862,7 +865,7 @@ impl Database {
             let conn = Connection::open(path)?;
             conn.query_row(
                 "SELECT enabled, host, port, username, password, from_email, from_name,
-                        use_tls, alert_to, notify_login_failure, notify_login,
+                        use_tls, alert_to, dashboard_url, notify_login_failure, notify_login,
                         notify_password_change, updated_at
                  FROM smtp_settings WHERE id = 1",
                 [],
@@ -877,10 +880,11 @@ impl Database {
                         from_name: row.get(6)?,
                         use_tls: row.get::<_, i64>(7)? != 0,
                         alert_to: row.get(8)?,
-                        notify_login_failure: row.get::<_, i64>(9)? != 0,
-                        notify_login: row.get::<_, i64>(10)? != 0,
-                        notify_password_change: row.get::<_, i64>(11)? != 0,
-                        updated_at: row.get(12)?,
+                        dashboard_url: row.get(9)?,
+                        notify_login_failure: row.get::<_, i64>(10)? != 0,
+                        notify_login: row.get::<_, i64>(11)? != 0,
+                        notify_password_change: row.get::<_, i64>(12)? != 0,
+                        updated_at: row.get(13)?,
                     })
                 },
             )
@@ -907,8 +911,8 @@ impl Database {
                         "UPDATE smtp_settings SET
                             enabled = ?1, host = ?2, port = ?3, username = ?4,
                             from_email = ?5, from_name = ?6, use_tls = ?7,
-                            alert_to = ?8, notify_login_failure = ?9, notify_login = ?10,
-                            notify_password_change = ?11, updated_at = ?12
+                            alert_to = ?8, dashboard_url = ?9, notify_login_failure = ?10,
+                            notify_login = ?11, notify_password_change = ?12, updated_at = ?13
                          WHERE id = 1",
                         rusqlite::params![
                             update.enabled as i64,
@@ -919,6 +923,7 @@ impl Database {
                             update.from_name,
                             update.use_tls as i64,
                             update.alert_to,
+                            update.dashboard_url,
                             update.notify_login_failure as i64,
                             update.notify_login as i64,
                             update.notify_password_change as i64,
@@ -931,8 +936,8 @@ impl Database {
                         "UPDATE smtp_settings SET
                             enabled = ?1, host = ?2, port = ?3, username = ?4, password = ?5,
                             from_email = ?6, from_name = ?7, use_tls = ?8,
-                            alert_to = ?9, notify_login_failure = ?10, notify_login = ?11,
-                            notify_password_change = ?12, updated_at = ?13
+                            alert_to = ?9, dashboard_url = ?10, notify_login_failure = ?11,
+                            notify_login = ?12, notify_password_change = ?13, updated_at = ?14
                          WHERE id = 1",
                         rusqlite::params![
                             update.enabled as i64,
@@ -944,6 +949,7 @@ impl Database {
                             update.from_name,
                             update.use_tls as i64,
                             update.alert_to,
+                            update.dashboard_url,
                             update.notify_login_failure as i64,
                             update.notify_login as i64,
                             update.notify_password_change as i64,
@@ -954,7 +960,7 @@ impl Database {
             }
             conn.query_row(
                 "SELECT enabled, host, port, username, password, from_email, from_name,
-                        use_tls, alert_to, notify_login_failure, notify_login,
+                        use_tls, alert_to, dashboard_url, notify_login_failure, notify_login,
                         notify_password_change, updated_at
                  FROM smtp_settings WHERE id = 1",
                 [],
@@ -969,10 +975,11 @@ impl Database {
                         from_name: row.get(6)?,
                         use_tls: row.get::<_, i64>(7)? != 0,
                         alert_to: row.get(8)?,
-                        notify_login_failure: row.get::<_, i64>(9)? != 0,
-                        notify_login: row.get::<_, i64>(10)? != 0,
-                        notify_password_change: row.get::<_, i64>(11)? != 0,
-                        updated_at: row.get(12)?,
+                        dashboard_url: row.get(9)?,
+                        notify_login_failure: row.get::<_, i64>(10)? != 0,
+                        notify_login: row.get::<_, i64>(11)? != 0,
+                        notify_password_change: row.get::<_, i64>(12)? != 0,
+                        updated_at: row.get(13)?,
                     })
                 },
             )

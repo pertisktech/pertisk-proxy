@@ -32,6 +32,14 @@ pub async fn init_schema(session: &Session, keyspace: &str, local_dc: Option<&st
             .with_context(|| format!("DDL: {stmt}"))?;
     }
 
+    // Best-effort column add for existing clusters created before dashboard_url.
+    let _ = session
+        .query_unpaged(
+            "ALTER TABLE smtp_settings ADD dashboard_url text",
+            &[],
+        )
+        .await;
+
     seed_smtp_settings(session).await?;
     seed_s3_settings(session).await?;
     seed_logging_settings(session).await?;
@@ -112,6 +120,7 @@ const TABLE_DDL: &[&str] = &[
         from_name text,
         use_tls boolean,
         alert_to text,
+        dashboard_url text,
         notify_login_failure boolean,
         notify_login boolean,
         notify_password_change boolean,
@@ -170,9 +179,9 @@ async fn seed_smtp_settings(session: &Session) -> Result<()> {
         .query_unpaged(
             "INSERT INTO smtp_settings (
                 id, enabled, host, port, username, password, from_email, from_name,
-                use_tls, alert_to, notify_login_failure, notify_login,
+                use_tls, alert_to, dashboard_url, notify_login_failure, notify_login,
                 notify_password_change, updated_at
-             ) VALUES (1, false, '', 587, '', '', '', 'Pertisk Proxy', true, '', false, false, false, ?)",
+             ) VALUES (1, false, '', 587, '', '', '', 'Pertisk Proxy', true, '', '', false, false, false, ?)",
             (&updated_at,),
         )
         .await?;

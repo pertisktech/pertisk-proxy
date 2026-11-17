@@ -28,6 +28,7 @@ type FormState = {
   from_name: string;
   use_tls: boolean;
   alert_to: string;
+  dashboard_url: string;
   notify_login: boolean;
   notify_login_failure: boolean;
   notify_password_change: boolean;
@@ -44,6 +45,7 @@ function toForm(settings: SmtpSettings): FormState {
     from_name: settings.from_name,
     use_tls: settings.use_tls,
     alert_to: settings.alert_to,
+    dashboard_url: settings.dashboard_url ?? '',
     notify_login: settings.notify_login,
     notify_login_failure: settings.notify_login_failure,
     notify_password_change: settings.notify_password_change,
@@ -61,6 +63,7 @@ function toPayload(form: FormState, includePassword: boolean): UpdateSmtpSetting
     from_name: form.from_name.trim(),
     use_tls: form.use_tls,
     alert_to: form.alert_to.trim(),
+    dashboard_url: form.dashboard_url.trim(),
     notify_login: form.notify_login,
     notify_login_failure: form.notify_login_failure,
     notify_password_change: form.notify_password_change,
@@ -292,6 +295,23 @@ export function SmtpSettingsPanel() {
               />
               <span className="mt-1 block text-xs text-muted">
                 Recipient for auth alerts and the default test email address.
+              </span>
+            </label>
+            <label className="block text-sm text-text-secondary sm:col-span-2">
+              Management UI URL
+              <input
+                className="mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-text"
+                type="text"
+                value={form.dashboard_url}
+                onChange={(e) => setForm({ ...form, dashboard_url: e.target.value })}
+                placeholder="https://admin.example.com"
+                autoComplete="off"
+              />
+              <span className="mt-1 block text-xs text-muted">
+                Required for the email button/link. Example:{' '}
+                <code className="font-mono">https://admin.tools.thaidevops.co</code>. Host-only
+                values get <code className="font-mono">https://</code> added automatically. Or set{' '}
+                <code className="font-mono">PERTISK_DASHBOARD_URL</code>.
               </span>
             </label>
           </div>

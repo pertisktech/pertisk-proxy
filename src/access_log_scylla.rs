@@ -15,13 +15,25 @@ const FLUSH_MS: u64 = 50;
 
 impl AccessLogSink {
     /// Start (or replace) the Scylla batch writer.
+    ///
+    /// Must be called from a Tokio runtime context (`tokio::spawn`).
     pub fn start_scylla_writer(&self, session: Arc<::scylla::client::session::Session>) {
         let (tx, rx) = mpsc::channel(CHANNEL_CAP);
         self.install_sender(tx);
         let errors = self.write_errors();
-        tokio::spawn(async move {
-            scylla_writer_loop(session, rx, errors).await;
-        });
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    scylla_writer_loop(session, rx, errors).await;
+                });
+            }
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    "access_log: cannot start Scylla writer outside a Tokio runtime"
+                );
+            }
+        }
     }
 }
 

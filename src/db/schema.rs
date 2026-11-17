@@ -50,6 +50,7 @@ pub fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
             from_name TEXT NOT NULL DEFAULT '',
             use_tls INTEGER NOT NULL DEFAULT 1,
             alert_to TEXT NOT NULL DEFAULT '',
+            dashboard_url TEXT NOT NULL DEFAULT '',
             notify_login_failure INTEGER NOT NULL DEFAULT 0,
             notify_login INTEGER NOT NULL DEFAULT 0,
             notify_password_change INTEGER NOT NULL DEFAULT 0,
@@ -78,6 +79,7 @@ pub fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
     )?;
     migrate_certificates_expires_at(conn)?;
     migrate_smtp_notify_flags(conn)?;
+    migrate_smtp_dashboard_url(conn)?;
     seed_smtp_settings(conn)?;
     seed_s3_settings(conn)?;
     seed_logging_settings(conn)?;
@@ -96,8 +98,9 @@ fn seed_smtp_settings(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT INTO smtp_settings (
             id, enabled, host, port, username, password, from_email, from_name,
-            use_tls, alert_to, notify_login_failure, notify_login, notify_password_change, updated_at
-         ) VALUES (1, 0, '', 587, '', '', '', 'Pertisk Proxy', 1, '', 0, 0, 0, ?1)",
+            use_tls, alert_to, dashboard_url, notify_login_failure, notify_login,
+            notify_password_change, updated_at
+         ) VALUES (1, 0, '', 587, '', '', '', 'Pertisk Proxy', 1, '', '', 0, 0, 0, ?1)",
         rusqlite::params![updated_at],
     )?;
     Ok(())
@@ -165,6 +168,16 @@ fn migrate_smtp_notify_flags(conn: &Connection) -> Result<(), rusqlite::Error> {
         "smtp_settings",
         "notify_password_change",
         "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    Ok(())
+}
+
+fn migrate_smtp_dashboard_url(conn: &Connection) -> Result<(), rusqlite::Error> {
+    add_column_if_missing(
+        conn,
+        "smtp_settings",
+        "dashboard_url",
+        "TEXT NOT NULL DEFAULT ''",
     )?;
     Ok(())
 }

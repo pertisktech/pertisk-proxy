@@ -785,6 +785,7 @@ export type SmtpSettings = {
   from_name: string;
   use_tls: boolean;
   alert_to: string;
+  dashboard_url: string;
   notify_login: boolean;
   notify_login_failure: boolean;
   notify_password_change: boolean;
@@ -801,6 +802,7 @@ export type UpdateSmtpSettingsBody = {
   from_name: string;
   use_tls: boolean;
   alert_to: string;
+  dashboard_url: string;
   notify_login: boolean;
   notify_login_failure: boolean;
   notify_password_change: boolean;

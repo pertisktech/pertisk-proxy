@@ -179,7 +179,7 @@ pub async fn migrate_sqlite_to_scylla(
     {
         let mut stmt = conn.prepare_cached(
             "SELECT enabled, host, port, username, password, from_email, from_name,
-                    use_tls, alert_to, notify_login_failure, notify_login,
+                    use_tls, alert_to, dashboard_url, notify_login_failure, notify_login,
                     notify_password_change, updated_at
              FROM smtp_settings WHERE id = 1",
         )?;
@@ -194,17 +194,18 @@ pub async fn migrate_sqlite_to_scylla(
             let from_name: String = r.get(6)?;
             let use_tls: i64 = r.get(7)?;
             let alert_to: String = r.get(8)?;
-            let notify_login_failure: i64 = r.get(9)?;
-            let notify_login: i64 = r.get(10)?;
-            let notify_password_change: i64 = r.get(11)?;
-            let updated_at: String = r.get(12)?;
+            let dashboard_url: String = r.get(9)?;
+            let notify_login_failure: i64 = r.get(10)?;
+            let notify_login: i64 = r.get(11)?;
+            let notify_password_change: i64 = r.get(12)?;
+            let updated_at: String = r.get(13)?;
             session
                 .query_unpaged(
                     "INSERT INTO smtp_settings (
                         id, enabled, host, port, username, password, from_email, from_name,
-                        use_tls, alert_to, notify_login_failure, notify_login,
+                        use_tls, alert_to, dashboard_url, notify_login_failure, notify_login,
                         notify_password_change, updated_at
-                     ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         enabled != 0,
                         &host,
@@ -215,6 +216,7 @@ pub async fn migrate_sqlite_to_scylla(
                         &from_name,
                         use_tls != 0,
                         &alert_to,
+                        &dashboard_url,
                         notify_login_failure != 0,
                         notify_login != 0,
                         notify_password_change != 0,

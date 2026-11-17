@@ -49,11 +49,19 @@ fn base64_encode(data: &[u8]) -> String {
     out
 }
 
+/// Primary call-to-action button/link in HTML emails (plain text shows the URL).
+#[derive(Debug, Clone)]
+pub struct EmailAction {
+    pub label: String,
+    pub url: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct EmailContent {
     pub headline: String,
     pub paragraphs: Vec<String>,
     pub details: Vec<(String, String)>,
+    pub action: Option<EmailAction>,
 }
 
 impl EmailContent {
@@ -62,6 +70,7 @@ impl EmailContent {
             headline: headline.into(),
             paragraphs,
             details: Vec::new(),
+            action: None,
         }
     }
 
@@ -74,8 +83,65 @@ impl EmailContent {
             headline: headline.into(),
             paragraphs,
             details,
+            action: None,
         }
     }
+
+    pub fn with_action(mut self, label: impl Into<String>, url: impl Into<String>) -> Self {
+        if let Some(url) = normalize_http_url(&url.into()) {
+            self.action = Some(EmailAction {
+                label: label.into(),
+                url,
+            });
+        }
+        self
+    }
+}
+
+/// Attach a management-UI CTA when a dashboard URL can be resolved.
+///
+/// Resolution order: `dashboard_url` setting → `PERTISK_DASHBOARD_URL` env.
+/// Bare hosts like `admin.example.com` are normalized to `https://…`.
+pub fn with_dashboard_link(content: EmailContent, dashboard_url: &str) -> EmailContent {
+    match resolve_dashboard_url(dashboard_url) {
+        Some(url) => content.with_action("Open management UI", url),
+        None => content,
+    }
+}
+
+/// Resolve a usable management UI URL for email CTAs.
+pub fn resolve_dashboard_url(configured: &str) -> Option<String> {
+    if let Some(url) = normalize_http_url(configured) {
+        return Some(url);
+    }
+    std::env::var("PERTISK_DASHBOARD_URL")
+        .ok()
+        .as_deref()
+        .and_then(normalize_http_url)
+}
+
+/// Normalize a user/env URL to `http(s)://…`, or `None` if unsafe/empty.
+pub fn normalize_http_url(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let candidate = if raw.contains("://") {
+        raw.to_string()
+    } else {
+        format!("https://{raw}")
+    };
+    if is_safe_http_url(&candidate) {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+fn is_safe_http_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://"))
+        && !url.chars().any(|c| c.is_control() || c == '"' || c == '\'' || c == '<')
 }
 
 #[derive(Debug, Clone)]
@@ -185,6 +251,10 @@ pub fn render_plain(from_name: &str, content: &EmailContent) -> String {
         }
         let _ = writeln!(body);
     }
+    if let Some(action) = &content.action {
+        let _ = writeln!(body, "{}:\n{}", action.label, action.url);
+        let _ = writeln!(body);
+    }
     let _ = writeln!(body, "---");
     let _ = write!(body, "{from_name}");
     body
@@ -230,6 +300,22 @@ fn render_html_with_logo(from_name: &str, content: &EmailContent, logo: LogoSrc)
         details.push_str("</table></td></tr></table>");
     }
 
+    let mut action = String::new();
+    if let Some(cta) = &content.action {
+        let label = html_escape(&cta.label);
+        let href = html_escape(&cta.url);
+        action.push_str(&format!(
+            r#"<table role="presentation" cellspacing="0" cellpadding="0" style="margin:8px 0 4px;"><tr>
+  <td style="border-radius:10px;background:#18181b;">
+    <a href="{href}" style="display:inline-block;padding:12px 20px;font-size:14px;font-weight:600;line-height:1.2;color:#ffffff;text-decoration:none;border-radius:10px;" target="_blank" rel="noopener noreferrer">{label}</a>
+  </td>
+</tr></table>
+<p style="margin:12px 0 0;font-size:12px;line-height:1.5;color:#71717a;word-break:break-all;">
+  Or open: <a href="{href}" style="color:#18181b;text-decoration:underline;">{href}</a>
+</p>"#
+        ));
+    }
+
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -255,6 +341,7 @@ fn render_html_with_logo(from_name: &str, content: &EmailContent, logo: LogoSrc)
               <h1 style="margin:0 0 18px;font-size:22px;line-height:1.3;font-weight:700;color:#18181b;">{headline}</h1>
               {paragraphs}
               {details}
+              {action}
             </td>
           </tr>
           <tr>
@@ -319,5 +406,42 @@ mod tests {
         let preview = render_html_preview("Pertisk Proxy", &content);
         assert!(preview.contains("data:image/png;base64,"));
         assert!(!LOGO_PNG.is_empty());
+    }
+
+    #[test]
+    fn action_link_renders_in_html_and_plain() {
+        let content = test_content().with_action("Open management UI", "https://admin.example/");
+        let html = render_html("Pertisk Proxy", &content);
+        assert!(html.contains("href=\"https://admin.example/\""));
+        assert!(html.contains("Open management UI"));
+        let plain = render_plain("Pertisk Proxy", &content);
+        assert!(plain.contains("https://admin.example/"));
+        assert!(plain.contains("Open management UI"));
+    }
+
+    #[test]
+    fn unsafe_action_urls_are_rejected() {
+        let content = test_content().with_action("Nope", "javascript:alert(1)");
+        assert!(content.action.is_none());
+        let linked = with_dashboard_link(test_content(), "  ");
+        assert!(linked.action.is_none());
+        let linked = with_dashboard_link(test_content(), "https://ok.example/login");
+        assert_eq!(
+            linked.action.as_ref().map(|a| a.url.as_str()),
+            Some("https://ok.example/login")
+        );
+    }
+
+    #[test]
+    fn bare_host_is_normalized_to_https() {
+        let linked = with_dashboard_link(test_content(), "admin.example.com/login");
+        assert_eq!(
+            linked.action.as_ref().map(|a| a.url.as_str()),
+            Some("https://admin.example.com/login")
+        );
+        assert_eq!(
+            normalize_http_url("http://plain.example"),
+            Some("http://plain.example".into())
+        );
     }
 }
